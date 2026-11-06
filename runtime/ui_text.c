@@ -19,7 +19,8 @@ typedef struct { const char *lang; const char *const *text; } Row;
     [UI_MENU_LANGNAME_NL] = "Nederlands", [UI_MENU_LANGNAME_RU] = "Русский", \
     [UI_MENU_LANGNAME_ZH_HANS] = "简体中文", [UI_MENU_LANGNAME_ZH_HANT] = "繁體中文", [UI_MENU_LANGNAME_KO] = "한국어", \
     [UI_MENU_LANGNAME_PT_BR] = "Português (Brasil)", [UI_MENU_LANGNAME_EN_GB] = "English (UK)", \
-    [UI_MENU_LANGNAME_FR_CA] = "Français (Canada)", [UI_MENU_LANGNAME_ES_419] = "Español (Latinoamérica)"
+    [UI_MENU_LANGNAME_FR_CA] = "Français (Canada)", [UI_MENU_LANGNAME_ES_419] = "Español (Latinoamérica)", \
+    [UI_MENU_LANGNAME_PL] = "Polski"
 
 // SWKBD: TITLE, PROMPT, DEFAULT_NAME (at most 9 UTF-16 units, no '@' '%' '\'), OK, CANCEL, PAD_HINT.
 #define SWKBD(title, prompt, name, ok, cancel, hint) \
@@ -72,8 +73,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                   "that size. Above 100 % smooths jagged edges (supersampling) at a high GPU cost.",
     [UI_MENU_RENDER_SCALE_GAME] = "Game (83 %)",
     [UI_MENU_UPSCALER] = "Scaling to the window",
-    [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
-                              "edges and detail sharper than bilinear.",
+    [UI_MENU_UPSCALER_DESC] = "How the game's picture is fitted to the window. Larger window: FSR keeps edges and detail "
+                              "sharper than bilinear. Smaller window (Ocarina draws 2560 x 1440): the picture is shrunk "
+                              "and FSR sharpens it by the strength below.",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Bilinear",
     [UI_MENU_ASPECT] = "Picture shape",
     [UI_MENU_ASPECT_DESC] = "When the window's shape differs from the game resolution's (a 16:9 picture on a 21:9 "
@@ -91,7 +93,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_ANISO_DESC] = "Anisotropic filtering of surface textures: ground, roads and walls seen at a shallow angle stay sharp into the distance instead of blurring. Game: the level the game asks for, as on the Switch.",
     [UI_MENU_ANISO_GAME] = "Game",
     [UI_MENU_SHARPNESS] = "FSR sharpness",
-    [UI_MENU_SHARPNESS_DESC] = "Sharpening after FSR scaling; 0 turns it off.",
+    [UI_MENU_SHARPNESS_DESC] = "Sharpening after FSR scaling, also when the picture is shrunk to the window; 0 turns it "
+                               "off.",
+    [UI_MENU_SHARPNESS_NEEDS_FSR] = "only with AMD FSR 1",
     [UI_MENU_COLOR] = "Colour",
     [UI_MENU_COLOR_PRESET] = "Colour profile",
     [UI_MENU_COLOR_PRESET_DESC] = "Sets the four values below. Vivid: more contrast and saturation, shadows opened a "
@@ -162,8 +166,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_FXAA_DESC] = "The game's own FXAA edge smoothing. It blurs fine detail a little; with DLAA on it is not needed.",
 
     [UI_MENU_FPS_LIMIT] = "Frame rate limit",
-    [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws. Above 60 is experimental and needs Game speed "
-                               "follows the clock.",
+    [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws. Above 60 is experimental and needs the "
+                               "real-time step (realtime = 1 in nx2navi.ini, the default).",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     // the monitor's refresh rate; printf format with the rate in Hz when it is known
@@ -232,8 +236,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT] = "Button layout",
     [UI_MENU_PAD_LAYOUT_DESC] = "Which button is A. Nintendo: the right one, as on a Switch. Xbox: the bottom one, as "
                                 "labelled on an Xbox controller (cross on a PlayStation controller). Automatic picks "
-                                "Nintendo for controllers with Nintendo labels and Xbox for the others. Which "
-                                "controller the game's prompts show is set under Button prompts.",
+                                "Nintendo for controllers with Nintendo labels and Xbox for the others. The game's "
+                                "prompts always show the Switch letters.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Automatic", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A right)",
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A bottom)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "in use: %s",
@@ -300,18 +304,24 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_BIND_LSTICK_DOWN] = "Move back",
     [UI_BIND_RSTICK_LEFT] = "Camera left", [UI_BIND_RSTICK_UP] = "Camera up", [UI_BIND_RSTICK_RIGHT] = "Camera right",
     [UI_BIND_RSTICK_DOWN] = "Camera down",
-    [UI_BIND_DESC_A] = "Interact, pick up, talk.", [UI_BIND_DESC_B] = "Run, cancel, go back.",
-    [UI_BIND_DESC_X] = "Jump.", [UI_BIND_DESC_Y] = "Attack.", [UI_BIND_DESC_LCLICK] = "Crouch.",
-    [UI_BIND_DESC_RCLICK] = "First-person view.", [UI_BIND_DESC_L] = "Abilities.",
-    [UI_BIND_DESC_R] = "Throw a weapon.", [UI_BIND_DESC_ZL] = "Shield, lock on.", [UI_BIND_DESC_ZR] = "Bow.",
-    [UI_BIND_DESC_PLUS] = "Menu, inventory.", [UI_BIND_DESC_MINUS] = "Map.",
-    [UI_BIND_DESC_DPAD] = "Quick-select.",
+    [UI_BIND_DESC_A] = "Actions: talk, open, pick up, climb, grab. Hold to dash.",
+    [UI_BIND_DESC_B] = "Put away, cancel, back. Jump when Swap Jump Controls is on in the game's Options.",
+    [UI_BIND_DESC_X] = "Jump. Put away when Swap Jump Controls is on in the game's Options.",
+    [UI_BIND_DESC_Y] = "Attack with the sword.",
+    [UI_BIND_DESC_LCLICK] = "Left stick press (not on the game's controls screen).",
+    [UI_BIND_DESC_RCLICK] = "Reset the camera behind Link.",
+    [UI_BIND_DESC_L] = "Quick-select items; the previous page in the game's menus.",
+    [UI_BIND_DESC_R] = "Quick-select items; the next page in the game's menus.",
+    [UI_BIND_DESC_ZL] = "Target (hold or toggle: Targeting Type in the game's Options).",
+    [UI_BIND_DESC_ZR] = "Use the selected item: slingshot, bow, boomerang, hookshot, bombs, bottles.",
+    [UI_BIND_DESC_PLUS] = "Menu: items, equipment, collection, system.", [UI_BIND_DESC_MINUS] = "Map.",
+    [UI_BIND_DESC_LEFT] = "Play the ocarina.", [UI_BIND_DESC_UP] = "Put the accessory on or take it off.",
+    [UI_BIND_DESC_RIGHT] = "Talk to Navi.", [UI_BIND_DESC_DOWN] = "Change boots.",
     [UI_BIND_DESC_MOVE] = "Moves Link like the left stick. The controller's left stick always works too.",
     [UI_BIND_DESC_CAMERA] = "Turns the camera like the right stick. The mouse and the controller's right stick always "
                             "work too.",
     [UI_BIND_SHAKE] = "Shake the camera stick",
-    [UI_BIND_DESC_SHAKE] = "Swings the right stick left and right for the game: detaches a fused part from what "
-                           "object holds. Holding the key keeps shaking.",
+    [UI_BIND_DESC_SHAKE] = "Swings the right stick left and right for the game. Holding the key keeps shaking.",
     [UI_KEY_SPACE] = "Space", [UI_KEY_TAB] = "Tab", [UI_KEY_LSHIFT] = "Left Shift", [UI_KEY_LCTRL] = "Left Ctrl",
     [UI_KEY_UP] = "Up arrow", [UI_KEY_DOWN] = "Down arrow", [UI_KEY_LEFT] = "Left arrow",
     [UI_KEY_RIGHT] = "Right arrow",
@@ -462,8 +472,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_OV_SCALING] = "Scaling", [UI_MENU_OV_LIMIT] = "Frame limit", [UI_MENU_OV_PRESENT] = "Presentation",
     [UI_MENU_OV_FMT_SIZE] = "%ux%u", [UI_MENU_OV_FMT_SCENE] = "%ux%u, %.0f%%",
     [UI_MENU_OV_FMT_FSR] = "AMD FSR 1, sharpness %d%%", [UI_MENU_OV_SCALE_NONE] = "none (1:1)",
+    [UI_MENU_OV_FMT_SHRINK] = "bilinear + FSR sharpening %d%%",
     [UI_MENU_OV_SCALE_BILINEAR] = "bilinear",
-    [UI_MENU_OV_SCALE_DOWN] = "bilinear (FSR only enlarges)",
+    [UI_MENU_OV_SCALE_DOWN] = "bilinear (FSR sharpness 0)",
     [UI_MENU_TAB_CHEATS] = "Cheats",
     [UI_MENU_CHEATS_NONE] = "No cheats for this game version. A mod's cheats are an Atmosphere cheat file in its "
                             "cheats folder, named after the game's build: mods\\<mod>\\cheats\\%s. Restart the game to "
@@ -535,8 +546,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                   "Выше 100 % сглаживает лесенки на краях (суперсэмплинг) ценой большой нагрузки на GPU.",
     [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (83 %)",
     [UI_MENU_UPSCALER] = "Масштабирование под окно",
-    [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
-                              "детали чётче билинейного.",
+    [UI_MENU_UPSCALER_DESC] = "Как картинка игры вписывается в окно. Окно больше: FSR сохраняет края и детали чётче "
+                              "билинейного. Окно меньше (Ocarina рисует 2560 × 1440): картинка уменьшается, и FSR "
+                              "повышает её резкость на величину ниже.",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Билинейное",
     [UI_MENU_ASPECT] = "Форма картинки",
     [UI_MENU_ASPECT_DESC] = "Когда форма окна отличается от разрешения игры (картинка 16:9 на экране 21:9): сохранить "
@@ -554,7 +566,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_ANISO_DESC] = "Анизотропная фильтрация текстур поверхностей: земля, дороги и стены под острым углом остаются чёткими вдали, а не размываются. Игра: уровень, который запрашивает игра, как на Switch.",
     [UI_MENU_ANISO_GAME] = "Игра",
     [UI_MENU_SHARPNESS] = "Резкость FSR",
-    [UI_MENU_SHARPNESS_DESC] = "Повышение резкости после масштабирования FSR; 0 выключает его.",
+    [UI_MENU_SHARPNESS_DESC] = "Повышение резкости после масштабирования FSR, в том числе когда картинка уменьшается "
+                               "под окно; 0 выключает его.",
+    [UI_MENU_SHARPNESS_NEEDS_FSR] = "только с AMD FSR 1",
     [UI_MENU_COLOR] = "Цвет",
     [UI_MENU_COLOR_PRESET] = "Цветовой профиль",
     [UI_MENU_COLOR_PRESET_DESC] = "Задаёт четыре значения ниже. «Яркий»: больше контраста и насыщенности, тени немного "
@@ -626,8 +640,8 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_FXAA_DESC] = "Собственное сглаживание FXAA. Слегка размывает мелкие детали; с DLAA оно не нужно.",
 
     [UI_MENU_FPS_LIMIT] = "Ограничение частоты кадров",
-    [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду. Выше 60 — экспериментальный режим, нужна «Скорость "
-                               "игры по часам».",
+    [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду. Выше 60 — экспериментальный режим, нужен шаг по "
+                               "реальному времени (realtime = 1 в nx2navi.ini, по умолчанию).",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_FPS_DISPLAY] = "Как у монитора", [UI_MENU_FPS_DISPLAY_HZ] = "Как у монитора (%.0f Гц)",
@@ -693,8 +707,8 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT] = "Раскладка кнопок",
     [UI_MENU_PAD_LAYOUT_DESC] = "Какая кнопка работает как A. Nintendo: правая, как на Switch. Xbox: нижняя, как "
                                 "подписано на контроллере Xbox (крест на контроллере PlayStation). Автоматически: "
-                                "Nintendo для контроллеров с подписями Nintendo, Xbox для остальных. Кнопки какого "
-                                "контроллера показывают подсказки игры, задаётся в строке «Подсказки кнопок».",
+                                "Nintendo для контроллеров с подписями Nintendo, Xbox для остальных. Подсказки игры "
+                                "всегда показывают буквы Switch.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Автоматически", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A справа)",
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A снизу)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "сейчас: %s",
@@ -764,18 +778,24 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_BIND_LSTICK_DOWN] = "Назад",
     [UI_BIND_RSTICK_LEFT] = "Камера влево", [UI_BIND_RSTICK_UP] = "Камера вверх",
     [UI_BIND_RSTICK_RIGHT] = "Камера вправо", [UI_BIND_RSTICK_DOWN] = "Камера вниз",
-    [UI_BIND_DESC_A] = "Взаимодействие, подобрать, поговорить.", [UI_BIND_DESC_B] = "Бег, отмена, назад.",
-    [UI_BIND_DESC_X] = "Прыжок.", [UI_BIND_DESC_Y] = "Атака.", [UI_BIND_DESC_LCLICK] = "Присесть.",
-    [UI_BIND_DESC_RCLICK] = "Вид от первого лица.", [UI_BIND_DESC_L] = "Способности.",
-    [UI_BIND_DESC_R] = "Бросок оружия.", [UI_BIND_DESC_ZL] = "Щит, захват цели.", [UI_BIND_DESC_ZR] = "Лук.",
-    [UI_BIND_DESC_PLUS] = "Меню, инвентарь.", [UI_BIND_DESC_MINUS] = "Карта.",
-    [UI_BIND_DESC_DPAD] = "Быстрый выбор.",
+    [UI_BIND_DESC_A] = "Действия: поговорить, открыть, подобрать, залезть, схватить. Удерживать — рывок.",
+    [UI_BIND_DESC_B] = "Убрать, отмена, назад. Прыжок, если в настройках игры включена смена кнопки прыжка.",
+    [UI_BIND_DESC_X] = "Прыжок. Убрать, если в настройках игры включена смена кнопки прыжка.",
+    [UI_BIND_DESC_Y] = "Удар мечом.",
+    [UI_BIND_DESC_LCLICK] = "Нажатие левого стика (нет на экране управления игры).",
+    [UI_BIND_DESC_RCLICK] = "Вернуть камеру за спину Линка.",
+    [UI_BIND_DESC_L] = "Быстрый выбор предметов; предыдущая страница в меню игры.",
+    [UI_BIND_DESC_R] = "Быстрый выбор предметов; следующая страница в меню игры.",
+    [UI_BIND_DESC_ZL] = "Захват цели (удерживать или переключать: тип захвата в настройках игры).",
+    [UI_BIND_DESC_ZR] = "Использовать выбранный предмет: рогатка, лук, бумеранг, крюк, бомбы, бутылки.",
+    [UI_BIND_DESC_PLUS] = "Меню: предметы, снаряжение, коллекция, система.", [UI_BIND_DESC_MINUS] = "Карта.",
+    [UI_BIND_DESC_LEFT] = "Играть на окарине.", [UI_BIND_DESC_UP] = "Надеть или снять аксессуар.",
+    [UI_BIND_DESC_RIGHT] = "Поговорить с Нави.", [UI_BIND_DESC_DOWN] = "Сменить сапоги.",
     [UI_BIND_DESC_MOVE] = "Двигает Линка, как левый стик. Левый стик контроллера тоже всегда работает.",
     [UI_BIND_DESC_CAMERA] = "Поворачивает камеру, как правый стик. Мышь и правый стик контроллера тоже всегда "
                             "работают.",
     [UI_BIND_SHAKE] = "Встряхнуть стик камеры",
-    [UI_BIND_DESC_SHAKE] = "Качает правый стик влево-вправо: отцепляет приклеенную деталь от того, что держит "
-                           "Ультрарука. Пока клавиша зажата, тряска продолжается.",
+    [UI_BIND_DESC_SHAKE] = "Качает правый стик влево-вправо. Пока клавиша зажата, тряска продолжается.",
     [UI_KEY_SPACE] = "Пробел", [UI_KEY_TAB] = "Tab", [UI_KEY_LSHIFT] = "Левый Shift", [UI_KEY_LCTRL] = "Левый Ctrl",
     [UI_KEY_UP] = "Стрелка вверх", [UI_KEY_DOWN] = "Стрелка вниз", [UI_KEY_LEFT] = "Стрелка влево",
     [UI_KEY_RIGHT] = "Стрелка вправо",
@@ -929,8 +949,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_OV_SCALING] = "Масштабирование", [UI_MENU_OV_LIMIT] = "Лимит кадров", [UI_MENU_OV_PRESENT] = "Вывод кадров",
     [UI_MENU_OV_FMT_SIZE] = "%ux%u", [UI_MENU_OV_FMT_SCENE] = "%ux%u, %.0f%%",
     [UI_MENU_OV_FMT_FSR] = "AMD FSR 1, резкость %d%%", [UI_MENU_OV_SCALE_NONE] = "нет (1:1)",
+    [UI_MENU_OV_FMT_SHRINK] = "билинейное + резкость FSR %d%%",
     [UI_MENU_OV_SCALE_BILINEAR] = "билинейное",
-    [UI_MENU_OV_SCALE_DOWN] = "билинейное (FSR только увеличивает)",
+    [UI_MENU_OV_SCALE_DOWN] = "билинейное (резкость FSR 0)",
     [UI_MENU_TAB_CHEATS] = "Читы",
     [UI_MENU_CHEATS_NONE] = "Для этой версии игры читов нет. Читы мода — это файл читов Atmosphere в его папке cheats "
                             "с именем по сборке игры: mods\\<мод>\\cheats\\%s. Перезапустите игру, чтобы они "
@@ -1033,19 +1054,22 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
                                   "GPU.",
     [UI_MENU_RENDER_SCALE_GAME] = "Jogo (83 %)",
     [UI_MENU_UPSCALER] = "Escala para a janela",
-    [UI_MENU_UPSCALER_DESC] = "Como a imagem é ampliada quando a janela é maior que a resolução do jogo. O FSR mantém "
-                              "bordas e detalhes mais nítidos que o bilinear.",
+    [UI_MENU_UPSCALER_DESC] = "Como a imagem do jogo se ajusta à janela. Janela maior: o FSR mantém bordas e detalhes "
+                              "mais nítidos que o bilinear. Janela menor (Ocarina desenha 2560 x 1440): a imagem é "
+                              "reduzida e o FSR aumenta a nitidez com a intensidade abaixo.",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Bilinear",
     [UI_MENU_ASPECT] = "Formato da imagem",
     [UI_MENU_ASPECT_DESC] = "Quando o formato da janela difere do da resolução do jogo (uma imagem 16:9 numa tela "
                             "21:9): manter o formato da imagem com barras pretas ou esticá-la sobre a janela.",
     [UI_MENU_ASPECT_FIT] = "Barras pretas", [UI_MENU_ASPECT_STRETCH] = "Esticar",
     [UI_MENU_SHARPNESS] = "Nitidez do FSR",
-    [UI_MENU_SHARPNESS_DESC] = "Aumento de nitidez após a ampliação do FSR; 0 desliga.",
+    [UI_MENU_SHARPNESS_DESC] = "Aumento de nitidez após a escala do FSR, também quando a imagem é reduzida à janela; 0 "
+                               "desliga.",
+    [UI_MENU_SHARPNESS_NEEDS_FSR] = "só com AMD FSR 1",
 
     [UI_MENU_FPS_LIMIT] = "Limite de quadros",
     [UI_MENU_FPS_LIMIT_DESC] = "O máximo de quadros por segundo que o jogo desenha. Acima de 60 é experimental e "
-                               "precisa de Velocidade do jogo pelo relógio.",
+                               "precisa do passo em tempo real (realtime = 1 no nx2navi.ini, o padrão).",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_ASSUME_FOCUS] = "Continuar rodando fora de foco",
@@ -1078,11 +1102,8 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT] = "Layout dos botões",
     [UI_MENU_PAD_LAYOUT_DESC] = "Qual botão é o A. Nintendo: o da direita, como no Switch. Xbox: o de baixo, como "
                                 "indicado no controle de Xbox (cruz no controle de PlayStation). Automático escolhe "
-                                "Nintendo para controles com os rótulos da Nintendo e Xbox para os demais. Ícones de "
-                                "Xbox: o A é o da direita, como no Nintendo, e o jogo mostra os rótulos do Xbox (B no "
-                                "lugar de A, A no lugar de B, Y no lugar de X, X no lugar de Y); os ícones mudam após "
-                                "reiniciar. As letras fazem parte dos arquivos do jogo, então um botão remapeado em "
-                                "Controles continua com a letra antiga na tela.",
+                                "Nintendo para controles com os rótulos da Nintendo e Xbox para os demais. As dicas do "
+                                "jogo sempre mostram as letras do Switch.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Automático", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A à direita)",
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A embaixo)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "em uso: %s",
@@ -1118,19 +1139,25 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_BIND_LSTICK_RIGHT] = "Mover para a direita", [UI_BIND_LSTICK_DOWN] = "Mover para trás",
     [UI_BIND_RSTICK_LEFT] = "Câmera para a esquerda", [UI_BIND_RSTICK_UP] = "Câmera para cima",
     [UI_BIND_RSTICK_RIGHT] = "Câmera para a direita", [UI_BIND_RSTICK_DOWN] = "Câmera para baixo",
-    [UI_BIND_DESC_A] = "Interagir, pegar, conversar.", [UI_BIND_DESC_B] = "Correr, cancelar, voltar.",
-    [UI_BIND_DESC_X] = "Pular.", [UI_BIND_DESC_Y] = "Atacar.", [UI_BIND_DESC_LCLICK] = "Agachar.",
-    [UI_BIND_DESC_RCLICK] = "Visão em primeira pessoa.", [UI_BIND_DESC_L] = "Habilidades.",
-    [UI_BIND_DESC_R] = "Arremessar a arma.", [UI_BIND_DESC_ZL] = "Escudo, travar a mira.", [UI_BIND_DESC_ZR] = "Arco.",
-    [UI_BIND_DESC_PLUS] = "Menu, inventário.", [UI_BIND_DESC_MINUS] = "Mapa.",
-    [UI_BIND_DESC_DPAD] = "Seleção rápida.",
+    [UI_BIND_DESC_A] = "Ações: conversar, abrir, pegar, escalar, agarrar. Segure para correr.",
+    [UI_BIND_DESC_B] = "Guardar, cancelar, voltar. Pular quando a troca do botão de pulo está ligada nas opções do jogo.",
+    [UI_BIND_DESC_X] = "Pular. Guardar quando a troca do botão de pulo está ligada nas opções do jogo.",
+    [UI_BIND_DESC_Y] = "Atacar com a espada.",
+    [UI_BIND_DESC_LCLICK] = "Pressionar o analógico esquerdo (não aparece na tela de controles do jogo).",
+    [UI_BIND_DESC_RCLICK] = "Voltar a câmera para trás do Link.",
+    [UI_BIND_DESC_L] = "Seleção rápida de itens; a página anterior nos menus do jogo.",
+    [UI_BIND_DESC_R] = "Seleção rápida de itens; a próxima página nos menus do jogo.",
+    [UI_BIND_DESC_ZL] = "Mirar (segurar ou alternar: tipo de mira nas opções do jogo).",
+    [UI_BIND_DESC_ZR] = "Usar o item escolhido: estilingue, arco, bumerangue, gancho, bombas, garrafas.",
+    [UI_BIND_DESC_PLUS] = "Menu: itens, equipamento, coleção, sistema.", [UI_BIND_DESC_MINUS] = "Mapa.",
+    [UI_BIND_DESC_LEFT] = "Tocar a ocarina.", [UI_BIND_DESC_UP] = "Pôr ou tirar o acessório.",
+    [UI_BIND_DESC_RIGHT] = "Falar com a Navi.", [UI_BIND_DESC_DOWN] = "Trocar de botas.",
     [UI_BIND_DESC_MOVE] = "Move o Link como o analógico esquerdo. O analógico esquerdo do controle também sempre "
                           "funciona.",
     [UI_BIND_DESC_CAMERA] = "Gira a câmera como o analógico direito. O mouse e o analógico direito do controle também "
                             "sempre funcionam.",
     [UI_BIND_SHAKE] = "Sacudir o analógico da câmera",
-    [UI_BIND_DESC_SHAKE] = "Balança o analógico direito para os lados: solta uma peça fundida do que a Ultramão segura. "
-                           "Segurar a tecla continua sacudindo.",
+    [UI_BIND_DESC_SHAKE] = "Balança o analógico direito para os lados. Segurar a tecla continua sacudindo.",
     [UI_KEY_SPACE] = "Espaço", [UI_KEY_TAB] = "Tab", [UI_KEY_LSHIFT] = "Shift esquerdo",
     [UI_KEY_LCTRL] = "Ctrl esquerdo",
     [UI_KEY_UP] = "Seta para cima", [UI_KEY_DOWN] = "Seta para baixo", [UI_KEY_LEFT] = "Seta para a esquerda",
@@ -1288,6 +1315,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_OV_SCALING] = "Escala", [UI_MENU_OV_LIMIT] = "Limite de quadros", [UI_MENU_OV_PRESENT] = "Apresentação",
     [UI_MENU_OV_FMT_SIZE] = "%ux%u", [UI_MENU_OV_FMT_SCENE] = "%ux%u, %.0f%%",
     [UI_MENU_OV_FMT_FSR] = "AMD FSR 1, nitidez %d%%", [UI_MENU_OV_SCALE_NONE] = "nenhuma (1:1)",
+    [UI_MENU_OV_FMT_SHRINK] = "bilinear + nitidez FSR %d%%",
     [UI_MENU_OV_SCALE_BILINEAR] = "bilinear",
     [UI_MENU_FOV] = "Campo de visão",
     [UI_MENU_FOV_DESC] = "Quanto do mundo a câmera mostra, em porcentagem do original do jogo. Só na versão 1.4.3 do "
@@ -1377,7 +1405,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_WALK_SCALE] = "Intensidade do andar",
     [UI_MENU_WALK_SCALE_DESC] = "A inclinação dos analógicos do teclado enquanto a tecla de andar está segura. Metade "
                                 "é andar, a inclinação total é correr.",
-    [UI_MENU_OV_SCALE_DOWN] = "bilinear (o FSR só amplia)",
+    [UI_MENU_OV_SCALE_DOWN] = "bilinear (nitidez FSR 0)",
     [UI_MENU_HDR_HUE] = "Correção de matiz dos realces",
     [UI_MENU_HDR_HUE_DESC] = "Cores fortes como fogo e faíscas vão para o branco como na imagem SDR do próprio jogo e "
                              "combinam com a luz que emitem; 0 as mantém totalmente saturadas.",
@@ -1540,8 +1568,8 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
                                   "高于 100% 会平滑锯齿边缘（超采样），但 GPU 开销很高。",
     [UI_MENU_RENDER_SCALE_GAME] = "游戏（83%）",
     [UI_MENU_UPSCALER] = "放大到窗口",
-    [UI_MENU_UPSCALER_DESC] = "窗口大于游戏分辨率时画面的放大方式。"
-                              "FSR 比双线性更能保留边缘和细节。",
+    [UI_MENU_UPSCALER_DESC] = "游戏画面适配窗口的方式。窗口更大时：FSR 比双线性更能保留边缘和细节。"
+                              "窗口更小时（Ocarina 绘制 2560 × 1440）：画面被缩小，FSR 按下方强度锐化。",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1",
     [UI_MENU_UPSCALER_BILINEAR] = "双线性",
     [UI_MENU_ASPECT] = "画面宽高比",
@@ -1553,7 +1581,8 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_FOV_DESC] = "镜头能看到多大范围，以游戏自身视野的百分比表示。"
                           "仅限游戏版本 1.4.3。",
     [UI_MENU_SHARPNESS] = "FSR 锐度",
-    [UI_MENU_SHARPNESS_DESC] = "FSR 缩放后的锐化强度；0 为关闭。",
+    [UI_MENU_SHARPNESS_DESC] = "FSR 缩放后的锐化强度，画面缩小到窗口时同样生效；0 为关闭。",
+    [UI_MENU_SHARPNESS_NEEDS_FSR] = "仅限 AMD FSR 1",
     [UI_MENU_COLOR] = "色彩",
     [UI_MENU_COLOR_PRESET] = "色彩配置",
     [UI_MENU_COLOR_PRESET_DESC] = "同时设置下面四项。鲜艳：对比度和饱和度更高，暗部略微提亮（为 OLED 屏幕调校）。"
@@ -1572,7 +1601,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_COLOR_GAMMA_DESC] = "小于 1 提亮暗部与中间调，大于 1 压暗；1 表示不调整。",
     [UI_MENU_FPS_LIMIT] = "帧率上限",
     [UI_MENU_FPS_LIMIT_DESC] = "游戏每秒绘制的最高帧数。高于 60 帧为实验性功能，"
-                               "需要开启“游戏速度跟随时钟”。",
+                               "需要实时步进（nx2navi.ini 中 realtime = 1，默认开启）。",
     [UI_MENU_FPS_30] = "30 FPS",
     [UI_MENU_FPS_40] = "40 FPS",
     [UI_MENU_FPS_45] = "45 FPS",
@@ -1615,10 +1644,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT_DESC] = "哪个按键是 A。Nintendo：右侧按键，与 Switch 相同。Xbox：下方按键，"
                                 "与 Xbox 手柄上的标注一致（PlayStation 手柄上为叉键）。自动："
                                 "带 Nintendo 标注的手柄使用 Nintendo 布局，其他手柄使用 Xbox 布局。"
-                                "Xbox 按键提示：A 仍是右侧键，但游戏显示 Xbox 标注（A 显示为 B、"
-                                "B 显示为 A、X 显示为 Y、Y 显示为 X），重启后生效。"
-                                "这些字母来自游戏文件，因此在“操作”中重映射过的按键，"
-                                "屏幕上仍显示原来的字母。",
+                                "游戏的按键提示始终显示 Switch 字母。",
     [UI_MENU_PAD_LAYOUT_AUTO] = "自动",
     [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo（A 在右）",
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox（A 在下）",
@@ -1672,23 +1698,26 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_BIND_RSTICK_UP] = "视角上抬",
     [UI_BIND_RSTICK_RIGHT] = "视角右转",
     [UI_BIND_RSTICK_DOWN] = "视角下压",
-    [UI_BIND_DESC_A] = "互动、拾取、对话。",
-    [UI_BIND_DESC_B] = "奔跑、取消、返回。",
-    [UI_BIND_DESC_X] = "跳跃。",
-    [UI_BIND_DESC_Y] = "攻击。",
-    [UI_BIND_DESC_LCLICK] = "蹲下。",
-    [UI_BIND_DESC_RCLICK] = "第一人称视角。",
-    [UI_BIND_DESC_L] = "能力。",
-    [UI_BIND_DESC_R] = "投掷武器。",
-    [UI_BIND_DESC_ZL] = "举盾、锁定。",
-    [UI_BIND_DESC_ZR] = "弓箭。",
-    [UI_BIND_DESC_PLUS] = "菜单、背包。",
+    [UI_BIND_DESC_A] = "动作：对话、打开、拾取、攀爬、抓住。按住可冲刺。",
+    [UI_BIND_DESC_B] = "收起、取消、返回。在游戏选项中开启“交换跳跃按键”时为跳跃。",
+    [UI_BIND_DESC_X] = "跳跃。在游戏选项中开启“交换跳跃按键”时为收起。",
+    [UI_BIND_DESC_Y] = "挥剑攻击。",
+    [UI_BIND_DESC_LCLICK] = "按下左摇杆（游戏的操作说明中没有）。",
+    [UI_BIND_DESC_RCLICK] = "把视角转回林克身后。",
+    [UI_BIND_DESC_L] = "快捷选择道具；游戏菜单中的上一页。",
+    [UI_BIND_DESC_R] = "快捷选择道具；游戏菜单中的下一页。",
+    [UI_BIND_DESC_ZL] = "注目（按住或切换：游戏选项中的注目方式）。",
+    [UI_BIND_DESC_ZR] = "使用所选道具：弹弓、弓、回旋镖、钩爪、炸弹、瓶子。",
+    [UI_BIND_DESC_PLUS] = "菜单：道具、装备、收集、系统。",
     [UI_BIND_DESC_MINUS] = "地图。",
-    [UI_BIND_DESC_DPAD] = "快捷选择。",
+    [UI_BIND_DESC_LEFT] = "吹奏陶笛。",
+    [UI_BIND_DESC_UP] = "戴上或摘下饰品。",
+    [UI_BIND_DESC_RIGHT] = "和娜薇说话。",
+    [UI_BIND_DESC_DOWN] = "更换靴子。",
     [UI_BIND_DESC_MOVE] = "像左摇杆一样移动林克。手柄的左摇杆始终可用。",
     [UI_BIND_DESC_CAMERA] = "像右摇杆一样转动视角。鼠标和手柄的右摇杆始终可用。",
     [UI_BIND_SHAKE] = "晃动视角摇杆",
-    [UI_BIND_DESC_SHAKE] = "让右摇杆左右晃动：把究极手抓着的物体上粘着的零件拆下。按住该键会一直晃动。",
+    [UI_BIND_DESC_SHAKE] = "让右摇杆左右晃动。按住该键会一直晃动。",
     [UI_KEY_SPACE] = "空格",
     [UI_KEY_TAB] = "Tab",
     [UI_KEY_LSHIFT] = "左 Shift",
@@ -1927,6 +1956,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_OV_FMT_SIZE] = "%ux%u",
     [UI_MENU_OV_FMT_SCENE] = "%ux%u，%.0f%%",
     [UI_MENU_OV_FMT_FSR] = "AMD FSR 1，锐度 %d%%",
+    [UI_MENU_OV_FMT_SHRINK] = "双线性 + FSR 锐化 %d%%",
     [UI_MENU_OV_SCALE_NONE] = "无（1:1）",
     [UI_MENU_OV_SCALE_BILINEAR] = "双线性",
     [UI_MENU_SHADOW_RES] = "阴影贴图尺寸",
@@ -1978,7 +2008,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_WALK_KEY_TAKEN] = "同时为 %s",
     [UI_MENU_WALK_SCALE] = "步行幅度",
     [UI_MENU_WALK_SCALE_DESC] = "按住步行键时键盘摇杆的推动幅度。一半为走路，推满为奔跑。",
-    [UI_MENU_OV_SCALE_DOWN] = "双线性（FSR 只能放大）",
+    [UI_MENU_OV_SCALE_DOWN] = "双线性（FSR 锐度 0）",
     [UI_MENU_HDR_HUE] = "高光色调校正",
     [UI_MENU_HDR_HUE_DESC] = "火焰、火花等明亮色彩像游戏自身的 SDR 画面一样趋向白色，与它们发出的光一致；0 保持完全饱和。",
     [UI_MENU_SHADOW_SCALE] = "阴影分辨率",
@@ -2063,19 +2093,34 @@ const char *ui_text_lang(const char *code) {
     return code;
 }
 
-// Every game language: the Mals files EUen/USen, USfr/EUfr, USes/EUes ship in both builds; USpt only from 1.4.3.
+// Every game language with the Mals file it reads: EUen/USen, USfr/EUfr, USes/EUes ship in both NX2navi builds; USpt only
+// from 1.4.3; EUpl only in Ocarina (since 999: never by version, ui_text_game_langs_in finds it by its file).
+static const struct { const char *code; UiTextId name; int since; const char *mals; } all_langs[] = {
+    {"en-US", UI_MENU_LANGNAME_EN, 0, "USen"}, {"en-GB", UI_MENU_LANGNAME_EN_GB, 0, "EUen"},
+    {"ja", UI_MENU_LANGNAME_JA, 0, "JPja"}, {"fr", UI_MENU_LANGNAME_FR, 0, "EUfr"},
+    {"fr-CA", UI_MENU_LANGNAME_FR_CA, 0, "USfr"}, {"de", UI_MENU_LANGNAME_DE, 0, "EUde"},
+    {"it", UI_MENU_LANGNAME_IT, 0, "EUit"}, {"es", UI_MENU_LANGNAME_ES, 0, "EUes"},
+    {"es-419", UI_MENU_LANGNAME_ES_419, 0, "USes"}, {"pt-BR", UI_MENU_LANGNAME_PT_BR, 143, "USpt"},
+    {"nl", UI_MENU_LANGNAME_NL, 0, "EUnl"}, {"ru", UI_MENU_LANGNAME_RU, 0, "EUru"},
+    {"zh-Hans", UI_MENU_LANGNAME_ZH_HANS, 0, "CNzh"}, {"zh-Hant", UI_MENU_LANGNAME_ZH_HANT, 0, "TWzh"},
+    {"ko", UI_MENU_LANGNAME_KO, 0, "KRko"}, {"pl", UI_MENU_LANGNAME_PL, 999, "EUpl"},
+};
+
 int ui_text_game_langs(int game_version, UiGameLang *out, int max) {
-    static const struct { const char *code; UiTextId name; int since; } all[] = {
-        {"en-US", UI_MENU_LANGNAME_EN, 0}, {"en-GB", UI_MENU_LANGNAME_EN_GB, 0}, {"ja", UI_MENU_LANGNAME_JA, 0},
-        {"fr", UI_MENU_LANGNAME_FR, 0}, {"fr-CA", UI_MENU_LANGNAME_FR_CA, 0}, {"de", UI_MENU_LANGNAME_DE, 0},
-        {"it", UI_MENU_LANGNAME_IT, 0}, {"es", UI_MENU_LANGNAME_ES, 0}, {"es-419", UI_MENU_LANGNAME_ES_419, 0},
-        {"pt-BR", UI_MENU_LANGNAME_PT_BR, 143}, {"nl", UI_MENU_LANGNAME_NL, 0}, {"ru", UI_MENU_LANGNAME_RU, 0},
-        {"zh-Hans", UI_MENU_LANGNAME_ZH_HANS, 0}, {"zh-Hant", UI_MENU_LANGNAME_ZH_HANT, 0},
-        {"ko", UI_MENU_LANGNAME_KO, 0},
-    };
     int n = 0;
-    for (size_t i = 0; i < sizeof all / sizeof *all && n < max; i++)
-        if (game_version >= all[i].since) out[n++] = (UiGameLang){all[i].code, all[i].name};
+    for (size_t i = 0; i < sizeof all_langs / sizeof *all_langs && n < max; i++)
+        if (game_version >= all_langs[i].since) out[n++] = (UiGameLang){all_langs[i].code, all_langs[i].name};
+    return n;
+}
+
+int ui_text_game_langs_in(const char *const *regions, int nregions, UiGameLang *out, int max) {
+    int n = 0;
+    for (size_t i = 0; i < sizeof all_langs / sizeof *all_langs && n < max; i++)
+        for (int r = 0; r < nregions; r++)
+            if (!strcmp(regions[r], all_langs[i].mals)) {
+                out[n++] = (UiGameLang){all_langs[i].code, all_langs[i].name};
+                break;
+            }
     return n;
 }
 

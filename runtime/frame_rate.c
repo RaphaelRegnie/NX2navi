@@ -113,6 +113,11 @@ int frame_step_realtime(void) { return step_word != NULL; }
 #define LIMIT_MIN_HZ 30
 #define LIMIT_MAX_HZ 240   // 1 / STEP_MIN_S
 static int fps60_set = -2;
+static int game_interval = 1;   // the present interval of the newest frame (frame_step_present)
+
+// The limit can change anything only with the fps60 or realtime patch set (NX2navi's builds). Without them (Ocarina) the
+// game picks its own present interval and the pacer follows it (nvn_api_obj.c present_period).
+int frame_limit_adjustable(void) { return rt_patch_set("fps60") >= 0 || rt_patch_set("realtime") >= 0; }
 static unsigned limit_seen;
 static int limit_read;
 static int limit_hz = -1;   // 0: display; -1 before the first read
@@ -141,6 +146,12 @@ static void frame_limit_live(void) {
     int hz = limit_parse();
     if (hz == limit_hz) return;
     limit_hz = hz;
+    if (!frame_limit_adjustable()) {
+        if (hz != 60)
+            rt_log("frame rate: NX2NAVI_FPS_LIMIT=%s does nothing in this build (no fps60 or realtime patch set); the "
+                   "game sets its own rate", cfg_value("NX2NAVI_FPS_LIMIT"));
+        return;
+    }
     if (fps60_set == -2) fps60_set = rt_patch_set("fps60");
     if (fps60_set >= 0) rt_patch_switch(fps60_set, hz != 30);
     if ((hz > 60 || hz == 0) && !step_word)
@@ -159,8 +170,10 @@ uint64_t frame_step_cap_ns(void) {
 }
 
 // The frame rate the limit gives, for the performance overlay: the setting, the monitor's rate for "display", 60 at
-// most without the real-time step; 0 before the first frame read the setting.
+// most without the real-time step; the game's own rate (60 Hz over its present interval) in a build without the patch
+// sets; 0 before the first frame read the setting.
 double frame_step_limit_hz(void) {
+    if (!frame_limit_adjustable()) return 60.0 / game_interval;
     int hz = limit_hz;
     if (hz < 0) return 0;
     double r = hz ? hz : gfx_window_refresh_hz();
@@ -265,6 +278,7 @@ static void world_clock(double dt, double step) {
 }
 
 void frame_step_present(uint64_t display_ns, int interval) {
+    game_interval = interval > 0 ? interval : 1;
     frame_limit_live();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
     if (step_word && last_ns) {

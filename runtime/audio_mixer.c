@@ -1038,7 +1038,10 @@ static void virtual_device_manager_handler(IpcSession *s, const IpcRequest *rq, 
     case 401: {   // GetVirtualOutputDeviceProperties(name) -> block
         uint8_t block[0x228] = {0};
         memcpy(block, virtual_output, sizeof virtual_output);
-        uint32_t v[4] = {3, 2, 2, 48000};   // type, (2), channels, sample rate
+        // type, (2), channels, sample rate. The channels are this run's output (output_channels), as IAudioDevice's
+        // GetActiveChannelCount reports: a Switch 2 game (Ocarina) sizes its mix from this block, so a constant 2
+        // here kept 5.1 at stereo
+        uint32_t v[4] = {3, 2, (uint32_t)output_channels(), 48000};
         memcpy(block + 0x100, v, sizeof v);
         memcpy(block + 0x110, device_name, sizeof device_name);
         uint64_t latency_ns = 10000000;

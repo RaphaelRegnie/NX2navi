@@ -114,7 +114,8 @@ static VkSwapchainKHR g_sc;
 static VkFormat g_sc_fmt;
 static int g_sc_hdr;                        // HDR10 (NX2NAVI_HDR, vk_hdr.c): PQ code values in Rec. 2020
 static VkExtent2D g_sc_ext;
-static int g_scaler;                        // the last present: 0 the game image 1:1, 1 scaled by the blit, 2 by FSR
+static int g_scaler;                        // the last present: 0 the game image 1:1, 1 scaled by the blit, 2 by FSR,
+                                            // 3 shrunk by the blit and sharpened by RCAS
 static uint32_t g_sc_n;
 static VkImage g_sc_img[MAX_IMAGES];
 static VkImageView g_sc_view[MAX_IMAGES];   // colour attachment views for the menu overlay
@@ -806,9 +807,10 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     VkImage psrc = graded ? graded : src;
     VkFormat pfmt = graded ? VK_FORMAT_R16G16B16A16_SFLOAT : fmt;
     const int *prect = graded ? grect : rect;
-    // FSR (NX2NAVI_UPSCALER) when the picture's rectangle is larger than the crop; else the bilinear blit
-    int fsr = general && vk_fsr_record(cb, slot, psrc, pfmt, graded ? cw : w, graded ? ch : h, prect, dst, to);
-    g_scaler = fsr ? 2 : cw != to[2] || ch != to[3];
+    // FSR (NX2NAVI_UPSCALER): EASU when the picture's rectangle is larger than the crop, the shrink and RCAS when it is
+    // smaller; else the bilinear blit
+    int fsr = general ? vk_fsr_record(cb, slot, psrc, pfmt, graded ? cw : w, graded ? ch : h, prect, dst, to) : 0;
+    g_scaler = fsr == 2 ? 3 : fsr ? 2 : cw != to[2] || ch != to[3];
     if (!fsr) {
         if (general)   // a GENERAL source (vk_texture.c images): earlier submissions' writes become visible to the blit here
             sync_barrier(cb, psrc, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,

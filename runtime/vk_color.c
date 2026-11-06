@@ -1,8 +1,10 @@
 // Colour adjustment on the present (vk_color.h): brightness, contrast, saturation and gamma of the game's picture, after
 // the game and before the FSR 1 pass or the blit scale it to the window. Settings NX2NAVI_COLOR_BRIGHTNESS (-30..30, %
 // added), NX2NAVI_COLOR_CONTRAST and NX2NAVI_COLOR_SATURATION (%, 100 = unchanged) and NX2NAVI_COLOR_GAMMA (exponent, 1 =
-// unchanged), read when the settings change; the menu's colour profiles only write these four. At the default values
-// nothing is recorded and the present is what it was. Design and preset values: STS78721's colour profiles (issue #136).
+// unchanged), read when the settings change. NX2NAVI_COLOR_PRESET names a profile (vk_color_preset) whose values win
+// over the four, so a profile set in nx2navi.ini or by NX2NAVI_MENU_TEST_SET applies without the menu; custom uses the
+// four. At the default values nothing is recorded and the present is what it was. Design and preset values: STS78721's
+// colour profiles (issue #136).
 //
 // One compute pass (shaders/color_grade.comp) reads the crop rectangle of the game's image and writes an RGBA16F image
 // of its size, which present_image then hands to FSR or the blit in place of the game's image. The HUD is part of that
@@ -11,6 +13,7 @@
 // the output image is shared by all slots, and each frame's first barrier orders it after the previous frame's reads.
 #include "vk.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "cfg.h"
@@ -111,15 +114,29 @@ static int ensure_image(VkCtx *c, uint32_t w, uint32_t h) {
     return 1;
 }
 
-// The four values from the settings, re-read when they change. 1 when any differs from "unchanged".
+const char *const *vk_color_preset(const char *name) {
+    static const char *const presets[][5] = {
+        {"default", "0", "100", "100", "1"}, {"vivid", "0", "115", "135", "0.95"}, {"clarity", "2", "110", "115", "1"}};
+    for (size_t i = 0; i < sizeof presets / sizeof *presets; i++)
+        if (!strcmp(name, presets[i][0])) return presets[i] + 1;
+    return NULL;
+}
+
+// The four values from the profile, or from their own settings under custom (or an unknown profile name); re-read when
+// the settings change. 1 when any differs from "unchanged".
 static int adjusting(void) {
     unsigned v = cfg_version();
     if (v != C.seen) {
         C.seen = v;
-        C.adj[0] = (float)cfg_double("NX2NAVI_COLOR_BRIGHTNESS") / 100.0f;
-        C.adj[1] = (float)cfg_double("NX2NAVI_COLOR_CONTRAST") / 100.0f;
-        C.adj[2] = (float)cfg_double("NX2NAVI_COLOR_SATURATION") / 100.0f;
-        C.adj[3] = (float)cfg_double("NX2NAVI_COLOR_GAMMA");
+        const char *const *p = vk_color_preset(cfg_value("NX2NAVI_COLOR_PRESET"));
+        static const char *const keys[4] = {"NX2NAVI_COLOR_BRIGHTNESS", "NX2NAVI_COLOR_CONTRAST",
+                                            "NX2NAVI_COLOR_SATURATION", "NX2NAVI_COLOR_GAMMA"};
+        double d[4];
+        for (int i = 0; i < 4; i++) d[i] = p ? strtod(p[i], NULL) : cfg_double(keys[i]);
+        C.adj[0] = (float)d[0] / 100.0f;
+        C.adj[1] = (float)d[1] / 100.0f;
+        C.adj[2] = (float)d[2] / 100.0f;
+        C.adj[3] = (float)d[3];
     }
     return C.adj[0] != 0.0f || C.adj[1] != 1.0f || C.adj[2] != 1.0f || C.adj[3] != 1.0f;
 }

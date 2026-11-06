@@ -40,7 +40,7 @@ typedef enum {
     UI_MENU_FOV, UI_MENU_FOV_DESC,
     UI_MENU_SHADOW_RES, UI_MENU_SHADOW_RES_DESC, UI_MENU_SHADOW_RES_GAME,
     UI_MENU_ANISO, UI_MENU_ANISO_DESC, UI_MENU_ANISO_GAME,
-    UI_MENU_SHARPNESS, UI_MENU_SHARPNESS_DESC,
+    UI_MENU_SHARPNESS, UI_MENU_SHARPNESS_DESC, UI_MENU_SHARPNESS_NEEDS_FSR,
     UI_MENU_COLOR,            // group heading over the colour rows
     UI_MENU_COLOR_PRESET, UI_MENU_COLOR_PRESET_DESC, UI_MENU_COLOR_DEFAULT, UI_MENU_COLOR_VIVID, UI_MENU_COLOR_CLARITY,
     UI_MENU_COLOR_CUSTOM,
@@ -129,7 +129,8 @@ typedef enum {
     // what an action does in the world, in action order up to Minus
     UI_BIND_DESC_A, UI_BIND_DESC_B, UI_BIND_DESC_X, UI_BIND_DESC_Y, UI_BIND_DESC_LCLICK, UI_BIND_DESC_RCLICK,
     UI_BIND_DESC_L, UI_BIND_DESC_R, UI_BIND_DESC_ZL, UI_BIND_DESC_ZR, UI_BIND_DESC_PLUS, UI_BIND_DESC_MINUS,
-    UI_BIND_DESC_DPAD, UI_BIND_DESC_MOVE, UI_BIND_DESC_CAMERA, UI_BIND_DESC_SHAKE,
+    UI_BIND_DESC_LEFT, UI_BIND_DESC_UP, UI_BIND_DESC_RIGHT, UI_BIND_DESC_DOWN, UI_BIND_DESC_MOVE, UI_BIND_DESC_CAMERA,
+    UI_BIND_DESC_SHAKE,
     // key names, in key id order KEY_SPACE .. KEY_PAGEDOWN (letters, digits, F keys and punctuation show as themselves)
     UI_KEY_SPACE, UI_KEY_TAB, UI_KEY_LSHIFT, UI_KEY_LCTRL, UI_KEY_UP, UI_KEY_DOWN, UI_KEY_LEFT, UI_KEY_RIGHT,
     UI_KEY_MOUSE_L, UI_KEY_MOUSE_R, UI_KEY_MOUSE_M, UI_KEY_MOUSE_X1, UI_KEY_MOUSE_X2,
@@ -161,7 +162,7 @@ typedef enum {
     UI_MENU_LANGNAME_EN, UI_MENU_LANGNAME_JA, UI_MENU_LANGNAME_FR, UI_MENU_LANGNAME_DE, UI_MENU_LANGNAME_IT,
     UI_MENU_LANGNAME_ES, UI_MENU_LANGNAME_NL, UI_MENU_LANGNAME_RU, UI_MENU_LANGNAME_ZH_HANS,
     UI_MENU_LANGNAME_ZH_HANT, UI_MENU_LANGNAME_KO, UI_MENU_LANGNAME_PT_BR, UI_MENU_LANGNAME_EN_GB,
-    UI_MENU_LANGNAME_FR_CA, UI_MENU_LANGNAME_ES_419,
+    UI_MENU_LANGNAME_FR_CA, UI_MENU_LANGNAME_ES_419, UI_MENU_LANGNAME_PL,
 
     // Advanced
     UI_MENU_ADV_WARNING,
@@ -223,6 +224,7 @@ typedef enum {
     UI_MENU_OV_FMT_SIZE,      // "%ux%u"
     UI_MENU_OV_FMT_SCENE,     // "%ux%u, %.0f%%": the scene and its share of the game image's width
     UI_MENU_OV_FMT_FSR,       // "AMD FSR 1, sharpness %d%%"
+    UI_MENU_OV_FMT_SHRINK,    // the image is larger than the window: "bilinear + FSR sharpening %d%%"
     UI_MENU_OV_SCALE_NONE, UI_MENU_OV_SCALE_BILINEAR,
     UI_MENU_OV_SCALE_DOWN,    // FSR is selected but the image is larger than the window: FSR only enlarges
     // the Cheats tab (cheats.c): the file, the kinds of cheat and why one cannot be switched
@@ -260,6 +262,10 @@ const char *ui_text_lang(const char *switch_code);
 // Fills out (room for max entries) and returns the count.
 typedef struct { const char *code; UiTextId name; } UiGameLang;
 int ui_text_game_langs(int game_version, UiGameLang *out, int max);
+// The same list from the Mals files the RomFS ships (Ocarina: Polish and Brazilian Portuguese, no Portugal Portuguese):
+// regions holds the four-letter prefix of each Mals/<region>.Product... file ("USen", "EUpl"); the version gates are
+// not used. Returns the count.
+int ui_text_game_langs_in(const char *const *regions, int nregions, UiGameLang *out, int max);
 
 // Menu text: ui_text_in(menu language, id). The menu language is NX2NAVI_MENU_LANG ("en", "ru", "pt-BR", "zh-Hans");
 // unset, the system UI language when the catalog has menu text for it (English, Russian, Brazilian Portuguese,

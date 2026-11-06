@@ -174,9 +174,13 @@ static uint64_t shadow_kib(void) {
     return R.shadow > SHADOW_BASE ? ((uint64_t)R.shadow * R.shadow - SHADOW_BASE * SHADOW_BASE) * 8 * 3 / 1024 : 0;
 }
 
+// The generated C carries the output and scene patch sets (NX2navi's builds). Without them (Ocarina) the game draws at its
+// own sizes whatever the settings say, so nothing grows for them: no larger pool or HeapDef, no grown sizes reported.
+int res_adjustable(void) { return rt_patch_set("output") >= 0 && rt_patch_set("scene") >= 0; }
+
 static int bigger(void) {
     decide();
-    return R.ow != BASE_W || R.oh != BASE_H || R.scene_set || shadow_kib();
+    return res_adjustable() && (R.ow != BASE_W || R.oh != BASE_H || R.scene_set || shadow_kib());
 }
 
 uint64_t res_heap_extra_kib(void) {
@@ -320,16 +324,17 @@ static void res_shadow_range(void) {
 
 void res_init(void) {
     res_shadow_range();
+    if (!res_adjustable()) {
+        rt_log("resolution: the game's own (this build has no output and scene patch sets; output_res and render_scale "
+               "do nothing)");
+        return;
+    }
     if (!bigger()) {
         rt_log("resolution: the game's own (output 1920x1080, scene 1600x900)");
         shadow_init(rt_patch_page());
         return;
     }
     int output = rt_patch_set("output"), scene = rt_patch_set("scene");
-    if (output < 0 || scene < 0) {
-        rt_log("resolution: the generated C has no output and scene patch sets; the game keeps its own resolution");
-        return;
-    }
     fs_init();   // romfs.c serves the grown HeapDef from here on (res_heapdef_served)
     if (res_heap_extra_kib() && !R.heapdef_ok) {   // sizes at or below the shipped ones fit the shipped heaps
         rt_log("resolution: no grown HeapDef table; the game keeps its own resolution");

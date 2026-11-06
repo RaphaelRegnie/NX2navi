@@ -139,7 +139,7 @@ static const CfgMeta metas[] = {
     {"REALTIME", "1", "0|1", RESTART}, {"CLOTH_REALTIME", "1", "0|1", RESTART},
     {"MODS_REBUILD", "auto", "auto|off", RESTART},
     {"HIGHFPS_FIX", "1", "0|1", RESTART},
-    {"LANG", "", "ja|en-US|fr|de|it|es|zh-CN|ko|nl|pt|ru|zh-TW|en-GB|fr-CA|es-419|zh-Hans|zh-Hant|pt-BR", RESTART},
+    {"LANG", "", "ja|en-US|fr|de|it|es|zh-CN|ko|nl|pt|ru|zh-TW|en-GB|fr-CA|es-419|zh-Hans|zh-Hant|pt-BR|pl", RESTART},
     {"OPERATION_MODE", "docked", "docked|handheld", RESTART},
     {"ASSUME_FOCUS", "1", "0|1", LIVE},   // read on every focus change (ov_system.c)
     // Sound, Controls, Menu

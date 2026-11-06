@@ -74,9 +74,11 @@ static const char *switch_language(const char *tag) {
         p += k;
     }
     if (!strcmp(lang, "ja") || !strcmp(lang, "de") || !strcmp(lang, "it") || !strcmp(lang, "nl") ||
-        !strcmp(lang, "ru") || !strcmp(lang, "ko") || !strcmp(lang, "pt"))
+        !strcmp(lang, "ru") || !strcmp(lang, "ko") || !strcmp(lang, "pl"))
         return !strcmp(lang, "ja") ? "ja" : !strcmp(lang, "de") ? "de" : !strcmp(lang, "it") ? "it"
-             : !strcmp(lang, "nl") ? "nl" : !strcmp(lang, "ru") ? "ru" : !strcmp(lang, "ko") ? "ko" : "pt";
+             : !strcmp(lang, "nl") ? "nl" : !strcmp(lang, "ru") ? "ru" : !strcmp(lang, "ko") ? "ko" : "pl";
+    // Brazil's Portuguese is a language of its own on the Switch (pt-BR, Mals/USpt); Portugal's is pt
+    if (!strcmp(lang, "pt")) return !strcmp(region, "BR") ? "pt-BR" : "pt";
     if (!strcmp(lang, "fr")) return !strcmp(region, "CA") ? "fr-CA" : "fr";
     if (!strcmp(lang, "es")) return *region && strcmp(region, "ES") ? "es-419" : "es";
     if (!strcmp(lang, "zh"))
@@ -93,7 +95,7 @@ static const char *switch_language(const char *tag) {
 // spellings, which older nx2navi.ini files and menus wrote, are mapped to them.
 const char *ov_language(void) {
     static const char *const codes[] = {"ja", "en-US", "fr", "de", "it", "es", "ko", "nl", "pt", "ru",
-                                        "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR"};
+                                        "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR", "pl"};
     const char *code = cfg_get("NX2NAVI_LANG");   // no fixed default: NX2NAVI_LOCALE or the Windows user locale decides when unset
     if (code && *code) {
         if (!strcmp(code, "zh-CN")) return "zh-Hans";

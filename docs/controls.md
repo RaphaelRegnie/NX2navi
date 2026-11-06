@@ -8,30 +8,36 @@ Input comes from the first SDL3 gamepad, the keyboard and the mouse, merged into
 - `xbox`: south A, east B, west X, north Y, as an Xbox pad labels them; on a PlayStation pad cross is A, circle B, square X, triangle Y.
 - `auto` (default): `nintendo` for a pad whose east button SDL reports labelled A (Switch Pro Controller, Nintendo-layout pads), `xbox` for the others.
 
-The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*. Which controller's buttons the game's prompts show is `NX2NAVI_PROMPTS` (see Xbox button prompts below). 0.1.9's `pad_layout = xbox_prompts` is read as `pad_layout = nintendo` with `prompts = xbox`, and the menu writes it that way.
+The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*. Ocarina's prompts always show the Switch letters: the Xbox and PC prompt folders below are made from NX2navi's files and do not exist for Ocarina, so its menu has no *Button prompts* row. 0.1.9's `pad_layout = xbox_prompts` is read as `pad_layout = nintendo` with `prompts = xbox`, and the menu writes it that way.
+
+The actions are Ocarina's, as its own *Basic Controls* screen (Plus menu, System) names them:
 
 | Switch | Gamepad (by position, Nintendo layout) | Keyboard and mouse | Action in the world |
 |---|---|---|---|
 | Left stick | left stick | W A S D | move |
 | Right stick | right stick | mouse; arrow keys as a second source | camera |
-| Y | west | left mouse button | attack |
-| ZL | left trigger (over 50%) | right mouse button, Z | shield, lock on |
-| ZR | right trigger (over 50%) | F, X | bow |
+| A | east | E, Left Shift | actions (talk, open, pick up, climb, grab); held, dash |
+| B | south | Left Ctrl, Backspace | put away, cancel, back |
 | X | north | Space | jump |
-| B | south | Left Shift | run, cancel |
-| A | east | E | interact, pick up |
-| L | left shoulder | Q | abilities |
-| R | right shoulder | R | throw weapon |
-| Left stick click | left stick click | Left Ctrl | crouch |
-| Right stick click | right stick click | C | first-person view |
-| D-pad left, up, right, down | D-pad | 1 2 3 4 | quick-select |
-| Plus | Start | Tab | menu, inventory |
+| Y | west | left mouse button | attack with the sword |
+| ZL | left trigger (over 50%) | right mouse button, Z | target (hold or toggle, the game's *Targeting Type* option) |
+| ZR | right trigger (over 50%) | F, X | use the selected item (slingshot, bow, boomerang, hookshot, bombs, bottles) |
+| L | left shoulder | Q | quick-select items; previous page in the game's menus |
+| R | right shoulder | R | quick-select items; next page in the game's menus |
+| Left stick click | left stick click | V | (not on the game's controls screen) |
+| Right stick click | right stick click | C, middle mouse button | reset the camera behind Link |
+| D-pad left | D-pad left | 1, O | play the ocarina |
+| D-pad up | D-pad up | 2 | put the accessory on or take it off |
+| D-pad right | D-pad right | 3, N | talk to Navi |
+| D-pad down | D-pad down | 4 | change boots |
+| Plus | Start | Tab | menu: items, equipment, collection, system |
 | Minus | Back | M | map |
-| Right stick shaken left and right | shake the right stick | G | detach a fused part from what object holds |
 
-Esc is unbound in the game; it opens the settings menu and releases the mouse cursor (see Mouse camera). Z and X duplicate ZL and ZR so menu pages turn with two neighbouring keys; the menu tabs (L, R) are Q and R. The mouse wheel is unbound. The bindings are the tables of `input_map` in `runtime/input_map.c`: the keys (platform-neutral key ids) and one gamepad table per layout (gamepad inputs by position); `runtime/input_win.c` translates Win32 virtual keys and SDL buttons.
+The game's *Swap Jump Controls* option trades B and X (jump on B, put away on X); the bindings stay on the Switch buttons, so Space then puts away and Left Ctrl jumps. Left Shift is A, so holding it dashes; E presses A once for talking and opening. Esc is unbound in the game; it opens the settings menu and releases the mouse cursor (see Mouse camera). Z and X duplicate ZL and ZR on neighbouring keys. The mouse wheel is unbound. The right-stick shake (`bind_SHAKE`, NX2navi's object) has no default key and no row in Ocarina's menu. The bindings are the tables of `input_map` in `runtime/input_map.c`: the keys (platform-neutral key ids) and one gamepad table per layout (gamepad inputs by position); `runtime/input_win.c` translates Win32 virtual keys and SDL buttons.
 
 ## Xbox button prompts
+
+NX2navi only: the folders are made from NX2navi's UI archive and fonts (`Font/Font*.Nin_NX_NVN.bfarc.zs`); Ocarina's are `Font2/*.Nin_Ounce_NVN2` and have no such folders.
 
 `NX2NAVI_PROMPTS` (`prompts`, the *Button prompts* row on the Controls tab, read at start) picks the controller whose buttons the game's prompts show: `nintendo` (default) keeps the game's own, `xbox` shows an Xbox controller's, `pc` the keyboard and mouse (PC button prompts, below).
 
@@ -58,6 +64,8 @@ The game reads its UI archive and fonts once at boot, so the prompts change at t
 The Switch prompts stay, with a note under *Button prompts* and a `RomFS overlay: ...` line in the log, when the folder is missing (an install made by an older setup, or one where the setup could not prepare it and showed a warning; running the setup again on the install folder writes it), when it fails its check, with a game resolution of another shape than 16:9 (its own UI layout wins; 16:10 and 21:9), and when the `romfs_mods` folder replaces one of its files: `romfs-patches` then loads in its place, where two overlays replacing one file would stop the game. In a source build, `.venv-py314\Scripts\python tools\make_romfs_patches.py --version <ver> --prompts xbox` (and `--prompts xbox-label`) writes `build\<ver>\romfs-patches-xbox` (`-label`); it needs fontTools from `tools/requirements-py314.txt`. `--xbox-prompts` is the older name of `--prompts xbox`.
 
 ## PC button prompts
+
+NX2navi only, as the Xbox prompts above.
 
 `prompts = pc` (*PC* on the *Button prompts* row) shows the key or mouse button the default keyboard bindings press each Switch button with, whatever the pad layout. The game loads `romfs-patches-pc` in place of `romfs-patches`, written by `tools/make_romfs_patches.py --prompts pc` (`button_icons.py`, `pc_icons`), which the setup runs next to the Xbox ones:
 
@@ -87,9 +95,9 @@ The Minus+Plus combo never reaches the game. In the menu the arrow keys, the D-p
 
 ## Remapping
 
-The *Controls* tab of the settings menu lists, under the button layout, every Switch button, the eight stick directions the keys drive (movement and camera) and the shake key, each with two key cells and a controller cell. Select a cell, press A or Enter, then press the new key, mouse button or controller button; Esc or five seconds without a press cancel, and a controller button cancels a key cell. Delete, Backspace or X clears the selected cell. A key another action has moves to the new one (the description names the action it left); a controller button swaps with the one it replaces. A remapped controller button is physical: from then on the face buttons (A B X Y) stay where they are in both layouts, until the buttons are put back as the layout in use has them or *Reset all buttons* is chosen. F1, F8, F10, F11 and Esc cannot be bound (the menu, the flight recorder and the window keep them). Punctuation keys are named by their place on a US keyboard; the menu shows the character the keyboard layout in use puts there.
+The *Controls* tab of the settings menu lists, under the button layout, every Switch button and the eight stick directions the keys drive (movement and camera), each with two key cells and a controller cell. Each row's description says what the button does in Ocarina. Select a cell, press A or Enter, then press the new key, mouse button or controller button; Esc or five seconds without a press cancel, and a controller button cancels a key cell. Delete, Backspace or X clears the selected cell. A key another action has moves to the new one (the description names the action it left); a controller button swaps with the one it replaces. A remapped controller button is physical: from then on the face buttons (A B X Y) stay where they are in both layouts, until the buttons are put back as the layout in use has them or *Reset all buttons* is chosen. F1, F8, F10, F11 and Esc cannot be bound (the menu, the flight recorder and the window keep them). Punctuation keys are named by their place on a US keyboard; the menu shows the character the keyboard layout in use puts there.
 
-The tab writes `nx2navi.ini` lines, one per Switch button or stick direction: `bind_<button> = <entry>, <entry>, ...`. The button is `A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LCLICK RCLICK`, or a stick direction `LSTICK_LEFT LSTICK_UP LSTICK_RIGHT LSTICK_DOWN` (movement, W A S D by default) and `RSTICK_...` (camera, the arrow keys), or `SHAKE` (keys only, G by default). An entry is `pad:<name>` or `key:<name>`:
+The tab writes `nx2navi.ini` lines, one per Switch button or stick direction: `bind_<button> = <entry>, <entry>, ...`. The button is `A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LCLICK RCLICK`, or a stick direction `LSTICK_LEFT LSTICK_UP LSTICK_RIGHT LSTICK_DOWN` (movement, W A S D by default) and `RSTICK_...` (camera, the arrow keys), or `SHAKE` (keys only, no default key; NX2navi's object shake). An entry is `pad:<name>` or `key:<name>`:
 
 - pad names: `south east west north l r zl zr start back lstick rstick dpad_left dpad_up dpad_right dpad_down lpaddle1 rpaddle1 lpaddle2 rpaddle2` (`zl`, `zr` are the triggers; the paddles are the back buttons of an Xbox Elite, DualSense Edge or Steam Controller, upper pair 1, lower pair 2, and no Switch button has them by default)
 - key names: `a` to `z`, `0` to `9`, `f2` to `f7`, `f9`, `f12`, `num0` to `num9`, `space tab enter backspace lshift rshift lctrl rctrl lalt capslock insert delete home end pageup pagedown up down left right`, `num_add num_sub num_mul num_div num_decimal`, `minus equals lbracket rbracket semicolon apostrophe comma period slash backslash grave`, `mouse_l mouse_r mouse_m mouse_x1 mouse_x2`
@@ -101,13 +109,15 @@ A line replaces every default of that button, pad and keyboard, so list the keys
 A pad that reports its face buttons swapped (A/B and X/Y, as some GuliKit models do) is fixed with:
 
 ```
-bind_A = pad:south, key:E
-bind_B = pad:east, key:lshift
+bind_A = pad:south, key:default
+bind_B = pad:east, key:default
 bind_X = pad:west, key:space
 bind_Y = pad:north, key:mouse_l
 ```
 
 ## Mouse camera
+
+Ocarina's build has no code patch sets, so the mouse always turns its camera by stick emulation (the last paragraphs of this section) and its menu has no *Mouse camera* row; the direct mode below is NX2navi 1.4.3's.
 
 `mouse_mode = direct` (the default) turns the camera by the raw mouse motion on game 1.4.3, through hooks in the game's camera code (`runtime/mouse_direct.c`, the `mouse_direct` sites of `recomp/patches-v143.txt`). None of them changes a step of the gamepad alone. The free-orbit camera receives raw-count
 angular increments at its final spherical-angle output: 0.08 degrees per count on both axes at sensitivity 1, with
@@ -144,6 +154,8 @@ In stick-emulation mode, mouse motion (raw input) becomes right-stick deflection
 The stick direction bits (`StickLLeft` to `StickRDown`) are derived from the sticks at 50% deflection. A gamepad plugged in later is picked up within one second; with none connected the log says `input: no gamepad`.
 
 ## Mouse in the game's menus
+
+NX2navi 1.4.3 only (the screens it reads are NX2navi's eui menus); Ocarina's menus take the keys and the pad.
 
 On game 1.4.3, while one of the game's menus has its focus box (the frame the d-pad moves: the title, the save list, the inventory and its System tab, Options, shops, dialogue choices), the cursor is released from the mouse camera and shown in the middle of the window. The item under the pointer takes the focus as if the d-pad had moved there, with the game's highlight, sound and description; a left click is A on it, a right click is B. The keys and the pad keep working, and the focus moves only when the pointer moves. This happens only while the keyboard and mouse are the device used last: after a gamepad button press or a stick pushed past half way the menus are as on the console, with no pointer, until the mouse moves or a key is pressed (`input_kbm_last` in `runtime/input.c`). The ability wheel, the d-pad strips, Autobuild, the Purah Pad's camera and the map stay gameplay: the mouse keeps the camera there. When the menu closes the cursor is captured again.
 

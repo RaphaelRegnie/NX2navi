@@ -1,7 +1,9 @@
 // AMD FidelityFX Super Resolution 1 on the present path (gfx_present.c present_image): when the window is larger than
 // the game's output, EASU scales the game's crop rectangle to the swapchain size and RCAS sharpens it, in place of the
-// bilinear vkCmdBlitImage. NX2NAVI_UPSCALER=fsr|bilinear picks it, NX2NAVI_SHARPNESS (0..100, 0 = no RCAS pass) sets RCAS;
-// both apply at the next frame.
+// bilinear vkCmdBlitImage. When the game's output is larger than the window (Ocarina draws 2560x1440 docked, so a
+// 1920x1080 window shrinks it), EASU does not apply (it only enlarges): a bilinear blit shrinks the crop into the first
+// intermediate image and RCAS sharpens that, which gives back some of the detail the shrink blurs. NX2NAVI_UPSCALER=
+// fsr|bilinear picks it, NX2NAVI_SHARPNESS (0..100, 0 = no RCAS pass) sets RCAS; both apply at the next frame.
 //
 // Per frame: EASU reads the source through a view of its own format (the same colour conversion the blit does) and
 // writes an RGBA16F image of the picture's size on the swapchain (all of it, or the part between black bars,
@@ -111,7 +113,7 @@ static int ensure_images(VkCtx *c, uint32_t w, uint32_t h) {
                                 .format = VK_FORMAT_R16G16B16A16_SFLOAT, .extent = {w, h, 1}, .mipLevels = 1,
                                 .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
                                 .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+                                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
         if (vmaCreateImage(c->vma, &ci, &ai, &F.img[i], &F.alloc[i], NULL) != VK_SUCCESS) {
             F.img[i] = VK_NULL_HANDLE;
@@ -156,14 +158,62 @@ static void bind_pass(VkCommandBuffer cb, VkPipeline p, VkImageView in, VkImageV
     vkCmdPushConstants(cb, F.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, pc);
 }
 
+// The shrink path: the crop of src (GENERAL) shrunk by a bilinear blit into F.img[0], RCAS into F.img[1], a 1:1 copy into
+// dst. Returns 2.
+static int shrink_sharpen(VkCommandBuffer cb, VkImage src, const int crop[4], VkImage dst, const int out[4], int sharp) {
+    uint32_t dw = (uint32_t)out[2], dh = (uint32_t)out[3];
+    if (F.logged != 2) {
+        F.logged = 2;
+        rt_log("vk: FSR sharpens the shrunk picture: %dx%d to %ux%u (sharpness %d; FSR's EASU only enlarges)", crop[2],
+               crop[3], dw, dh, sharp);
+    }
+    const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, XF = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    // the game's writes to the source become visible to the blit; the earlier frame's reads of the intermediates finish
+    // before this frame writes them
+    barrier(cb, src, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            VK_ACCESS_2_MEMORY_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_READ_BIT);
+    barrier(cb, F.img[0], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, CS | XF, 0, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    barrier(cb, F.img[1], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, CS | XF, 0, CS,
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    VkImageBlit shrink = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .srcOffsets = {{crop[0], crop[1], 0}, {crop[0] + crop[2], crop[1] + crop[3], 1}},
+                          .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .dstOffsets = {{0, 0, 0}, {(int)dw, (int)dh, 1}}};
+    vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_GENERAL, F.img[0], VK_IMAGE_LAYOUT_GENERAL, 1, &shrink, VK_FILTER_LINEAR);
+    // later submissions that write the source wait for the blit's read
+    barrier(cb, src, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, XF, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0);
+    barrier(cb, F.img[0], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    float rcas[8] = {(float)dw, (float)dh, (float)(100 - sharp) / 50.0f, 0, 0, 0, 0, 0};
+    bind_pass(cb, F.rcas, F.view[0], F.view[1], rcas);
+    vkCmdDispatch(cb, (dw + 15) / 16, (dh + 15) / 16, 1);
+    barrier(cb, F.img[1], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, CS, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, XF,
+            VK_ACCESS_2_TRANSFER_READ_BIT);
+    VkImageBlit copy = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                        .srcOffsets = {{0, 0, 0}, {(int)dw, (int)dh, 1}},
+                        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                        .dstOffsets = {{out[0], out[1], 0}, {out[0] + (int)dw, out[1] + (int)dh, 1}}};
+    vkCmdBlitImage(cb, F.img[1], VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy,
+                   VK_FILTER_NEAREST);
+    return 2;
+}
+
 int vk_fsr_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, int sw, int sh, const int crop[4],
                   VkImage dst, const int out[4]) {
     int cw = crop[2], ch = crop[3];
     uint32_t dw = (uint32_t)out[2], dh = (uint32_t)out[3];
-    if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || (dw <= (uint32_t)cw && dh <= (uint32_t)ch) || !fmt) return 0;
+    if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || !fmt || (dw == (uint32_t)cw && dh == (uint32_t)ch)) return 0;
+    int sharp = cfg_int("NX2NAVI_SHARPNESS");
+    if (sharp < 0) sharp = 0;
+    if (sharp > 100) sharp = 100;
+    // EASU only enlarges: a picture smaller than the crop in either direction takes the shrink path, which without
+    // sharpening is the plain blit of the caller
+    int shrink = dw < (uint32_t)cw || dh < (uint32_t)ch;
+    if (shrink && !sharp) return 0;
     VkCtx *c = vk_ctx();
     if (!F.tried) init(c);
     if (!F.ok || !ensure_images(c, dw, dh)) return 0;
+    if (shrink) return shrink_sharpen(cb, src, crop, dst, out, sharp);
     slot %= SLOTS;
     if (F.src_view[slot]) vkDestroyImageView(c->device, F.src_view[slot], NULL);
     VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = src,
@@ -175,10 +225,7 @@ int vk_fsr_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, 
         F.src_view[slot] = VK_NULL_HANDLE;
         return 0;
     }
-    int sharp = cfg_int("NX2NAVI_SHARPNESS");
-    if (sharp < 0) sharp = 0;
-    if (sharp > 100) sharp = 100;
-    if (!F.logged) {
+    if (F.logged != 1) {
         F.logged = 1;
         rt_log("vk: FSR upscales %dx%d to %ux%u (sharpness %d)", cw, ch, dw, dh, sharp);
     }

@@ -141,8 +141,9 @@ void vk_present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w, in
 // queues it. The next blit or a swapchain rebuild queues a waiting present first.
 void vk_present_blit(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int h, const int crop[4]);
 // FSR 1 on the present (vk_fsr.c): records EASU (+ RCAS) of src's crop rectangle {x, y, w, h} into the rectangle out
-// {x, y, w, h} of dst, a swapchain image in TRANSFER_DST; src is in GENERAL and fmt its format. 0 = nothing recorded
-// (the setting says bilinear, no upscale is needed, or FSR is not available): the caller blits.
+// {x, y, w, h} of dst, a swapchain image in TRANSFER_DST; src is in GENERAL and fmt its format. 1 = EASU enlarged it,
+// 2 = a bilinear blit shrank it and RCAS sharpened it (the picture is smaller than the crop), 0 = nothing recorded (the
+// setting says bilinear, the sizes are equal, a shrink without sharpening, or FSR is not available): the caller blits.
 int vk_fsr_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, int sw, int sh, const int crop[4],
                   VkImage dst, const int out[4]);
 void vk_fsr_release(void);   // before the device goes away
@@ -151,6 +152,9 @@ void vk_fsr_release(void);   // before the device goes away
 // scales that one instead, crop {0, 0, w, h}); VK_NULL_HANDLE = nothing recorded. src is in GENERAL, fmt its format.
 VkImage vk_color_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, const int crop[4]);
 void vk_color_release(void);   // before the device goes away
+// The brightness, contrast, saturation and gamma values (as the settings write them) of a colour profile, NULL for
+// custom or an unknown name (vk_color.c).
+const char *const *vk_color_preset(const char *name);
 // HDR output (vk_hdr.c). vk_hdr_wanted: NX2NAVI_HDR, read once. vk_hdr_surface_format: the HDR10 surface format when wanted
 // and offered (1). vk_hdr_set_active: gfx_present.c says whether the swapchain is HDR10 (vk_hdr_active). vk_hdr_encode:
 // like vk_color_record, src's crop as PQ code values (RGBA16F, crop {0, 0, w, h}). vk_hdr_ui_target / vk_hdr_ui_compose:

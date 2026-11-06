@@ -52,7 +52,10 @@ void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void vk_queue_lock(void);
 void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
+int res_adjustable(void);
+const char *const *vk_color_preset(const char *name);
 double frame_step_limit_hz(void);
+int frame_limit_adjustable(void);
 extern const int rt_game_version;
 extern const char rt_port_version[];
 void cheats_frame(uint64_t frame);   // cheats.c
@@ -582,12 +585,36 @@ static void row_gpu(void) {
     opt_choice_list("NX2NAVI_GPU_INDEX", UI_MENU_GPU, vals, names, g_gpu_n + 1, UI_MENU_GPU_DESC);
 }
 
-// The game language: one entry per Mals language file the running game build ships (ui_text_game_langs), each under
-// its own name. A code that names no entry exactly (older "en", "fr-CA" on a build without it) selects the first entry
-// of the same catalog language.
+// The regions of the Mals/<region>.Product.<n>.sarc.zs files in the RomFS index ("USen", "EUpl"), listed once; 0 when
+// the index has none (no RomFS yet).
+static int mals_regions(const char *out[24]) {
+    static char reg[24][5];
+    static int n = -1;   // -1: not scanned (the index may load after the menu first draws)
+    if (n < 0 && romfs_file_count()) {
+        n = 0;
+        for (uint64_t i = 0, c = romfs_file_count(); i < c && n < 24; i++) {
+            uint64_t off, size;
+            const char *p = romfs_entry(i, &off, &size);
+            if (!p || strncmp(p, "Mals/", 5) || strlen(p) < 10 || p[9] != '.') continue;
+            memcpy(reg[n], p + 5, 4);
+            reg[n][4] = 0;
+            bool seen = false;
+            for (int j = 0; j < n; j++) seen |= !strcmp(reg[j], reg[n]);
+            if (!seen) n++;
+        }
+    }
+    for (int i = 0; i < n; i++) out[i] = reg[i];
+    return n > 0 ? n : 0;
+}
+
+// The game language: one entry per Mals language file the game ships (ui_text_game_langs_in from the RomFS index, else
+// ui_text_game_langs by version), each under its own name. A code that names no entry exactly (older "en", "fr-CA" on
+// a build without it) selects the first entry of the same catalog language.
 static void row_game_lang(void) {
     UiGameLang langs[16];
-    int n = ui_text_game_langs(rt_game_version, langs, 16);
+    const char *regions[24];
+    int nr = mals_regions(regions);
+    int n = nr ? ui_text_game_langs_in(regions, nr, langs, 16) : ui_text_game_langs(rt_game_version, langs, 16);
     const char *vals[17], *names[17];
     vals[0] = "";
     names[0] = menu_text(UI_MENU_GAME_LANG_AUTO);
@@ -644,22 +671,23 @@ static const char *present_note(void) {
 }
 
 // ---- the tabs
-// Colour adjustment (vk_color.c): a profile writes the four values (STS78721's presets, issue #136); moving one of them
-// makes the profile Custom.
+// Colour adjustment (vk_color.c): a profile's values (vk_color_preset; STS78721's presets, issue #136) win over the four
+// settings, which the rows keep equal to them so the sliders show what is applied: when the profile changes here, and
+// when it came from nx2navi.ini or a test hook with other values. Moving a slider makes the profile Custom.
 static void rows_color(void) {
-    static const struct { const char *name, *b, *c, *s, *g; } presets[] = {
-        {"default", "0", "100", "100", "1"}, {"vivid", "0", "115", "135", "0.95"}, {"clarity", "2", "110", "115", "1"}};
     static const UiTextId names[] = {UI_MENU_COLOR_DEFAULT, UI_MENU_COLOR_VIVID, UI_MENU_COLOR_CLARITY,
                                      UI_MENU_COLOR_CUSTOM};
+    static const char *const keys[4] = {"NX2NAVI_COLOR_BRIGHTNESS", "NX2NAVI_COLOR_CONTRAST", "NX2NAVI_COLOR_SATURATION",
+                                        "NX2NAVI_COLOR_GAMMA"};
     opt_group(UI_MENU_COLOR);
-    if (opt_choice("NX2NAVI_COLOR_PRESET", UI_MENU_COLOR_PRESET, names, 4, UI_MENU_COLOR_PRESET_DESC)) {
-        const char *p = cfg_value("NX2NAVI_COLOR_PRESET");
-        for (const auto &e : presets)
-            if (!strcmp(p, e.name)) {
-                cfg_set("NX2NAVI_COLOR_BRIGHTNESS", e.b), cfg_set("NX2NAVI_COLOR_CONTRAST", e.c);
-                cfg_set("NX2NAVI_COLOR_SATURATION", e.s), cfg_set("NX2NAVI_COLOR_GAMMA", e.g);
-                cfg_save();
-            }
+    opt_choice("NX2NAVI_COLOR_PRESET", UI_MENU_COLOR_PRESET, names, 4, UI_MENU_COLOR_PRESET_DESC);
+    if (const char *const *p = vk_color_preset(cfg_value("NX2NAVI_COLOR_PRESET"))) {
+        bool differ = false;
+        for (int i = 0; i < 4; i++) differ |= strtod(cfg_value(keys[i]), nullptr) != strtod(p[i], nullptr);
+        if (differ) {
+            for (int i = 0; i < 4; i++) cfg_set(keys[i], p[i]);
+            cfg_save();
+        }
     }
     bool moved = opt_slider("NX2NAVI_COLOR_BRIGHTNESS", UI_MENU_COLOR_BRIGHTNESS, -30, 30, UI_MENU_COLOR_BRIGHTNESS_DESC, 1,
                             "%+.0f %%");
@@ -683,9 +711,13 @@ static void tab_screen(float scale) {
     static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL};
     opt_choice("NX2NAVI_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
     opt_group(UI_MENU_GRAPHICS);
-    row_output_res();
+    // The game resolution needs the output and scene patch sets (resolution.c res_adjustable): Ocarina's build has
+    // none and always draws its own size, so the row would change nothing
+    if (res_adjustable()) row_output_res();
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
     opt_choice("NX2NAVI_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
+    // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear the slider would do nothing
+    if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr")) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("NX2NAVI_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
@@ -695,7 +727,9 @@ static void tab_screen(float scale) {
 
 static void tab_game(float scale) {
     opt_begin("##game", scale);
-    row_fps_limit();
+    // The limit needs the fps60 or realtime patch set (frame_rate.c frame_limit_adjustable): Ocarina's build has
+    // neither and runs at the rate it picks itself, so the row would change nothing
+    if (frame_limit_adjustable()) row_fps_limit();
     row_game_lang();
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("NX2NAVI_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
@@ -724,7 +758,7 @@ static const char *pad_layout_note(void) {
     return note;
 }
 
-// The action a key presses, or -1: the walk key is a key of its own, but Shift is B in the default bindings, and a
+// The action a key presses, or -1: the walk key is a key of its own, but Shift is A (dash) in the default bindings, and a
 // walk key that also presses something walks and does that something at the same time. The bindings come from a
 // snapshot, and every key of an action is looked at: binds_refresh rebuilds the live table on the polling thread while
 // the menu draws, and an action may hold more than the two keys its cells show.
@@ -1066,11 +1100,14 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     snprintf(v[0], sizeof v[0], menu_text(UI_MENU_OV_FMT_SIZE), t->width, t->height);
     snprintf(v[1], sizeof v[1], menu_text(UI_MENU_OV_FMT_SIZE), (unsigned)t->image_w, (unsigned)t->image_h);
     snprintf(v[2], sizeof v[2], menu_text(UI_MENU_OV_FMT_SCENE), scene[0], scene[1], scene[0] * 100.0 / out[0]);
+    int sharp = cfg_int("NX2NAVI_SHARPNESS");
+    sharp = sharp < 0 ? 0 : sharp > 100 ? 100 : sharp;
     if (t->scaler == 2) {
-        int s = cfg_int("NX2NAVI_SHARPNESS");
-        snprintf(v[3], sizeof v[3], menu_text(UI_MENU_OV_FMT_FSR), s < 0 ? 0 : s > 100 ? 100 : s);
+        snprintf(v[3], sizeof v[3], menu_text(UI_MENU_OV_FMT_FSR), sharp);
+    } else if (t->scaler == 3) {   // shrunk by the blit, then RCAS (vk_fsr.c shrink_sharpen)
+        snprintf(v[3], sizeof v[3], menu_text(UI_MENU_OV_FMT_SHRINK), sharp);
     } else {
-        // FSR enlarges only (vk_fsr_record): an image larger than the window is shrunk by the blit even with FSR selected
+        // FSR with sharpness 0 and an image larger than the window: the plain shrink blit (vk_fsr_record)
         int down = t->scaler == 1 && !strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") &&
                    (t->image_w > (int)t->width || t->image_h > (int)t->height);
         snprintf(v[3], sizeof v[3], "%s",
@@ -1083,12 +1120,16 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     snprintf(v[5], sizeof v[5], "%s", pm ? pm : menu_text(UI_MENU_OV_NONE));
     static const UiTextId labels[6] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE,
                                        UI_MENU_OV_SCALING, UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT};
+    // The 3D scene's size is known only where resolution.c sets it (NX2navi's patch sets); Ocarina sizes its own scene
+    // dynamically and res_sizes would report NX2navi's fixed 1600x900, so the line is left out
+    bool scene_known = res_adjustable() != 0;
     if (!ImGui::BeginTable("##perfp", 2, ImGuiTableFlags_SizingFixedFit)) return;
     float vw = 0;
     for (auto &s : v) vw = fmaxf(vw, ImGui::CalcTextSize(s).x);
     ImGui::TableSetupColumn("##p0", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("##p1", ImGuiTableColumnFlags_WidthFixed, vw);
     for (int i = 0; i < 6; i++) {
+        if (i == 2 && !scene_known) continue;
         perf_label(labels[i], c);
         ImGui::TableNextColumn();
         perf_right(v[i], false);

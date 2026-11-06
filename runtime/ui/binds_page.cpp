@@ -19,7 +19,7 @@ void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 }
 
 static_assert(UI_BIND_SHAKE - UI_BIND_A == ACTION_COUNT - 1 && B_SHAKE == ACTION_COUNT - 1, "UI_BIND_* follow the actions");
-static_assert(UI_BIND_DESC_MINUS - UI_BIND_DESC_A == B_MINUS, "UI_BIND_DESC_* follow the actions");
+static_assert(UI_BIND_DESC_DOWN - UI_BIND_DESC_A == B_DOWN, "UI_BIND_DESC_* follow the actions");
 static_assert(UI_KEY_PAGEDOWN - UI_KEY_SPACE == KEY_PAGEDOWN - KEY_SPACE, "UI_KEY_* follow the key ids");
 static_assert(UI_PAD_RPADDLE2 - UI_PAD_SOUTH == PAD_RPADDLE2 - PAD_SOUTH && PAD_RPADDLE2 == PAD_COUNT - 1,
               "UI_PAD_* follow the pad ids");
@@ -46,8 +46,7 @@ static uint64_t g_note_until;
 static const char *action_label(int a) { return menu_text((UiTextId)(UI_BIND_A + a)); }
 
 static UiTextId action_desc(int a) {
-    if (a <= B_MINUS) return (UiTextId)(UI_BIND_DESC_A + a);
-    if (a <= B_DOWN) return UI_BIND_DESC_DPAD;
+    if (a <= B_DOWN) return (UiTextId)(UI_BIND_DESC_A + a);   // Ocarina gives each D-pad direction its own action
     if (a == B_SHAKE) return UI_BIND_DESC_SHAKE;
     return a <= B_SL_DOWN ? UI_BIND_DESC_MOVE : UI_BIND_DESC_CAMERA;
 }
@@ -237,7 +236,7 @@ void binds_rows(float scale) {
     for (int a : kMove) row_action(a, m, layout);
     opt_group(UI_BINDS_GROUP_CAMERA);
     for (int a : kCamera) row_action(a, m, layout);
-    row_action(B_SHAKE, m, layout);   // keys only; its controller cell shows the right stick, which the pad shakes itself
+    // No row for B_SHAKE: it shook NX2navi's object loose and Ocarina has no use for it (bind_shake still sets a key)
     ImGui::Dummy(ImVec2(0, 6 * scale));
     g_reset_asked = opt_button("##binds_reset", UI_BINDS_RESET, UI_BINDS_RESET_DESC);
 }
