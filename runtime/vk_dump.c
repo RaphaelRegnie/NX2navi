@@ -576,6 +576,7 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
         if (r && bd->kind == GFX_RES_SSBO) {   // where the address lives (c0: the stage's NVN slot table) and the stage's slots
             int st = nvn_stage(bd->stage);
             sp(b, "    %s ssbo at c%d+%#x%s, bound:", stn[st], r->cbuf_slot, r->handle * 4, r->flags & 1 ? " written" : "");
+            if (r->ptr) sp(b, " (address at +%#x of that buffer)", r->ptr - 1u);
             if (st == 5 && r->cbuf_slot == 0 && r->handle * 4 >= 0x10 && r->handle * 4 + 12 <= 0x10 + (int)sizeof ex->cs_push) {
                 uint64_t pa; uint32_t ps;   // an NVN2 compute push-constant pointer {address, size}
                 memcpy(&pa, ex->cs_push + r->handle * 4 - 0x10, 8), memcpy(&ps, ex->cs_push + r->handle * 4 - 0x10 + 8, 4);

@@ -838,8 +838,11 @@ static class AmpereLowering
                 ulong iscadd(int dst, int bb) => 0x5c18000000000000UL | ((ulong)shift << 39) | ((ulong)bb << 20) | ((ulong)a << 8) | (uint)dst | (negB ? 1UL << 48 : 0);
                 if (carry == 7) { EmitG(iscadd(d, b)); return; }
                 if (negB) throw Fail("LEA carry out with negated b");
-                Mov(SX, b);
-                EmitG(iscadd(SC, SX));
+                // The sum goes to scratch unconditionally; only the destination and the carry are guarded. A guarded
+                // copy of b made a constant-buffer base (c[0][0x110] in Ocarina's edge-AA tile list, prog 98) a phi
+                // of it and the scratch register's old value, and GlobalToStorage could not find the buffer.
+                Mov(SX, b, false);
+                Emit(Unguarded(iscadd(SC, SX)));
                 if (d != RZ) Mov(d, SC);
                 IsetpLtU((int)carry, SC, SX);   // carry = sum < b
                 return;

@@ -99,6 +99,8 @@ typedef struct {
     uint16_t count;             // descriptors (array length)
     uint8_t separate;           // TEX: texture and sampler handles are separate
     uint8_t pool;               // TEX: 1 the texture pool, 2 the sampler pool, indexed by bindless handles (set 2)
+    uint16_t ptr;               // SSBO: 0, or 1 + the byte offset of this buffer's address inside the storage buffer that
+                                // cbuf_slot and handle name (a pointer table; the translator's patch 0022, res.json "ptr")
 } GfxShaderRes;
 typedef struct { uint8_t type, comps, packed; } GfxShaderIo;   // GFX_TYPE_*, components, 1 with a Component decoration
 int gfx_shader_stage(const GfxShader *s);                   // GFX_STAGE_VS, GFX_STAGE_FS or GFX_STAGE_CS

@@ -225,7 +225,18 @@ static class SwshXlate
                     res["mesh"] = new JsonObject { ["lines"] = mesh.Lines.Count, ["shared"] = mesh.SharedBytes,
                         ["outputs"] = new JsonArray(MeshSpirv.GenericLocations(mesh).Select(x => (JsonNode)x).ToArray()) };
                 foreach (var b in p.Info.CBuffers) res["cbufs"].AsArray().Add((JsonNode)new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot });
-                foreach (var b in p.Info.SBuffers) res["sbufs"].AsArray().Add((JsonNode)new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = b.SbCbSlot, ["cb_offset"] = b.SbCbOffset, ["flags"] = (int)b.Flags });
+                foreach (var b in p.Info.SBuffers)
+                {
+                    // A buffer whose address is a pointer stored in another storage buffer (patch 0022, GlobalToStorage
+                    // PointerSlotFlag): cb_slot 0x20 | the slot of the outer buffer's address, cb_offset its word offset in
+                    // bits 0-9 and the pointer's byte offset in the outer buffer / 8 in bits 10-15. Written as the outer
+                    // buffer's cb_slot / cb_offset plus "ptr", the byte offset.
+                    bool pointer = (b.SbCbSlot & 0x20) != 0;
+                    var o = new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = pointer ? b.SbCbSlot & 0x1f : b.SbCbSlot,
+                        ["cb_offset"] = pointer ? b.SbCbOffset & 0x3ff : b.SbCbOffset, ["flags"] = (int)b.Flags };
+                    if (pointer) o["ptr"] = (b.SbCbOffset >> 10) * 8;
+                    res["sbufs"].AsArray().Add((JsonNode)o);
+                }
                 foreach (var (list, name) in new[] { (p.Info.Textures, "textures"), (p.Info.Images, "images") })
                     foreach (var t in list) res[name].AsArray().Add((JsonNode)new JsonObject { ["binding"] = t.Binding, ["type"] = (int)t.Type, ["format"] = t.Format.ToString(), ["cbuf_slot"] = t.CbufSlot, ["handle"] = t.HandleIndex, ["array"] = t.ArrayLength, ["separate"] = t.Separate, ["flags"] = (int)t.Flags,
                         ["pool"] = t.ArrayLength == Accessor.TexturePoolLength ? 1 : t.ArrayLength == Accessor.SamplerPoolLength ? 2 : 0 });

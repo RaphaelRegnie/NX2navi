@@ -169,7 +169,7 @@ static struct {
 // handles. sup and c0: the support inputs and the base instance count too. p: storage buffers whose address the shader
 // loads from a user uniform block; the address read from the block counts too. ok 0: never skipped (too many
 // descriptors or such buffers).
-#define RS_PTRS 4
+#define RS_PTRS 32
 typedef struct { uint32_t off, len; } RsRange;
 typedef struct { int st; const GfxShaderRes *res; } RsPtr;
 typedef struct { uint32_t n, bytes; uint8_t sup, c0, ok, np; RsPtr p[RS_PTRS]; RsRange r[]; } RsList;
@@ -1229,24 +1229,50 @@ static int push_ptr(const VkExec *ex, int st, const GfxShaderRes *r, p_bind_buf 
     return 0;
 }
 
-// vk_dump.c: the guest address a compute storage resource resolves to through c0 (push_ptr), 0 when none.
+// The buffer a storage resource names by where its address lives (GfxShaderRes.ptr aside): an NVN slot of the stage, a
+// pointer in a user uniform block (size 0: up to the end of the backing), or an NVN2 compute push pointer. *tmp holds
+// the last two. NULL when it names none.
+static const p_bind_buf *ssbo_direct(const VkExec *ex, int st, const GfxShaderRes *r, int *ubo, p_bind_buf *tmp) {
+    int slot = ssbo_slot(r, st, ubo);
+    *tmp = (p_bind_buf){0};
+    if (slot >= 0 && slot < 16) return *ubo ? &ex->ubo[st][slot] : &ex->ssbo[st][slot];
+    if (ubo_ptr_res(r)) return tmp->addr = ubo_ptr(ex, st, r), tmp;
+    return push_ptr(ex, st, r, tmp) ? tmp : NULL;
+}
+
+// The address of a storage resource read through a pointer table (GfxShaderRes.ptr): the u64 at offset ptr - 1 of the
+// buffer it names, as that buffer holds it at this point of the replay (like ubo_ptr); 0 when the buffer is unbound,
+// too short or not backed. Ocarina binds such a table as NVN storage slot 1 of most stages (five pointers at 0-0x20)
+// and its vertex, pixel and mesh shaders read their instance and light data through them (PORT-HANDOFF.md 7.17).
+static uint64_t ptr_addr(const VkExec *ex, int st, const GfxShaderRes *r) {
+    p_bind_buf tmp;
+    int ubo;
+    const p_bind_buf *b = ssbo_direct(ex, st, r, &ubo, &tmp);
+    uint64_t off = r->ptr - 1u, a = 0;
+    VkMemSpan sp;
+    if (!b || !b->addr || (b->size && b->size < off + 8) || upd_read(ex, b->addr + off, &a, 8)) return a;
+    if (vk_mem_resolve(b->addr + off, 8, &sp)) memcpy(&a, (const void *)(uintptr_t)(b->addr + off), 8);
+    return a;
+}
+
+// vk_dump.c: the guest address a compute storage resource resolves to, 0 when none.
 uint64_t vk_exec_cs_storage_addr(const VkExec *ex, const GfxShaderRes *r) {
-    p_bind_buf up = {0};
-    int ubo, slot = ssbo_slot(r, NVN_STAGE_CS, &ubo);
-    if (slot >= 0 && slot < 16) return ubo ? ex->ubo[NVN_STAGE_CS][slot].addr : ex->ssbo[NVN_STAGE_CS][slot].addr;
-    return push_ptr(ex, NVN_STAGE_CS, r, &up) ? up.addr : 0;
+    p_bind_buf tmp;
+    int ubo;
+    if (r->ptr) return ptr_addr(ex, NVN_STAGE_CS, r);
+    const p_bind_buf *b = ssbo_direct(ex, NVN_STAGE_CS, r, &ubo, &tmp);
+    return b ? b->addr : 0;
 }
 
 static VkDescriptorBufferInfo ssbo_info(VkExec *ex, int st, const GfxShaderRes *r, int written) {
     if (!__atomic_load_n(&LIM.ubo_max, __ATOMIC_ACQUIRE)) limits_init();
     uint64_t max = LIM.sbo_max, align = LIM.sbo_align;
     VkDescriptorBufferInfo bi;
-    int ubo, slot = ssbo_slot(r, st, &ubo);
+    int ubo = 0;
     p_bind_buf up = {0};
-    const p_bind_buf *b = NULL;
-    if (slot >= 0 && slot < 16) b = ubo ? &ex->ubo[st][slot] : &ex->ssbo[st][slot];
-    else if (ubo_ptr_res(r)) up.addr = ubo_ptr(ex, st, r), b = &up;   // size 0: up to the end of the backing
-    else if (push_ptr(ex, st, r, &up)) b = &up;
+    const p_bind_buf *b;
+    if (r->ptr) up.addr = ptr_addr(ex, st, r), b = &up;   // size 0: up to the end of the backing
+    else b = ssbo_direct(ex, st, r, &ubo, &up);
     if (b) {
         // vk_caps.c: shaders translated for sbuf_align address the buffer from its address rounded down to it.
         uint64_t lead = vk_caps.sbuf_align ? b->addr & (vk_caps.sbuf_align - 1) : 0;
@@ -2287,12 +2313,11 @@ static const RsList *rs_list(const VkExec *ex, const VkPipeInfo *info) {
                     else if (slot >= 3 && slot - 3 < 18) rs_add(tmp, &n, ex, &ex->ubo[st][slot - 3], sizeof(p_bind_buf));
                 }   // slot 1: the program (bind_sig); others: the zero buffer
             } else if (b->kind == GFX_RES_SSBO) {   // every descriptor of the binding is the same range
-                int ubo, slot = ssbo_slot(r, st, &ubo);
-                if (slot >= 0 && slot < 16) {
-                    rs_add(tmp, &n, ex, ubo ? &ex->ubo[st][slot] : &ex->ssbo[st][slot], sizeof(p_bind_buf));
-                } else if (ubo_ptr_res(r)) {
+                int ubo, slot = ssbo_slot(r, st, &ubo), direct = slot >= 0 && slot < 16;
+                if (direct) rs_add(tmp, &n, ex, ubo ? &ex->ubo[st][slot] : &ex->ssbo[st][slot], sizeof(p_bind_buf));
+                else if (ubo_ptr_res(r)) rs_add(tmp, &n, ex, &ex->ubo[st][r->cbuf_slot - 3], sizeof(p_bind_buf));
+                if (r->ptr || (!direct && ubo_ptr_res(r))) {   // an address read from memory: bind_sig reads it again
                     if (np == RS_PTRS) { ok = 0; break; }
-                    rs_add(tmp, &n, ex, &ex->ubo[st][r->cbuf_slot - 3], sizeof(p_bind_buf));
                     ptr[np++] = (RsPtr){st, r};
                 }
             } else if ((b->kind == GFX_RES_TEX || b->kind == GFX_RES_IMG) && b->type != VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER &&
@@ -2345,7 +2370,8 @@ static int bind_sig(const VkExec *ex, const VkPipeInfo *info) {
         PUT(ps);
     }
     if (l->c0) PUT(c0_binst);
-    for (int i = 0; i < l->np; i++) PUT(ubo_ptr(ex, l->p[i].st, l->p[i].res));
+    for (int i = 0; i < l->np; i++)
+        PUT(l->p[i].res->ptr ? ptr_addr(ex, l->p[i].st, l->p[i].res) : ubo_ptr(ex, l->p[i].st, l->p[i].res));
 #undef PUT
     diff |= n != RS.hn;
     RS.hn = n;
