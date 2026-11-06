@@ -1329,6 +1329,24 @@ static uint32_t attached_as(const VkExec *ex, const SubRange *r) {
     return m;
 }
 
+// Knobs the draw and dispatch paths test on every call, read once: each cfg lookup walks the settings table
+// (cfg.c raw_get), about 0.2 ms a frame of replay in Kokiri Forest when they ran per draw.
+static int knob_log_mesh(void) {   // NX2NAVI_LOG_MESH=1: the first mesh draws' state
+    static int on = -1;
+    if (on < 0) on = rt_knob("LOG_MESH", "0");
+    return on;
+}
+static int knob_tm_dispatch(void) {   // NX2NAVI_TM_DISPATCH: the scene upscaler stand-in's mode
+    static int on = -1;
+    if (on < 0) on = rt_knob("TM_DISPATCH", "1");
+    return on;
+}
+static int knob_log_cs_binds(void) {   // NX2NAVI_LOG_CS_BINDS set: the compute bindings of each program's first dispatch
+    static int on = -1;
+    if (on < 0) on = cfg_get("NX2NAVI_LOG_CS_BINDS") != NULL;
+    return on;
+}
+
 // NX2NAVI_TEX_MEMO (tex_info, feedback_scan): 0 off, 1 on, 2 (=check) computes every hit again and stops on a difference.
 static int td_mode(void) {
     static int on = -1;
@@ -1360,10 +1378,16 @@ static uint32_t feedback_scan(VkExec *ex, const GfxShader *fs) {
     int n = gfx_shader_resources(fs, GFX_RES_TEX, &res);
     uint32_t m = 0, gen = vk_texture_slots_gen();   // before any lookup
     int memo = td_mode(), locked = 0;
-    for (int r = 0; r < n; r++)
-        for (int k = 0; k < (res[r].count ? res[r].count : 1); k++) {
+    for (int r = 0; r < n; r++) {
+        // Only bound slots (0..127) are looked at. The texture and sampler pool arrays (res.pool: 32768 and 4096
+        // descriptors, bindless handles) have slot -1: walking them ran up to about 100,000 empty iterations per scan,
+        // about 3.6 ms of replay per frame in Kokiri Forest, and read tex[FS][0..127] for them by mistake.
+        if (res[r].pool || res[r].slot < 0) continue;
+        int count = res[r].count ? res[r].count : 1;
+        if (count > 128 - res[r].slot) count = 128 - res[r].slot;
+        for (int k = 0; k < count; k++) {
             int slot = res[r].slot + k;
-            uint64_t h = slot >= 0 && slot < 128 ? ex->tex[NVN_STAGE_FS][slot] : 0;
+            uint64_t h = ex->tex[NVN_STAGE_FS][slot];
             if (!h) continue;
             typeof(FM[0]) *f = &FM[(h * 0x9E3779B97F4A7C15ull) >> 51];
             if (memo && f->h == h && slot_still(&f->gen, f->tok, h, gen)) {
@@ -1383,6 +1407,7 @@ static uint32_t feedback_scan(VkExec *ex, const GfxShader *fs) {
             if (tok) *f = (typeof(*f)){.h = h, .tok = tok, .gen = gen, .r = sr};
             else f->h = 0;
         }
+    }
     if (locked) vk_texture_unlock();
     ex->fb_fs = fs, ex->fb_serial = ex->tex_serial, ex->fb_pass = ex->pass_serial, ex->fb_sampled = m;
     return m;
@@ -3688,7 +3713,7 @@ static void op_draw_mesh(VkExec *ex, const p_draw_mesh *d) {
     if (d->first) warn_once(W_MESH, "a mesh draw from workgroup %u: drawn from workgroup 0", d->first);
     vk_exec_frame.draws++;
     static uint32_t n_logged;
-    if (n_logged < 8 && rt_knob("LOG_MESH", "0")) {
+    if (n_logged < 8 && knob_log_mesh()) {
         n_logged++;
         rt_log("vk: mesh draw: %u workgroups, program %llu", d->count, (unsigned long long)ex->prog->serial);
     }
@@ -3720,7 +3745,7 @@ static void op_draw_mesh_ind(VkExec *ex, const p_draw_mesh_ind *d) {
     if (!prepare_draw_ex(ex, NVN_DRAW_PRIMITIVE_TRIANGLES, 0x7fffffff, 0, 1)) return;
     vk_exec_frame.draws++;
     static uint32_t n_logged;
-    if (n_logged < 8 && rt_knob("LOG_MESH", "0")) {
+    if (n_logged < 8 && knob_log_mesh()) {
         n_logged++;
         rt_log("vk: indirect mesh draw: arguments at %#llx, program %llu", (unsigned long long)d->ind,
                (unsigned long long)ex->prog->serial);
@@ -3878,7 +3903,7 @@ static VkImage fallback_scratch(VkExec *ex, uint32_t w, uint32_t h, VkFormat f) 
                             .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
                             .tiling = VK_IMAGE_TILING_OPTIMAL,
                             .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                     (f == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 && rt_knob("TM_DISPATCH", "1") != 2 ? VK_IMAGE_USAGE_SAMPLED_BIT : 0),
+                                     (f == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 && knob_tm_dispatch() != 2 ? VK_IMAGE_USAGE_SAMPLED_BIT : 0),
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     VmaAllocationCreateInfo ia = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     VkImage img; VmaAllocation a;
@@ -3960,7 +3985,7 @@ static void untranslated_dispatch_fallback(VkExec *ex) {
             src = t;
     }
     if (dst && src) vk_texture_storage_bound_locked(dst);
-    if (dst && src && cfg_get("NX2NAVI_LOG_CS_BINDS")) {   // each distinct (program, source, target) once, 256 at most
+    if (dst && src && knob_log_cs_binds()) {   // each distinct (program, source, target) once, 256 at most
         static struct { uint64_t prog, s, d; } seen[256];
         static int n;
         uint64_t pr = ex->prog ? ex->prog->serial : 0;
@@ -3993,7 +4018,7 @@ static void untranslated_dispatch_fallback(VkExec *ex) {
     VkImage si = src ? src->image : VK_NULL_HANDLE, di = dst ? dst->image : VK_NULL_HANDLE;
     VkImageView dst_view = VK_NULL_HANDLE;   // for the tonemap pass, while the lock keeps the image
     if (src && dst && (dst->usage & VK_IMAGE_USAGE_STORAGE_BIT) && raw_9e5(src->image, src->format) &&
-        dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && rt_knob("TM_DISPATCH", "1") != 2) {
+        dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && knob_tm_dispatch() != 2) {
         view_t nv;
         memset(&nv, 0, sizeof nv);
         dst_view = get_view(ex, dst, &nv, 0, 3, 1);   // 3: Ryujinx Texture2D
@@ -4094,7 +4119,7 @@ static void op_dispatch(VkExec *ex, const p_dispatch *d) {
     dummies_init();
     int present;
     const GfxShader *cs = shader_for(ex, NVN_STAGE_CS, &present, NULL, 0);   // synchronous: a skipped dispatch changes results
-    if (cfg_get("NX2NAVI_LOG_CS_BINDS")) {   // diagnosis: the compute bindings of the first dispatch of each program
+    if (knob_log_cs_binds()) {   // diagnosis: the compute bindings of the first dispatch of each program
         static uint64_t seen[64]; static int nseen;
         int known = 0;
         for (int i = 0; i < nseen; i++) known |= seen[i] == ex->prog->serial;

@@ -690,11 +690,17 @@ static void clear_tex(VkExec *ex, const p_clear_tex *p) {
     if (img->aspect & VK_IMAGE_ASPECT_COLOR_BIT) {
         rng.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         VkClearColorValue cv;
-        if (int_format(img->format) != (p->is_uint != 0)) {
-            warn_once(W_CLEAR, "texture clear value kind (uint %d) does not match format %d: skipped", p->is_uint, (int)img->format);
-            return;
-        }
         memcpy(&cv, &p->c, sizeof cv);
+        if (int_format(img->format) != (p->is_uint != 0)) {
+            // A value of the other kind that is all zero bits (0.0f is) is the same clear either way: Ocarina clears its
+            // rg16ui edge map (480x270) with a float 0 each frame, and skipped, the post chain's edge classification
+            // read the previous frames' edges. Other values stay skipped.
+            if (cv.uint32[0] | cv.uint32[1] | cv.uint32[2] | cv.uint32[3]) {
+                warn_once(W_CLEAR, "texture clear value kind (uint %d) does not match format %d: skipped", p->is_uint,
+                          (int)img->format);
+                return;
+            }
+        }
         vk_exec_pass_end(ex);
         vk_exec_barrier(ex);
         vkCmdClearColorImage(ex->cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &rng);

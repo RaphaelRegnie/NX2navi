@@ -115,8 +115,11 @@ static uint64_t n_checks;    // draw-binding storage checks (make_fresh_snap) si
 // tex_gen per storage address (hashed): a slot resolves through the entries at its own address only (slot_resolve), so
 // a slot's resolution stays valid while its address's generation does. NX2navi finalizes and initializes transient
 // textures every frame: about 90 tex_gen and 160 slots_gen bumps per frame in the monsters fight, one every 16 draws,
-// which emptied every cache keyed on the global generations.
-#define AGEN_N 4096
+// which emptied every cache keyed on the global generations. 65536 buckets, the most the 16-bit index of sinfo,
+// slot_bucket and the dirty ring's bucket entries holds: with 4096, about 8 slots shared each bucket, and every
+// transient texture made or released at one address made the texture pool refresh (vk_exec_draw.c pool_sync_entries)
+// refill its neighbours too, most of its 3-3.7 ms per frame in Kokiri Forest.
+#define AGEN_N 65536
 static uint32_t agen[AGEN_N];
 // Per slot id, for vk_texture_slot_token without the lock: the registration serial (bits 16-47; 0: never registered)
 // and the address generation index (bits 0-15), one word so a reader gets a consistent pair. Fixed-size (slot ids are
@@ -124,7 +127,7 @@ static uint32_t agen[AGEN_N];
 static uint64_t *sinfo;
 static uint32_t reg_serial;
 
-static uint32_t agen_idx(uint64_t addr) { return (uint32_t)(addr * 0x9E3779B97F4A7C15ull >> 52); }
+static uint32_t agen_idx(uint64_t addr) { return (uint32_t)(addr * 0x9E3779B97F4A7C15ull >> 48); }
 
 // Slots that may resolve differently since a position, for the texture pool descriptors (vk_exec_draw.c
 // pool_sync_entries), which otherwise looked at every registered slot after each change: Ocarina registers slots all
@@ -482,6 +485,35 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
             img = VK_NULL_HANDLE;
             log_limited(&n_unbound, "texture %#llx (%ux%u fmt %#x) cannot alias its pool memory; own memory instead",
                         (unsigned long long)k->addr, w, h, d->format);
+        }
+    }
+    // A texture whose content the CPU provides (tex_mirrored), up to SUBALLOC_MAX, takes memory from VMA's device blocks:
+    // the driver prefers a dedicated allocation for most images, and vmaCreateImage follows that, so a scene load
+    // (about 2700 new textures in one frame entering Kokiri Forest) made as many vkAllocateMemory calls, 43% of that
+    // 680 ms frame. vmaAllocateMemory with the plain requirements sub-allocates instead, from the blocks the headroom
+    // thread keeps ahead (vk_headroom.c). Render targets keep vmaCreateImage and the driver's preference.
+    enum { SUBALLOC_MAX = 32 << 20 };
+    if (!img && tex_mirrored(t) && samples == 1) {
+        if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS) {
+            // an image the driver requires (not only prefers) dedicated memory for keeps it: vmaCreateImage below
+            VkMemoryDedicatedRequirements dr = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
+            VkMemoryRequirements2 mr2 = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, .pNext = &dr};
+            VkImageMemoryRequirementsInfo2 ri = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2, .image = img};
+            vkGetImageMemoryRequirements2(c->device, &ri, &mr2);
+            VkMemoryRequirements mr = mr2.memoryRequirements;
+            VmaAllocationCreateInfo ai = {.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
+            int ok = !dr.requiresDedicatedAllocation && mr.size <= SUBALLOC_MAX &&
+                     vmaAllocateMemory(c->vma, &mr, &ai, &e->alloc, NULL) == VK_SUCCESS;
+            if (ok && vmaBindImageMemory(c->vma, e->alloc, img) != VK_SUCCESS) {
+                vmaFreeMemory(c->vma, e->alloc);
+                ok = 0;
+            }
+            if (!ok) {
+                vkDestroyImage(c->device, img, NULL);
+                img = VK_NULL_HANDLE, e->alloc = NULL;
+            }
+        } else {
+            img = VK_NULL_HANDLE;
         }
     }
     if (!img) {
@@ -1201,6 +1233,13 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
         // 2250x1080 map target through an (R,G,B,1) descriptor and followed a 960x60 target at the same address.
         Tex *own = e, *any = NULL;
         e = NULL;
+        // A slot whose content the CPU writes (tex_mirrored) follows another image only for content its own bytes do
+        // not hold, the GPU's: Ocarina rasterizes each UI caption on the CPU into a small r8 glyph atlas and reuses the
+        // memory of a freed one for the next, of another width. Following the older 256x39 atlas at the address, the
+        // replay uploaded the new 128-wide bytes with a 256-texel row, and the Basic Controls screen's ZL caption
+        // ("Target") sampled a mix of its glyphs and stale ones. Without such an image the slot gets its own below
+        // (entry_of), uploaded from its storage with its own geometry.
+        int cpu_slot = tex_mirrored(&s->t);
         for (Tex *p = nvn_hm_get(&by_addr, &k.addr); p; p = p->next_at) {
             if (p->released) continue;
             // Only an entry of the slot's target: Ocarina's volumetric fog registers a 3D two-channel volume (32x24x64)
@@ -1208,10 +1247,11 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
             // that 2D image, no 3D view can be made of it (vk_exec_draw.c get_view) and they read and wrote stand-ins.
             // With the target kept they get the volume itself.
             if (p->key.d.target != k.d.target) continue;
-            if (!any) any = p;
             if (same_but_swizzle(&p->key, &k)) { e = p; break; }
+            if (!any && (!cpu_slot || alias_has_gpu_content(p))) any = p;
         }
-        if (!e) e = any ? any : own;
+        // own is missing or released here; for a CPU slot entry_of below finds or revives it by key
+        if (!e) e = any ? any : cpu_slot ? NULL : own;
     }
     if (!e && s->t.mem) {
         if (create_budget < 0) e = entry_of(&s->t);

@@ -12,8 +12,11 @@
 //
 // The decode is recorded into the upload batch (vk_memory.c) in chunks of at most 32 MiB of texels: a chunk's raw
 // blocks go from staging to a device-local scratch buffer, its dispatches write RGBA8 texels behind them, and a
-// buffer-to-image copy puts them into the image; the next chunk reuses the scratch after a barrier. The scratch
-// buffer is freed once the batch completes (vk_defer_buffer).
+// buffer-to-image copy puts them into the image; the next chunk reuses the scratch after a barrier. The next texture
+// reuses it too, behind the same barrier, while it records into the same command buffer (scratch_get): a buffer per
+// texture, each kept until its batch completed, made a scene load (2641 textures in one frame in Kokiri Forest) hold
+// gigabytes of scratch at once and allocate 256 MiB device blocks inline, about half a second of the load frame. A
+// larger scratch replaces it; the old one is freed once the batches recorded so far completed (vk_defer_buffer).
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -418,6 +421,42 @@ static void mem_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 src, VkAccessF
 // Scratch per vk_astc_record: texels of at most this many bytes at a time (or one region, when larger), so a large
 // texture array (169 M texels, 677 MB as RGBA8, on monsters2) does not need its whole RGBA8 copy as scratch.
 #define CHUNK_OUT (32ull << 20)
+#define SCRATCH_MIN (64ull << 20)   // the shared scratch's least size: one chunk's texels plus its blocks and BC3
+
+// The shared scratch and the command buffer it was last recorded into. An upload batch's command buffer is used again
+// only after that batch completed (vk_memory.c: completed batches go to the spare list), so the same handle means the
+// open batch, ordered by a barrier, or a finished one. g_lock held.
+static struct { VkBuffer buf; VmaAllocation alloc; VkDeviceSize size; VkCommandBuffer cb; VkDevice dev; } S;
+static uint64_t n_scratch_new, n_scratch_reuse;
+
+// A scratch of at least need bytes for recording into cb; *reused: earlier work in cb may still use it. 0 on failure.
+static VkBuffer scratch_get(VkCtx *c, VkCommandBuffer cb, VkDeviceSize need, int *reused) {
+    plat_mutex_lock(&g_lock);
+    *reused = S.buf && S.dev == c->device && S.cb == cb && S.size >= need;
+    if (!*reused) {
+        VkDeviceSize size = need < SCRATCH_MIN ? SCRATCH_MIN : need;
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
+                                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VkBuffer b;
+        VmaAllocation a;
+        if (vmaCreateBuffer(c->vma, &bi, &aci, &b, &a, NULL) != VK_SUCCESS) {
+            plat_mutex_unlock(&g_lock);
+            return VK_NULL_HANDLE;
+        }
+        // the old one may still be read by its command buffer: freed once the batches recorded so far completed
+        if (S.buf && S.dev == c->device) vk_defer_buffer(S.buf, S.alloc);
+        S.buf = b, S.alloc = a, S.size = size, S.dev = c->device;
+        n_scratch_new++;
+    } else {
+        n_scratch_reuse++;
+    }
+    S.cb = cb;
+    VkBuffer out = S.buf;
+    plat_mutex_unlock(&g_lock);
+    return out;
+}
 
 static VkDeviceSize region_out(const VkAstcRegion *r) { return (VkDeviceSize)r->w * r->h * r->slices * 4; }
 static VkDeviceSize region_in(const VkAstcRegion *r, uint32_t bw, uint32_t bh) {
@@ -463,16 +502,12 @@ int vk_astc_record(VkCommandBuffer cb, VkBuffer src, VkDeviceSize src_size, cons
     cap_in = (cap_in + al - 1) / al * al;
     cap_out = (cap_out + al - 1) / al * al;
     if (!bc) cap_bc = 0;
-    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = cap_in + cap_out + cap_bc,
-                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT};
-    VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
-    VkBuffer sb;
-    VmaAllocation sa;
-    if (vmaCreateBuffer(c->vma, &bi, &aci, &sb, &sa, NULL) != VK_SUCCESS) {
+    int reused;
+    VkBuffer sb = scratch_get(c, cb, cap_in + cap_out + cap_bc, &reused);
+    if (!sb) {
         if (plat_inc32(&n_fail) <= 16)
             rt_log("vk: ASTC scratch buffer of %llu bytes failed: texture left undecoded",
-                   (unsigned long long)(cap_in + cap_out));
+                   (unsigned long long)(cap_in + cap_out + cap_bc));
         return 0;
     }
     plat_mutex_lock(&g_lock);
@@ -522,7 +557,7 @@ int vk_astc_record(VkCommandBuffer cb, VkBuffer src, VkDeviceSize src_size, cons
             in += region_in(&rg[i1], bw, bh), out += region_out(&rg[i1]);
         }
         vk_crumb(cb, VK_CRUMB_ASTC, ++n_chunks);
-        if (chunks)   // the previous chunk's dispatches and image copy are done with the scratch
+        if (chunks || reused)   // the previous chunk's (or texture's) dispatches and copies are done with the scratch
             mem_barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                         VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -601,13 +636,14 @@ int vk_astc_record(VkCommandBuffer cb, VkBuffer src, VkDeviceSize src_size, cons
         plat_mutex_unlock(&t_lock);
     }
     if ((n_dispatch + (uint64_t)n) / 1024 != n_dispatch / 1024 || !n_dispatch) {
-        rt_log("vk: ASTC: %llu regions, %.1f M texels decoded on the GPU so far",
-               (unsigned long long)(n_dispatch + (uint64_t)n), (double)n_texels / 1e6);
+        rt_log("vk: ASTC: %llu regions, %.1f M texels decoded on the GPU so far; shared scratch %llu MiB, made %llu "
+               "times, reused %llu", (unsigned long long)(n_dispatch + (uint64_t)n), (double)n_texels / 1e6,
+               (unsigned long long)(S.size >> 20), (unsigned long long)n_scratch_new,
+               (unsigned long long)n_scratch_reuse);
         vk_astc_time_summary();
     }
     n_dispatch += (uint64_t)n;
     free(copies), free(bcp);
-    vk_defer_buffer(sb, sa);
     return 1;
 }
 
@@ -626,6 +662,8 @@ void vk_astc_release(void) {
         if (G.dsl) vkDestroyDescriptorSetLayout(c->device, G.dsl, NULL);
         if (G.tab) vmaDestroyBuffer(c->vma, G.tab, G.tab_alloc);
     }
+    if (c && S.buf && S.dev == c->device) vmaDestroyBuffer(c->vma, S.buf, S.alloc);   // the device is idle here
+    memset(&S, 0, sizeof S);
     memset(&G.dsl, 0, sizeof G - offsetof(__typeof__(G), dsl));
     G.dev = VK_NULL_HANDLE;
     G.mode = -1;
