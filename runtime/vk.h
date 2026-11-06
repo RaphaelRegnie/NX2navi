@@ -36,7 +36,8 @@ typedef struct VkCtx {
         has_nv_checkpoints,                 // VK_NV_device_diagnostic_checkpoints (NX2NAVI_PASS_CRUMBS=1, vk_crumbs.c)
         has_astc_ldr,                       // textureCompressionASTC_LDR (enabled when reported)
         has_calibrated,                     // VK_KHR/EXT_calibrated_timestamps (GPU idle split in the perf line)
-        has_hdr_metadata;                   // VK_EXT_hdr_metadata (vk_hdr.c vk_hdr_metadata)
+        has_hdr_metadata,                   // VK_EXT_hdr_metadata (vk_hdr.c vk_hdr_metadata)
+        has_mesh_shader;                    // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
     // Feedback loops (maxwell.md 1.9, vk_exec_draw.c feedback_prepare): a draw samples a target of its open pass that
     // an earlier draw of the pass wrote. NX2NAVI_FEEDBACK=0: VK_FEEDBACK_OFF (sampled in GENERAL without a barrier, the
     // old behaviour); VK_FEEDBACK_LAYOUT with VK_EXT_attachment_feedback_loop_layout and dynamicRenderingLocalRead
@@ -403,6 +404,23 @@ VkSampler vk_sampler_by_id_locked(int id);
 // for an empty slot.
 VkSampler vk_sampler_point_by_id_locked(int id);
 uint32_t vk_texture_slots_gen(void);
+int vk_texture_slot_count_locked(void);
+void vk_texture_create_budget_locked(int n);         // slot lookups create at most n entries (mapped storage only); -1 any
+int vk_texture_create_deferred_locked(void);        // a lookup since the last call left a creation to the budget             // one past the highest texture slot registered so far (or more)
+int vk_sampler_slot_count_locked(void);
+// Bindless pools (vk_exec_draw.c, "texture and sampler pools"): set 2 of every pipeline layout. Shaders that index
+// the texture or sampler pool with handles from memory have their pool arrays moved there (vk_pipeline.c
+// spirv_pool_rebind); VK_POOL_KINDS image bindings, one per view kind, then the sampler pool.
+#define VK_POOL_TEX 32768                           // as the translator's Accessor.TexturePoolLength
+#define VK_POOL_SAMP 4096                           // Accessor.SamplerPoolLength
+#define VK_POOL_KINDS 16                            // kind = depth * 8 + dim * 2 + arrayed, dim 1D 2D 3D CUBE
+extern volatile uint32_t vk_pool_kinds_used;        // bit k: a pipeline was made with a kind-k pool array
+VkDescriptorSetLayout vk_pool_set_layout(void);     // the pools' layout (made on first use)
+VkDescriptorSetLayout vk_empty_set_layout(void);    // set 1 of layouts without one
+// The upscaler stand-in (vk_tonemap.c): src (sampled) scaled to dw x dh and tonemapped into its own RGBA16F image, which
+// it returns for the caller to blit into the target; VK_NULL_HANDLE when it cannot. The caller binds its own compute
+// pipeline again afterwards.
+VkImage vk_tonemap_record(VkCommandBuffer cb, VkImage src, VkFormat sf, uint32_t dw, uint32_t dh);
 // What vk_texture_by_id(id) returns can change only when this does: the slot is registered again, or a texture entry at
 // its storage address is created, dropped, released or taken back into use. Unlocked; read it before the lookup it
 // guards (a lookup may create an entry). 0 when the slot was never registered: nothing is kept under 0.
@@ -478,7 +496,9 @@ void vk_backend_shutdown(void);            // presents, vk_sync_shutdown, vk_mem
 // Everything a graphics pipeline depends on, as the op stream carries it. Fields covered by dynamic state are read by
 // vk_pipeline_set_dynamic only and left out of the pipeline key.
 typedef struct VkPipeState {
-    const GfxShader *vs, *fs;              // gfx_shader_get results; fs NULL: no fragment stage (depth only)
+    const GfxShader *vs, *fs;              // gfx_shader_get results; fs NULL: no fragment stage (depth only). vs is
+                                           // the mesh stage of a mesh draw (gfx_shader_stage GFX_STAGE_MS)
+    const GfxShader *ts;                   // mesh draws: the task stage, or NULL
     int32_t color_fmt[8];                  // NVNformat of colour target i (OP_SET_RT), 0 none
     int32_t depth_fmt;                     // NVNformat of the depth/stencil target, 0 none
     uint8_t samples;                       // sample count of the targets; 0 or 1 single-sampled
@@ -531,6 +551,7 @@ typedef struct {
     // Descriptor update template per set (vk_pipeline.c make_tpl): reads one VkDescSlot per descriptor, in binding order,
     // from the start of the set's descriptors. VK_NULL_HANDLE: the set is written with VkWriteDescriptorSet structs.
     VkDescriptorUpdateTemplate tpl[2];
+    int pool;                              // a stage indexes the texture or sampler pool: bind set 2 (the pools)
 } VkPipeInfo;
 // One descriptor of the packed array a descriptor update template reads (VkPipeInfo.tpl), 24 bytes for every type; the
 // bytes a type leaves unused are zero, so equal descriptors compare equal byte for byte.

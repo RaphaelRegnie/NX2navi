@@ -8,10 +8,24 @@
 //   in x -> y -> z row-major order.
 // Level and layer start offsets and the block height and depth of a level come from nvn_tex.c; this file only does the
 // addressing inside a level and the copy.
+//
+// Switch 2 (NVN2 titles, NVN API major version 200 and up) stores the 16-byte pieces of a GOB in another order:
+//     (x%64/32)*256 + (y%8/4)*128 + (x%32/16)*64 + (y%4)*16 + x%16
+// (four rows of one 16-byte column before the next column). Found on Ocarina of Time's packaged textures: with it the
+// ASTC 4x4 title logo and BC4 masks decode without seams (an edge-continuity search over all 120 orders of the five
+// address bits picks it for both; OCARINA-BRINGUP.md round 18). Block and level arithmetic are unchanged.
+#include "host.h"
 #include "tex.h"
 #include <string.h>
 
+static int gob_nvn2(void) {
+    static int v = -1;
+    if (v < 0) v = rt_nvn_api_version[0] >= 200;
+    return v;
+}
+
 static uint32_t gob_off(uint32_t x, uint32_t y) {
+    if (gob_nvn2()) return (x % 64 / 32) * 256 + (y % 8 / 4) * 128 + (x % 32 / 16) * 64 + (y % 4) * 16 + x % 16;
     return (x % 64 / 32) * 256 + (y % 8 / 2) * 64 + (x % 32 / 16) * 32 + (y % 2) * 16 + x % 16;
 }
 
@@ -47,10 +61,11 @@ int nvn_deswizzle_geom(const nvn_texdesc *d, unsigned level, unsigned layer,
 }
 
 // nvn_bl_offset per row instead of per 16 bytes: within a row, GOB column k starts k blocks further, and the four
-// 16-byte segments of a GOB row (x % 64 = 0, 16, 32, 48) sit at 0, 32, 256 and 288 of it.
+// 16-byte segments of a GOB row (x % 64 = 0, 16, 32, 48) sit at 0, 32, 256 and 288 of it (Switch 2: 0, 64, 256, 320).
 void tex_bl_copy(uint8_t *bl, uint8_t *lin, size_t pitch, uint32_t row_bytes, uint32_t rows, uint32_t slices,
                  unsigned th, unsigned td, int to_linear) {
-    static const uint32_t seg[4] = {0, 32, 256, 288};
+    static const uint32_t seg_x1[4] = {0, 32, 256, 288}, seg_nvn2[4] = {0, 64, 256, 320};
+    const uint32_t *seg = gob_nvn2() ? seg_nvn2 : seg_x1;
     uint64_t block = 512ull << th << td;
     for (uint32_t z = 0; z < slices; z++)
         for (uint32_t y = 0; y < rows; y++) {

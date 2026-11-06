@@ -1059,16 +1059,28 @@ static uint32_t delete_recursive(const char *path) {
     return remove_tree(p) ? FS_R_INVALID_ARGUMENT : 0;
 }
 
+static int romfs_listing_add(const char *name, int is_dir, uint64_t size, void *ctx) {
+    return listing_add(name, is_dir ? PLAT_FS_DIR : PLAT_FS_FILE, size, ctx);
+}
+
 static uint32_t open_directory(uint64_t *out, const char *path, int mode) {
-    if (romfs_owns(path)) rt_fatal("fs: OpenDirectory on the RomFS (%s) is not implemented", path);
-    char p[PATH_CAP];
-    uint32_t r = host_path(path, p, sizeof p);
-    if (r) return r;
-    if (!out || mode < 1 || mode > 3) return FS_R_INVALID_ARGUMENT;
-    if (plat_fs_kind(p) != PLAT_FS_DIR) return FS_R_PATH_NOT_FOUND;
-    Listing l;
-    int e = list_dir(p, &l);
-    if (e) return fs_result(e);
+    Listing l = {0};
+    if (romfs_owns(path)) {   // Switch 2 titles list RomFS folders (content:/Foliage/...); NX2NAVI never did
+        if (!out || mode < 1 || mode > 3) return FS_R_INVALID_ARGUMENT;
+        uint32_t r = romfs_list(path, romfs_listing_add, &l);
+        if (r) {
+            listing_free(l.e, l.n);
+            return r;
+        }
+    } else {
+        char p[PATH_CAP];
+        uint32_t r = host_path(path, p, sizeof p);
+        if (r) return r;
+        if (!out || mode < 1 || mode > 3) return FS_R_INVALID_ARGUMENT;
+        if (plat_fs_kind(p) != PLAT_FS_DIR) return FS_R_PATH_NOT_FOUND;
+        int e = list_dir(p, &l);
+        if (e) return fs_result(e);
+    }
     plat_mutex_lock(&lock);
     for (int i = 0; i < NDIRS; i++)
         if (!dirs[i].used) {
@@ -1098,6 +1110,18 @@ static uint32_t read_directory(int64_t *count, DirectoryEntry *out, uint64_t h, 
         out[n].size = is_dir ? 0 : (int64_t)e->size;
         n++;
     }
+    *count = n;
+    return 0;
+}
+
+// Result GetDirectoryEntryCount(int64_t *out, DirectoryHandle h): the entries ReadDirectory would still return
+static uint32_t directory_entry_count(int64_t *count, uint64_t h) {
+    if (h < DIR_BASE || h >= DIR_BASE + NDIRS || !count) return FS_R_INVALID_ARGUMENT;
+    Dir *d = &dirs[h - DIR_BASE];
+    if (!d->used) return FS_R_INVALID_ARGUMENT;
+    int64_t n = 0;
+    for (int i = d->next; i < d->n; i++)
+        if (strlen(d->e[i].name) < 769 && (d->mode & (d->e[i].kind == PLAT_FS_DIR ? 1 : 2))) n++;
     *count = n;
     return 0;
 }
@@ -1134,6 +1158,7 @@ static void ov_delete_recursive(Cpu *c) { ret_x(c, delete_recursive(arg_p(c, 0))
 static void ov_open_directory(Cpu *c) { ret_x(c, open_directory(arg_p(c, 0), arg_p(c, 1), I32(2))); }
 static void ov_read_directory(Cpu *c) { ret_x(c, read_directory(arg_p(c, 0), arg_p(c, 1), arg_x(c, 2), I64(3))); }
 static void ov_close_directory(Cpu *c) { close_directory(arg_x(c, 0)); }
+static void ov_directory_entry_count(Cpu *c) { ret_x(c, directory_entry_count(arg_p(c, 0), arg_x(c, 1))); }
 static void ov_mount_save(Cpu *c) { ret_x(c, mount_save(arg_p(c, 0), arg_p(c, 1))); }
 static void ov_mount_save_ro(Cpu *c) { ret_x(c, mount_save_ro(arg_p(c, 0), arg_x(c, 1), arg_p(c, 2))); }
 static void ov_save_exists(Cpu *c) { ret_x(c, save_exists(arg_x(c, 0), arg_p(c, 1))); }
@@ -1169,6 +1194,7 @@ static void ov_set_priority(Cpu *c) { (void)c; }
 #define S_OPEN_DIRECTORY "_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci"
 #define S_READ_DIRECTORY "_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl"
 #define S_CLOSE_DIRECTORY "_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE"
+#define S_DIRECTORY_ENTRY_COUNT "_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE"
 #define S_MOUNT_SAVE "_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE"
 #define S_MOUNT_SAVE_RO "_ZN2nn2fs21MountSaveDataReadOnlyEPKcNS_13ApplicationIdERKNS_7account3UidE"
 #define S_SAVE_EXISTS "_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE"
@@ -1205,6 +1231,7 @@ HOST_OVERRIDE(S_DELETE_RECURSIVE, ov_delete_recursive);
 HOST_OVERRIDE(S_OPEN_DIRECTORY, ov_open_directory);
 HOST_OVERRIDE(S_READ_DIRECTORY, ov_read_directory);
 HOST_OVERRIDE(S_CLOSE_DIRECTORY, ov_close_directory);
+HOST_OVERRIDE(S_DIRECTORY_ENTRY_COUNT, ov_directory_entry_count);
 HOST_OVERRIDE(S_MOUNT_SAVE, ov_mount_save);
 HOST_OVERRIDE(S_MOUNT_SAVE_RO, ov_mount_save_ro);
 HOST_OVERRIDE(S_SAVE_EXISTS, ov_save_exists);
@@ -1282,14 +1309,16 @@ static void probe_paths(void) {
     static const struct { const char *path, *want; } cases[] = {
         {"rom:/a/b.bin", "a/b.bin"}, {"rom://a/b.bin", "a/b.bin"}, {"rom:///a/b.bin", "a/b.bin"},
         {"rom:/a", "a"},             {"rom:/../main", NULL},       {"rom://../a", NULL},
-        {"rom:/a/../b", NULL},       {"rom:/a/./b", NULL},         {"rom:/a//b", NULL},
+        {"rom:/a/../b", NULL},       {"rom:/a/./b", NULL},         {"rom:/a//b", "a/b"},
         {"rom:/a\\b", NULL},         {"rom:/", NULL},              {"rom://", NULL},
         {"rom:a", NULL},             {"ro:/a", NULL},              {"romx:/a", NULL},
         {"rom:/.", NULL},            {"rom:/..", NULL},            {"ROM:/a", NULL},
     };
     int bad = 0;
     for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
-        const char *got = romfs_path_relative("rom", cases[i].path);
+        char folded[256];
+        const char *in = romfs_path_collapse(cases[i].path, folded, sizeof folded) ? folded : cases[i].path;
+        const char *got = romfs_path_relative("rom", in);
         if (cases[i].want ? !got || strcmp(got, cases[i].want) : got != NULL) {
             bad++;
             printf("  FAIL: romfs_path_relative(\"rom\", \"%s\") = %s%s%s\n", cases[i].path, got ? "\"" : "",

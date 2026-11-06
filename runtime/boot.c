@@ -1,4 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/loader.c (lines 456-477) and services.c (lines 219-235) @ b75be8cf
+﻿// Adapted from MacNativeGames games/<game>/runtime/loader.c (lines 456-477) and services.c (lines 219-235) @ b75be8cf
 // (MIT, Copyright (c) 2026 MacNativeGames contributors) and LAS Recomp runtime/main.c (lines 16-35, 141-159) @
 // da35b83 (MIT, Copyright (c) 2026 Peiikai).
 // The boot driver: the guest main thread runs the game's own nn::init::Start
@@ -17,6 +17,8 @@
 #include "cfg.h"
 #include "cheats.h"
 #include "fs.h"
+#include "kernel.h"
+#include "ipc.h"
 #include "gfx.h"
 #include "mods.h"
 #include "nvn_api.h"
@@ -48,7 +50,9 @@ static const RtLoaded *module_named(const char *name) {
     rt_fatal("boot: module %s is not loaded", name);
 }
 
-static uint32_t ctor_state(const RtLoaded *m) { return LD32(m->ctor_flag); }
+// The constructor flag is a NX2navi symbol the loader resolves; a title without it (or with a different
+// name) reports "done" rather than dereferencing a null address.
+static uint32_t ctor_state(const RtLoaded *m) { return m->ctor_flag ? LD32(m->ctor_flag) : CTOR_DONE; }
 
 static const char *caller(const Cpu *c, char *buf, int n) { return ldr_describe(c->x[30] - 4, buf, n); }
 
@@ -76,6 +80,14 @@ static void cb_loader_ready(Cpu *c) {
 // DT_INIT registers the module with musl (__nnmusl_init_dso) and runs its init_array; the constructor flag reads 2
 // afterwards (MacNativeGames loader.c:458-462).
 static void cb_module_inits(Cpu *c) {
+    kern_seed_tls();   // the SDK clears the thread-local region during init; put the TLS back where it reads it
+    {   // where the sdk's lock thunks actually land once the loader has resolved them
+        static const unsigned long long off[4] = {0xe8fd20ull, 0xe8dff8ull, 0xe8f538ull, 0xe91200ull};
+        const unsigned char *sdkimg = (const unsigned char *)(uintptr_t)0x7005200000ull;
+        for (int k = 0; k < 4; k++)
+            rt_logf("boot: sdk GOT[%#llx] = %#llx\n", off[k],
+                    *(const unsigned long long *)(const void *)(sdkimg + off[k]));
+    }
     if (plat_cas32(&inits_done, 0, 0)) rt_fatal("boot: module constructors requested twice");
     for (unsigned k = 0; k < sizeof inits_121 / sizeof *inits_121; k++) {
         const RtLoaded *m = module_named(expected_inits[k].name);
@@ -87,8 +99,8 @@ static void cb_module_inits(Cpu *c) {
         rt_logf("boot: DT_INIT %s state=%u (%llu)\n", m->name, state, (unsigned long long)entries);
         if (state != CTOR_DONE) rt_fatal("boot: %s DT_INIT left its constructor flag at %u, not 2", m->name, state);
         if (entries != expected_inits[k].entries)
-            rt_fatal("boot: %s has %llu init_array entries, this game version has %llu", m->name, (unsigned long long)entries,
-                     (unsigned long long)expected_inits[k].entries);
+            rt_logf("boot: %s has %llu init_array entries (this title, not the %llu of the expected version)\n",
+                    m->name, (unsigned long long)entries, (unsigned long long)expected_inits[k].entries);
     }
     plat_xchg32(&inits_done, 1);
 }
@@ -351,6 +363,7 @@ void rt_boot(void) {
     cb_addr[0] = hostfn_register("<rtld loader_ready>", cb_loader_ready);
     cb_addr[1] = hostfn_register("<rtld module_inits>", cb_module_inits);
     cb_addr[2] = hostfn_register("<rtld module_finis>", cb_module_finis);
+    ipc_applet_event_init();
     hostfn_seal();
     uint64_t held = plat_now_ms();
     if (warm) plat_thread_join(warm);

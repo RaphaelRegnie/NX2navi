@@ -1,4 +1,4 @@
-// Kernel internals shared by kernel.c, svc.c and the kernel probe (kernel_probe.c). Not part of the host.h contract.
+﻿// Kernel internals shared by kernel.c, svc.c and the kernel probe (kernel_probe.c). Not part of the host.h contract.
 #pragma once
 #include "host.h"
 
@@ -24,6 +24,7 @@ void kern_fiber_switch(Cpu *c);
 void kern_fiber_current(Cpu *c);
 
 uint64_t kern_threads_created(void);
+void kern_seed_tls(void);   // put the running thread's TLS where the SDK looks for it (TLR+0x1F0)
 
 // The guest frame-pointer chain from c->x[29] to stderr.
 void kern_backtrace(const Cpu *c);

@@ -44,7 +44,7 @@ enum {
     R_SetRasterizerDiscardEnable, R_SetScissorWithCount, R_SetStencilCompareMask, R_SetStencilOp, R_SetStencilReference,
     R_SetStencilTestEnable, R_SetStencilWriteMask, R_SetViewportWithCount, R_WriteTimestamp, R_WriteTimestamp2,
     R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb,
-    R_PassMark,
+    R_PassMark, R_DrawMesh, R_DrawMeshInd,
 };
 
 static uint64_t now_ns(void) { return plat_now_ns(); }
@@ -617,6 +617,23 @@ void rec_polygon_mode(PFN_vkCmdSetPolygonModeEXT fn, VkCommandBuffer cb, VkPolyg
     pub();
 }
 
+typedef struct { PFN_vkCmdDrawMeshTasksEXT fn; uint32_t x, y, z; } A_DrawMesh;
+void rec_draw_mesh(PFN_vkCmdDrawMeshTasksEXT fn, VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z) {
+    if (!OWNED(cb)) { fn(cb, x, y, z); return; }
+    A_DrawMesh *a = put(R_DrawMesh, sizeof *a);
+    *a = (A_DrawMesh){fn, x, y, z};
+    pub();
+}
+
+typedef struct { PFN_vkCmdDrawMeshTasksIndirectEXT fn; VkBuffer b; VkDeviceSize o; uint32_t n, stride; } A_DrawMeshInd;
+void rec_draw_mesh_ind(PFN_vkCmdDrawMeshTasksIndirectEXT fn, VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, uint32_t n,
+                       uint32_t stride) {
+    if (!OWNED(cb)) { fn(cb, b, o, n, stride); return; }
+    A_DrawMeshInd *a = put(R_DrawMeshInd, sizeof *a);
+    *a = (A_DrawMeshInd){fn, b, o, n, stride};
+    pub();
+}
+
 typedef struct { uint32_t id; int end; } A_PassMark;
 void rec_pass_mark(VkCommandBuffer cb, uint32_t id, int end) {
     if (!OWNED(cb)) { vk_pass_mark_cmd(cb, id, end); return; }
@@ -714,6 +731,8 @@ static void exec_packet(uint32_t op, void *p) {
     case R_BlendEquation: { A_Targets *a = p; ((PFN_vkCmdSetColorBlendEquationEXT)a->fn)(cb, a->first, a->n, a->v); break; }
     case R_WriteMask: { A_Targets *a = p; ((PFN_vkCmdSetColorWriteMaskEXT)a->fn)(cb, a->first, a->n, a->v); break; }
     case R_PassMark: { A_PassMark *a = p; vk_pass_mark_cmd(cb, a->id, a->end); break; }
+    case R_DrawMesh: { A_DrawMesh *a = p; a->fn(cb, a->x, a->y, a->z); break; }
+    case R_DrawMeshInd: { A_DrawMeshInd *a = p; a->fn(cb, a->b, a->o, a->n, a->stride); break; }
     case R_EndCb: {
         A_EndCb *a = p;
         if (a->kind) vk_crumb(cb, a->kind, a->n);

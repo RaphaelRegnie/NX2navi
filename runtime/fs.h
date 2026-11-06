@@ -34,6 +34,9 @@ uint32_t romfs_read(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uin
 uint32_t romfs_size(int64_t *out, uint64_t h);
 void romfs_close(uint64_t h);
 uint32_t romfs_entry_type(int *out, const char *path);
+// The children of RomFS directory path: fn(name, is_dir, size, ctx) once per file and once per subdirectory, in
+// index order; fn returns 0 to stop. FS_R_PATH_NOT_FOUND when path is not a directory.
+uint32_t romfs_list(const char *path, int (*fn)(const char *name, int is_dir, uint64_t size, void *ctx), void *ctx);
 uint64_t romfs_file_count(void);                           // files in the index (fs_init first)
 const char *romfs_entry(uint64_t i, uint64_t *offset, uint64_t *size);   // path, image offset and size of index row i
 const char *romfs_image_path(void);                        // the romfs.bin path fs_init opened

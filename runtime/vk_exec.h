@@ -87,8 +87,9 @@ typedef struct VkExec {
     const prog_t *prog;                  // OP_BIND_PROGRAM
     int32_t prog_stages;
     NVNbufferRange vbuf[16];             // OP_BIND_VBUF
-    p_bind_buf ubo[6][18], ssbo[6][16];  // OP_BIND_UBO / OP_BIND_SSBO per stage and index
-    uint64_t tex[6][128], samp[6][128], img[6][32];   // OP_BIND_TEX / OP_BIND_SAMP / OP_BIND_IMG handles per stage
+    p_bind_buf ubo[8][18], ssbo[8][16];  // OP_BIND_UBO / OP_BIND_SSBO per NVN stage (6 task, 7 mesh) and index
+    uint8_t cs_push[1024];                             // OP_PUSH_CC: NVN2 compute push constants (c0 from 0x10)
+    uint64_t tex[8][128], samp[8][128], img[8][32];   // OP_BIND_TEX / OP_BIND_SAMP / OP_BIND_IMG handles per stage
 
     // ---- vk_exec_xfer.c slots (render enable, conditional rendering): left empty by vk_exec.c
     int render_disabled;                 // OP_RENDER_ENABLE false or a failed OP_RENDER_COND: clears and draws skip

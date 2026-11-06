@@ -296,7 +296,20 @@ class Lifter:
             return Insn('bcond', target=t, cond=f'(({X(rt)} >> {b}) & 1) {"!=" if nz else "=="} 0')
         if bits(w, 25, 7) == 0b1101011:  # branch register
             opc, rn = bits(w, 21, 4), bits(w, 5, 5)
-            if bits(w, 16, 5) != 31 or bits(w, 10, 6) or bits(w, 0, 5):
+            op3 = bits(w, 10, 6)
+            if op3 in (0b000010, 0b000011):  # BRAA/BLRAA/RETAA/RETAB (pointer auth, key A or B)
+                # The lift runs with no signing keys, so the authenticate step is a no-op: the branch
+                # itself is the ordinary one. RETAA/RETAB carry Rn = 11111 and return through X30.
+                if bits(w, 16, 5) != 31 or bits(w, 0, 5) not in (0, 31):
+                    raise Unsupported('branch reg auth variant')
+                if opc == 0:
+                    return Insn('br', target=X(rn))
+                if opc == 1:
+                    return Insn('blr', target=X(rn))
+                if opc == 2:
+                    return Insn('ret')
+                raise Unsupported('branch reg auth opc')
+            if bits(w, 16, 5) != 31 or op3 or bits(w, 0, 5):
                 raise Unsupported('branch reg variant')
             if opc == 0:
                 return Insn('br', target=X(rn))
@@ -462,6 +475,8 @@ class Lifter:
         p, v = f'({t} *)(uintptr_t)({XS(rn)})', f'({t}){X(rs)}'
         order = ('__ATOMIC_RELAXED', '__ATOMIC_RELEASE', '__ATOMIC_ACQUIRE', '__ATOMIC_ACQ_REL')[A << 1 | R]
         if o3:
+            if rs == 31 and opc in (1, 4):  # LDAPR (byte/half/word/dword): load-acquire RCpc into Rt
+                return Insn('op', set_reg(size == 3, rt, f'__atomic_load_n({p}, __ATOMIC_ACQUIRE)'))
             if opc:
                 raise Unsupported('ldapr')
             expr = f'__atomic_exchange_n({p}, {v}, {order})'
@@ -673,6 +688,12 @@ class Lifter:
         if op2 == 6:
             opcode = bits(w, 10, 6)
             if bits(w, 30, 1):  # 1-source
+                if bits(w, 16, 5) == 1 and sf and opcode <= 17:
+                    # PACIA/PACIB/PACDA/PACDB/AUTIA/AUTIB/AUTDA/AUTDB (opcode 0-7), their Z forms (8-15) and
+                    # XPACI/XPACD (16-17): pointer authentication. Lifted code never signs pointers, so signing,
+                    # authenticating and stripping all leave Rd unchanged (as RETAB/BRAA are lifted as RET/BR).
+                    # Switch 2's hardened _setjmp signs x30 with PACIB and checks its low bits afterwards.
+                    return Insn('op', '/* pac/aut: no-op */')
                 if bits(w, 16, 5):
                     raise Unsupported('dp1 opcode2')
                 a = R(sf, rn)
@@ -700,6 +721,10 @@ class Lifter:
                 9: f'{a} >> ({b} & {size - 1})',
                 10: f'(uint{size}_t)((int{size}_t){a} >> ({b} & {size - 1}))',
                 11: f'ROR{size}({a}, {b} & {size - 1})',
+                # PACGA Xd, Xn, Xm|SP: a 32-bit code of (Xn, Xm) in the top half. Its only use is a checksum compared
+                # against a second PACGA of the same values (the SDK's _setjmp/longjmp guard), so a constant code
+                # keeps every such comparison equal.
+                12: '0ull' if sf else None,
             }.get(opcode)
             if expr is None:
                 raise Unsupported('dp2')

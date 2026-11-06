@@ -23,11 +23,15 @@
 #define R_BAD_HANDLE KERN_R_BAD_HANDLE
 #define R_BAD_STATE KERN_R_BAD_STATE
 #define R_INVALID_ENUM KERN_R_INVALID_ENUM
+#define R_INVALID_ADDRESS 0xCC01u   // InvalidAddress (misaligned)
 #define WAITERS_BIT KERN_WAITERS_BIT
 #define H_CUR_THREAD KERN_H_CURRENT_THREAD
 
 #define MAX_H 4096
-#define NCORE 3
+// Application cores: Switch 2 titles get cores 0-5 (this title's NPDM ThreadInfo capability: core min 0, max 5);
+// a Switch 1 title uses 0-2 and never names 3-5, so 6 virtual cores serve both.
+#define NCORE 6
+#define CORE_MASK_ALL ((1ull << NCORE) - 1)
 #define HOST_STACK (256ull << 20)        // reserved, committed on demand
 #define TLR_SIZE 0x200
 #define THREAD_OBJ_SIZE 0x400            // "current thread object" at TLR+0x1F8 (d2r-mobile thread.c)
@@ -109,6 +113,11 @@ struct RtThread {
 static PlatMutex G = PLAT_MUTEX_INIT;
 static struct { int type; void *obj; } g_h[MAX_H];
 static _Thread_local RtThread *tcur;
+
+// The current thread, read again on every call. Guest fibers migrate between OS threads (Switch 2 titles' job
+// systems resume any fiber on any worker): code that resumes after plat_fiber_switch may be on another OS thread, and
+// the compiler takes a thread-local address to be the same throughout a function, so such code calls this instead.
+__attribute__((noinline)) static RtThread *tcur_now(void) { return tcur; }
 _Static_assert(offsetof(RtThread, preempt) == 0, "host.h kern_preempt_pending reads the first int");
 _Static_assert(offsetof(RtThread, host_depth) == sizeof(int), "host.h kern_host_depth reads the second int");
 static RtThread *g_all, *g_wait, *g_main;
@@ -301,6 +310,7 @@ static uint32_t block_inner(RtThread *t, int kind, int64_t ns) {
 // in main+0x82e00 or hangs at the title menu. The start log and every crash report say so (kern_free_cores_note).
 static RtThread *g_core_owner[NCORE], *g_core_wait;
 static int g_cores_on = -1, g_held_max;
+static int g_active_cores = NCORE;   // NX2NAVI_CORES (core_allowed)
 
 static void diag_init(void);
 static void ap_init(void);
@@ -308,6 +318,11 @@ static void ap_init(void);
 static int cores_enabled(void) {
     if (g_cores_on < 0) {
         g_cores_on = !cfg_bool("NX2NAVI_FREE_CORES");   // "0" keeps the gate, like unset
+        const char *n = cfg_get("NX2NAVI_CORES");
+        if (n && atoi(n) >= 1 && atoi(n) <= NCORE) {
+            g_active_cores = atoi(n);
+            rt_log("kernel: %d virtual cores run threads (NX2NAVI_CORES); higher cores fold onto them", g_active_cores);
+        }
         if (!g_cores_on)
             rt_log("kernel: WARNING: free_cores = 1 (NX2NAVI_FREE_CORES) turns the virtual core gate off. This is an "
                    "experimental mode and the game crashes or hangs in it, usually at start. Set free_cores = 0 in "
@@ -324,7 +339,15 @@ void kern_free_cores_note(void) {
                "nx2navi.ini before reporting this crash");
 }
 
-static int core_allowed(const RtThread *t, int c) { return (int)((t->mask >> c) & 1); }
+// NX2NAVI_CORES = 1..NCORE: how many virtual cores run threads (default all NCORE). A core at or above the count is
+// folded onto core (c mod count): a thread pinned to core 5 with NX2NAVI_CORES=3 runs on core 2, one thread per core
+// at a time as always (diagnosis of races that more parallel cores expose).
+static int core_allowed(const RtThread *t, int c) {
+    if (c >= g_active_cores) return 0;
+    for (int j = c; j < NCORE; j += g_active_cores)
+        if ((t->mask >> j) & 1) return 1;
+    return 0;
+}
 
 // ---- asynchronous preemption (NX2NAVI_ASYNC_PREEMPT, on unless 0)
 // Adapted from MacNativeGames games/<game>/runtime/threads.c @ 33e8fa8 (8bf0893, PR #488; MIT, Copyright (c) 2026
@@ -1410,6 +1433,7 @@ static RtThread *thr_new(int prio, int core, uint64_t mask) {
     // TLR (0x200) and the "current thread object" the SDK reads through TLR+0x1F8, in one guest-visible block.
     t->tlr = mem_kernel_alloc(TLR_SIZE + THREAD_OBJ_SIZE, TLR_SIZE);
     *(uint64_t *)(t->tlr + 0x1F8) = (uint64_t)(uintptr_t)(t->tlr + TLR_SIZE);
+    *(uint64_t *)(t->tlr + 0x1F0) = (uint64_t)(uintptr_t)t->tls;   // the SDK reads the TLS pointer here and makes it TPIDR_EL0
     t->tls = mem_kernel_alloc(TLS_SIZE, 16);
     c->tpidrro = (uint64_t)(uintptr_t)t->tlr;
     c->tpidr = (uint64_t)(uintptr_t)t->tls;
@@ -1425,6 +1449,9 @@ static void thr_link(RtThread *t) {   // holding G
     t->all = g_all;
     g_all = t;
     g_created++;
+    // Horizon publishes the running thread's handle at TLR+0x110; nn::os::SdkMutexType::IsLockedByCurrentThread
+    // compares it with a mutex's owner word, so without it every unlocked mutex reads as held by this thread.
+    if (t->tlr) *(uint32_t *)(t->tlr + 0x110) = t->handle;
 }
 
 static void thr_free(RtThread *t) {   // holding G; t has exited and its handle is closed
@@ -1500,6 +1527,15 @@ uint64_t kern_threads_created(void) {
 
 Cpu *kern_cpu(void) { return tcur ? tcur->cur : NULL; }
 
+void kern_seed_tls(void) {
+    lock();
+    if (tcur && tcur->tlr && tcur->tls) {
+        *(uint64_t *)(tcur->tlr + 0x1F0) = (uint64_t)(uintptr_t)tcur->tls;
+        if (tcur->cur) tcur->cur->tpidr = (uint64_t)(uintptr_t)tcur->tls;
+    }
+    unlock();
+}
+
 uint32_t kern_main_thread(Cpu **cpu) {
     if (tcur) {
         if (!tcur->is_main) rt_fatal("kern_main_thread on guest thread %#x, not the main thread", tcur->handle);
@@ -1511,7 +1547,7 @@ uint32_t kern_main_thread(Cpu **cpu) {
     uint64_t stack = L->stack.base + L->stack.size - MAIN_STACK;
     if (!plat_mem_commit(stack, MAIN_STACK))
         rt_fatal("kernel: commit the main thread stack at %#llx failed", (unsigned long long)stack);
-    RtThread *t = thr_new(MAIN_PRIO, MAIN_CORE, 7);
+    RtThread *t = thr_new(MAIN_PRIO, MAIN_CORE, CORE_MASK_ALL);
     t->started = 1;
     t->is_main = 1;
     t->stack_top = stack + MAIN_STACK;
@@ -1641,11 +1677,11 @@ int kern_svc(Cpu *c, uint32_t imm) {
     switch (imm) {
     case 0x08: {   // CreateThread(-> w1 handle; x1 entry, x2 arg, x3 stack top, w4 priority, w5 core)
         int prio = (int)x[4], core = (int)x[5];
-        if (!x[1] || !x[3] || prio < 28 || prio > 59 || core < -3 || core > 2) {
+        if (!x[1] || !x[3] || prio < 28 || prio > 59 || core < -3 || core >= NCORE) {
             x[0] = R_BAD_STATE;
             return 1;
         }
-        RtThread *t = thr_new(prio, core >= 0 ? core : MAIN_CORE, core >= 0 ? 1ull << core : 7);
+        RtThread *t = thr_new(prio, core >= 0 ? core : MAIN_CORE, core >= 0 ? 1ull << core : CORE_MASK_ALL);
         t->entry = x[1];
         t->arg = x[2];
         t->stack_top = x[3] & ~15ull;
@@ -1756,9 +1792,19 @@ int kern_svc(Cpu *c, uint32_t imm) {
         RtThread *t = h_get((uint32_t)x[0], O_THREAD);
         if (t) {
             int core = (int)x[1];
+            uint64_t mask = x[2] & CORE_MASK_ALL;
+            // Out-of-range cores and mask bits are clamped (Horizon refuses them, and the SDK aborts on that): an
+            // ideal core of NCORE or more would reach GetCurrentProcessorNumber and the game's per-core arrays.
+            if (core >= NCORE || (x[2] & ~CORE_MASK_ALL)) {
+                static int logged;
+                if (logged++ < 4)
+                    rt_log("kernel: SetThreadCoreMask(%#x, core %d, mask %#llx) clamped to cores 0-%d", t->handle, core,
+                           (unsigned long long)x[2], NCORE - 1);
+                if (core >= NCORE) core = mask ? __builtin_ctzll(mask) : MAIN_CORE;
+            }
             if (core >= 0) t->core = core;
             else if (core == -1) t->core = MAIN_CORE;
-            if (x[2]) t->mask = x[2];
+            if (mask) t->mask = mask;
             if (t == tcur && t->cur_core >= 0 && !core_allowed(t, t->cur_core)) {   // move off a forbidden core
                 core_put(t);
                 core_take(t);
@@ -1856,18 +1902,21 @@ int kern_svc(Cpu *c, uint32_t imm) {
         return 1;
     }
 
-    case 0x34: {   // WaitForAddress(x0 address, w1 type, w2 value, x3 timeout): 0 if less, 1 decrement if less, 2 if equal
+    case 0x34: {   // WaitForAddress(x0 address, w1 type, x2 value, x3 timeout): 0 if less, 1 decrement if less,
+                   // 2 if equal, 3 if equal 64 (19.0.0+ WaitIfEqual64: the whole 64-bit word against x2; libc++'s
+                   // std::atomic::wait on Switch 2 uses it through nn::os::WaitForAddress)
         RtThread *t = cur(imm);
         uint64_t addr = x[0];
         int type = (int)x[1];
         int32_t val = (int32_t)x[2];
-        if (type < 0 || type > 2) {
-            x[0] = R_INVALID_ENUM;
+        if (type < 0 || type > 3 || (type == 3 && (addr & 7))) {
+            x[0] = type == 3 && (addr & 7) ? R_INVALID_ADDRESS : R_INVALID_ENUM;
             return 1;
         }
         lock();
         uint32_t r, v = ld32(addr);
-        int ok = type == 2 ? (int32_t)v == val : (int32_t)v < val;
+        int ok = type == 3 ? __atomic_load_n((const uint64_t *)(uintptr_t)addr, __ATOMIC_SEQ_CST) == x[2]
+               : type == 2 ? (int32_t)v == val : (int32_t)v < val;
         if (ok && type == 1)
             while (!cas32(addr, &v, v - 1))
                 if (!((int32_t)v < val)) {
@@ -1981,10 +2030,16 @@ int kern_svc(Cpu *c, uint32_t imm) {
             for (int i = 0; i < n && idx < 0; i++)
                 if (sig_obj(hs[i], &bad)) idx = i;
             if (bad) {
+                static int logged;
+                if (rt_trace && logged++ < 4)
+                    rt_logf("kernel: WaitSynchronizationN on a handle that is not waitable: %#x\n", hs[0]);
                 r = R_BAD_HANDLE;
                 break;
             }
             if (idx >= 0) {
+                // Horizon does not clear an event on a wait: the SDK clears auto-clear events itself (ResetSignal),
+                // and a server clears its own event when there is nothing left to report (the applet message
+                // queue in ipc.c does). An earlier auto-clear here hid the applet server never clearing.
                 r = R_OK;
                 break;
             }
@@ -2005,6 +2060,15 @@ int kern_svc(Cpu *c, uint32_t imm) {
                     break;
                 }
                 left = ns - (int64_t)spent;
+            }
+            {
+                static int logged;
+                if (rt_trace && logged++ < 3) {
+                    char d[96];
+                    rt_logf("kernel: first blocking wait: %d handle(s) %#x %#x lr %s\n", n,
+                            n > 0 ? hs[0] : 0, n > 1 ? hs[1] : 0,
+                            ldr_describe(c->x[30], d, sizeof d));
+                }
             }
             t->wobj = n ? hs[0] | (uint64_t)n << 32 : 0;
             g_sync_blocks++;
@@ -2083,6 +2147,14 @@ void kern_event_signal(uint32_t hw) {
     unlock();
 }
 
+void kern_event_clear(uint32_t hw) {
+    lock();
+    Event *e = h_peek(hw, O_EVENT_W);
+    if (!e) rt_fatal("kern_event_clear: %#x is not a writable event handle", hw);
+    e->signaled = 0;
+    unlock();
+}
+
 // System events of host services: the SDK's own nn::os::CreateSystemEvent creates the kernel event (SVC 0x45) on a
 // guest thread; the writable handle is kept, so any thread (host audio tick included) can signal it later.
 // The guest may destroy such an event and attach the same SystemEventType again: the game does that with the nfp
@@ -2143,6 +2215,12 @@ void kern_signal_system_event(uint64_t ev) {
     kern_event_signal(wh);
 }
 
+// Clears a bound event (one never bound or since destroyed is left alone).
+void kern_clear_system_event(uint64_t ev) {
+    uint32_t wh = se_find(ev);
+    if (wh && se_live(ev)) kern_event_clear(wh);
+}
+
 // ---- fibers
 // The SDK switches fibers by swapping register context, which breaks "RET = C return". Each guest fiber gets a host
 // fiber (own 256 MiB reserved host stack) and its own Cpu, so a suspended fiber's registers and host frames stay
@@ -2171,8 +2249,8 @@ static Fiber *fiber_find(uint64_t addr) {
 static void fiber_switch_to(RtThread *t, const Cpu *from, Fiber *to);
 
 // After a host fiber switch: release the context left behind, and finish an ExitThread issued on a fiber.
-static void fiber_resumed(void) {
-    RtThread *t = tcur;
+__attribute__((noinline)) static void fiber_resumed(void) {
+    RtThread *t = tcur_now();
     rt_fpcr_sync(t->cur);   // the host fiber resumes with its own MXCSR (platform.h fibers switch it)
     if (t->leaving) {
         __atomic_store_n(&t->leaving->running, 0, __ATOMIC_RELEASE);
@@ -2185,14 +2263,14 @@ static void fiber_main(void *p) {
     Fiber *f = p;
     fiber_resumed();
     Cpu *c = f->cpu;
-    tcur->host_depth = 0;   // a new fiber starts at the top level; each context restores its own depth on resume
+    tcur_now()->host_depth = 0;   // a new fiber starts at the top level; each context restores its own depth on resume
     uint64_t next = rt_call(c, f->func, 1, f->arg);
     f->state = F_DONE;
     Fiber *n = NULL;
     if (next && !(n = fiber_find(next)))
         rt_fatal("fiber %#llx returned %#llx, which is not an initialized fiber", (unsigned long long)f->addr,
                  (unsigned long long)next);
-    fiber_switch_to(tcur, c, n);   // NULL: back to the thread's own context
+    fiber_switch_to(tcur_now(), c, n);   // NULL: back to the thread's own context (of the thread now running it)
     rt_fatal("fiber %#llx resumed after it finished", (unsigned long long)f->addr);
 }
 
@@ -2221,9 +2299,11 @@ static void fiber_switch_to(RtThread *t, const Cpu *from, Fiber *to) {
     t->leaving = t->fiber;
     t->fiber = to;
     t->cur = dst;
-    int depth = t->host_depth;
+    int depth = t->host_depth;   // this context's host frames
     plat_fiber_switch(to ? to->host : t->base_fiber);
-    t->host_depth = depth;
+    // Resumed, maybe on another OS thread: this context's frames are now that thread's (t is the thread that
+    // suspended it, which runs something else meanwhile)
+    tcur_now()->host_depth = depth;
     fiber_resumed();
 }
 
@@ -2256,6 +2336,12 @@ void kern_fiber_initialize(Cpu *c) {
     f->state = F_NEW;
     f->running = 0;
     f->host = plat_fiber_new(HOST_STACK, fiber_main, f);
+    {
+        static int logged;
+        if (logged++ < 6)
+            rt_log("kernel: InitializeFiber %#llx (stack %#llx+%#llx) on thread %#x", (unsigned long long)addr,
+                   (unsigned long long)f->stack, (unsigned long long)f->size, tcur ? tcur->handle : 0);
+    }
     if (!f->host) rt_fatal("kernel: cannot create a host fiber");
 }
 
@@ -2281,6 +2367,16 @@ void kern_fiber_finalize(Cpu *c) {
 void kern_fiber_switch(Cpu *c) {
     RtThread *t = tcur;
     if (!t) rt_fatal("SwitchToFiber on a host thread");
+    // SwitchToFiber(nullptr) returns to the thread's own context (the SDK's sdk+0x1693c0 takes the thread's
+    // original fiber for a null argument); Switch 2 titles use it to leave a fiber.
+    if (!c->x[0]) {
+        static int logged;
+        if (logged++ < 3)
+            rt_log("kernel: SwitchToFiber(nullptr) on thread %#x (on fiber %#llx)", t->handle,
+                   (unsigned long long)(t->fiber ? t->fiber->addr : 0));
+        if (t->fiber) fiber_switch_to(t, c, NULL);
+        return;
+    }
     Fiber *to = fiber_find(c->x[0]);
     if (!to) rt_fatal("SwitchToFiber(%#llx): not an initialized fiber", (unsigned long long)c->x[0]);
     if (to == t->fiber) return;

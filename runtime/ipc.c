@@ -1,4 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/ipc.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
+﻿// Adapted from MacNativeGames games/<game>/runtime/ipc.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
 // contributors). Message framing per libnx sf/hipc.h, cmif.h, tipc.h (ISC), read for the layout only.
 // In-process Horizon IPC: SVCs 0x15, 0x1F, 0x21, 0x22, the sm: service manager
 // and the service table. The SDK client code runs unchanged: requests are read from the calling thread's message
@@ -23,10 +23,186 @@
 enum { T_CLOSE = 2, T_REQUEST = 4, T_CONTROL = 5, T_REQUEST_CTX = 6, T_CONTROL_CTX = 7, T_TIPC_CLOSE = 15,
        T_TIPC_BASE = 16 };
 
+// The application's lifecycle (the system service/am/lifecycle_manager.cpp, read for behaviour): one state-changed
+// event per applet, signalled while a message is waiting and cleared by the server once the queue drains (Horizon
+// does not clear it on a wait). An *application* learns it has focus through FocusStateChanged (15) followed by
+// GetCurrentFocusState == InFocus; ChangeIntoForeground (1) is the library-applet message and an application
+// ignores it, which is what parked nn::oe::InitializeApplet on the event.
+enum { AM_MSG_FOCUS_STATE_CHANGED = 15, AM_MSG_OPERATION_MODE_CHANGED = 30, AM_MSG_PERFORMANCE_MODE_CHANGED = 31 };
+enum { AM_FOCUS_IN = 1, AM_FOCUS_NOT_IN = 2, AM_FOCUS_BACKGROUND = 3 };
+#define AM_R_NO_MESSAGES 0x680u   // the "no messages" result this SDK checks for
+static uint32_t g_applet_event, g_applet_event_w;
+static PlatMutex g_applet_lock = PLAT_MUTEX_INIT;
+static uint32_t g_applet_msgs[32];
+static unsigned g_applet_head, g_applet_count;
+static uint8_t g_applet_focus = AM_FOCUS_IN;
+
+void ipc_applet_push_message(uint32_t msg) {
+    plat_mutex_lock(&g_applet_lock);
+    if (g_applet_count < sizeof g_applet_msgs / sizeof *g_applet_msgs) {
+        g_applet_msgs[(g_applet_head + g_applet_count++) % (sizeof g_applet_msgs / sizeof *g_applet_msgs)] = msg;
+    } else {
+        rt_log("applet: message queue full, dropping %u", msg);
+    }
+    plat_mutex_unlock(&g_applet_lock);
+    if (g_applet_event_w) kern_event_signal(g_applet_event_w);
+}
+
+static int applet_pop_message(uint32_t *out) {
+    plat_mutex_lock(&g_applet_lock);
+    int ok = g_applet_count != 0;
+    if (ok) {
+        *out = g_applet_msgs[g_applet_head];
+        g_applet_head = (g_applet_head + 1) % (sizeof g_applet_msgs / sizeof *g_applet_msgs);
+        g_applet_count--;
+    }
+    int drained = g_applet_count == 0;
+    plat_mutex_unlock(&g_applet_lock);
+    if (drained && g_applet_event_w) kern_event_clear(g_applet_event_w);
+    return ok;
+}
+
+static IpcSession *stub_object(const char *name);
+static void applet_stub_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs);
+
+// A stub object the applet proxy commands are answered on: the interfaces exist, their calls succeed.
+// The getters below each hand out one of those objects, which is what the SDK stores and dereferences.
+static void applet_proxy_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    if (rt_trace & RT_TRACE_IPC) rt_log("applet proxy: command %u", rq->cmd);
+    static const struct { unsigned cmd; const char *name; } kinds[] = {
+        {0, "common state getter"}, {1, "self controller"}, {2, "window controller"},
+        {3, "audio controller"}, {4, "display controller"}, {10, "process winding controller"},
+        {11, "library applet creator"}, {20, "application functions"},
+        {40, "nx2 interface"}, {50, "nx2 interface"}, {60, "graphics scale controller"},
+        {70, "nx2 interface"}, {80, "nx2 interface"}, {90, "nx2 interface"},
+        {1000, "debug functions"},
+    };
+    for (unsigned k = 0; k < sizeof kinds / sizeof *kinds; k++) {
+        if (kinds[k].cmd != rq->cmd) continue;
+        IpcSession *root = s->root ? s->root : s;    // object ids belong to the client's whole domain
+        IpcSession *o = stub_object(kinds[k].name);
+        if (!o) { rs->result = IPC_R_UNKNOWN_COMMAND; return; }
+        o->root = root;
+        if (!ipc_domain_add(root, o)) { free(o); rs->result = IPC_R_UNKNOWN_COMMAND; return; }
+        uint32_t id = (uint32_t)root->nobjects;
+        IPC_OUT(rs, id);
+        rs->domain = 1;
+        rs->domain_objects = 1;
+        rs->result = 0;
+        return;
+    }
+    rs->result = 0;
+}
+
+// The interfaces themselves. Only the calls the game makes while booting are modelled: the common state getter
+// hands out the applet's state-changed event, and everything else reports success.
+static void applet_stub_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    if (rt_trace & RT_TRACE_IPC) rt_log("%s: command %u", s->name, rq->cmd);
+    int common = !strcmp(s->name, "common state getter");
+    if (common && rq->cmd == 0) {              // GetEventHandle: the applet state-changed event
+        if (!g_applet_event) ipc_applet_event_init();
+        s->event = g_applet_event;
+        rs->copy[rs->ncopy++] = s->event;
+        rs->result = 0;
+        return;
+    }
+    if (common && rq->cmd == 1) {              // ReceiveMessage: the next queued applet message, else "no messages"
+        uint32_t msg;
+        if (applet_pop_message(&msg)) {
+            if (rt_trace & RT_TRACE_IPC) rt_log("applet: ReceiveMessage -> %u", msg);
+            IPC_OUT(rs, msg);
+            rs->result = 0;
+            return;
+        }
+        rs->result = AM_R_NO_MESSAGES;
+        return;
+    }
+    if (common && rq->cmd == 5) {              // GetOperationMode: docked (matches the oe override)
+        uint8_t mode = 1;
+        IPC_OUT(rs, mode);
+        rs->result = 0;
+        return;
+    }
+    if (common && rq->cmd == 6) {              // GetPerformanceMode: boost (docked)
+        uint32_t mode = 1;
+        IPC_OUT(rs, mode);
+        rs->result = 0;
+        return;
+    }
+    if (common && rq->cmd == 9) {              // GetCurrentFocusState
+        uint8_t focus = g_applet_focus;
+        IPC_OUT(rs, focus);
+        rs->result = 0;
+        return;
+    }
+    if (!strcmp(s->name, "graphics scale controller") && rq->cmd == 10) {   // GetCurrentGraphicsScale
+        uint32_t scale[3] = {10, 0, 0};   // see ov_oe_scaling_parameters
+        IPC_OUT(rs, scale);
+        rs->result = 0;
+        return;
+    }
+    if (rt_trace & RT_TRACE_IPC) rt_log("%s: command %u answered with success and no data", s->name, rq->cmd);
+    rs->result = 0;
+}
+
+static IpcSession *stub_object(const char *name) {
+    IpcSession *o = calloc(1, sizeof *o);
+    if (!o) return NULL;
+    o->name = name;
+    o->handler = applet_stub_handler;
+    o->refs = 1;
+    return o;
+}
+
+unsigned ipc_domain_add(IpcSession *domain, IpcSession *object) {
+    if (domain->nobjects >= (int)(sizeof domain->objects / sizeof *domain->objects)) return 0;
+    domain->objects[domain->nobjects++] = object;
+    return (unsigned)domain->nobjects;
+}
+
+// appletOE: the application-environment service. nn::oe::Initialize opens it; the calls that matter for
+// boot answer through symbol overrides (focus, performance, language), so a permissive handler that
+// reports success and writes nothing is enough until a command needs real data ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â then it is added here.
+static void applet_oe_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    if (rt_trace & RT_TRACE_IPC) rt_log("appletOE: command %u", rq->cmd);
+    if (rq->cmd == 0 || rq->cmd == 10) {   // OpenApplicationProxy: hand the client a domain object
+        IpcSession *proxy = calloc(1, sizeof *proxy);
+        if (!proxy) { rs->result = IPC_R_UNKNOWN_COMMAND; return; }
+        proxy->name = "applet proxy";
+        proxy->handler = applet_proxy_handler;
+        proxy->refs = 1;
+        proxy->root = s;
+        if (!ipc_domain_add(s, proxy)) { free(proxy); rs->result = IPC_R_UNKNOWN_COMMAND; return; }
+        uint32_t id = (uint32_t)s->nobjects;   // the object's id inside the domain, written into the reply data
+        IPC_OUT(rs, id);
+        rs->domain = 1;
+        rs->domain_objects = 1;
+    }
+    rs->result = 0;
+}
+
+// aud:u: the Switch 2 audio entry point (nn::audio::CreateUserClientSessionByHipc). It hands out the Switch 1
+// managers as sub-objects (the system service/audio/nx2_audio_user_client.h; command ids are the system's guesses):
+// 2 -> IAudioRendererManager (the audren:u manager), 1 -> IAudioOutManager (not served by this host).
+static void aud_user_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    (void)s;
+    if (rt_trace & RT_TRACE_IPC) rt_log("aud:u: command %u", rq->cmd);
+    if (rq->cmd == 2) {
+        rs->move[rs->nmove++] = ipc_session_new("IAudioRendererManager", audren_manager_handler, NULL, NULL);
+        rs->result = 0;
+        return;
+    }
+    rt_fatal("aud:u: command %u is not implemented (1 is GetAudioOutManager: no audout service here)", rq->cmd);
+}
+
 // Services sm: hands out. Anything else is a named fatal.
 static const struct { const char *name; IpcHandler handler; } services[] = {
     {"audren:u", audren_manager_handler},
     {"nfp:user", nfp_user_manager_handler},
+    {"appletOE", applet_oe_handler},
+    {"aud:u", aud_user_handler},
+    {"auddmg:u", audio_dmg_handler},
+    {"audsmx:u", audio_sysmix_handler},
 };
 
 static volatile int32_t g_live;
@@ -179,6 +355,11 @@ static void respond(uint32_t *m, int tipc, const IpcResponse *rs) {
     uint8_t *words = (uint8_t *)p, *payload;
     unsigned header = tipc ? 4 : 16;
     payload = tipc ? words : (uint8_t *)out + (((words - (uint8_t *)out) + 15) & ~15);
+    if (rs->domain && !tipc) {   // CMIF domain reply: 16-byte header with the objects appended, then SFCO
+        uint32_t dh[4] = {rs->domain_objects, 0, 0, 0};
+        memcpy(payload, dh, 16);
+        payload += 16;
+    }
     unsigned used = (unsigned)(payload - words) + header + rs->data_size;
     unsigned nwords = tipc ? (used + 3) / 4 : (used + 16 + 3) / 4;   // CMIF keeps alignment slack like libnx
     if ((size_t)(words - (uint8_t *)out) + nwords * 4 > IPC_MSG_BYTES) rt_fatal("ipc: response exceeds the message buffer");
@@ -189,13 +370,26 @@ static void respond(uint32_t *m, int tipc, const IpcResponse *rs) {
     }
     memcpy(payload + header, rs->data, rs->data_size);
     out[0] = (rs->nxout & 0xf) << 16;
-    out[1] = (nwords & 0x3ff) | (special ? 1u << 31 : 0);
+    out[1] = (nwords & 0x3ff) | ((special || rs->domain) ? 1u << 31 : 0);
     memcpy(m, out, IPC_MSG_BYTES);
 }
 
-// CMIF control requests. Domains are not implemented: MNG boots 1.2.1 without them.
+// CMIF control requests.
 static void control(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
     switch (rq->cmd) {
+    case 0:   // ConvertCurrentObjectToDomain: the session answers domain-tagged requests from now on
+        s->is_domain = 1;
+        s->root = s;
+        if (s->nobjects == 0) { s->objects[0] = s; s->nobjects = 1; }
+        return;
+    case 1: { // CopyFromCurrentDomain(object id): a handle to that object of the domain
+        uint32_t id = rq->data_size >= 4 ? *(const uint32_t *)(const void *)rq->data : 0;
+        if (!id || id > (uint32_t)s->nobjects) { rs->result = IPC_R_UNKNOWN_COMMAND; return; }
+        IpcSession *o = s->objects[id - 1];
+        plat_inc32(&o->refs);
+        rs->move[rs->nmove++] = kern_handle_new(KERN_SESSION, o);
+        return;
+    }
     case 3: { uint16_t n = POINTER_BUFFER_SIZE; IPC_OUT(rs, n); return; }   // QueryPointerBufferSize
     case 2: case 4: rs->move[rs->nmove++] = session_clone(s); return;          // CloneCurrentObject(Ex)
     default:
@@ -214,6 +408,7 @@ static void dispatch(IpcSession *s, uint32_t *m) {
     IpcResponse rs;
     memset(&rs, 0, sizeof rs);
     int tipc = rq.type >= T_TIPC_BASE;
+    IpcSession *target = s;
     const uint8_t *bytes = (const uint8_t *)words, *end = bytes + ndata * 4;
     if (tipc) {
         rq.cmd = rq.type - T_TIPC_BASE;
@@ -221,11 +416,27 @@ static void dispatch(IpcSession *s, uint32_t *m) {
         rq.data_size = (uint32_t)(end - bytes);
     } else if (rq.type == T_REQUEST || rq.type == T_REQUEST_CTX || rq.type == T_CONTROL || rq.type == T_CONTROL_CTX) {
         const uint8_t *payload = (const uint8_t *)m + (((bytes - (const uint8_t *)m) + 15) & ~15);
+        IpcSession *dom = s->root ? s->root : s;   // ids belong to the client's domain, not to this object
+        if ((s->is_domain || dom->is_domain) && (rq.type == T_REQUEST || rq.type == T_REQUEST_CTX)) {
+            // Domain request: a 16-byte domain header names the object (1-based), then the usual SFCI payload.
+            uint32_t dh[4];
+            memcpy(dh, payload, 16);
+            payload += 16;
+            rs.domain = 1;
+            uint32_t dcmd = dh[0] & 0xff, obj = dh[1];
+            if (dcmd == 2) return;   // CloseVirtualHandle: nothing to answer
+            if (obj == 0) obj = 1;   // this SDK addresses the domain's own object as 0
+            if (obj > (uint32_t)dom->nobjects) {
+                ipc_backtrace();
+                rt_fatal("ipc: %s domain object %u (of %d) does not exist [hdr %08x %08x %08x %08x] [msg %08x %08x %08x %08x]", s->name, obj, dom->nobjects, dh[0], dh[1], dh[2], dh[3], m[0], m[1], m[2], m[3]);
+            }
+            target = dom->objects[obj - 1];
+        }
         uint32_t h[4];
         memcpy(h, payload, 16);
         if (h[0] != CMIF_IN_MAGIC) {
             ipc_backtrace();
-            rt_fatal("ipc: %s: CMIF magic %#x (domain sessions are not served)", s->name, h[0]);
+            rt_fatal("ipc: %s: CMIF magic %#x", s->name, h[0]);
         }
         rq.cmd = h[2];
         rq.data = payload + 16;
@@ -239,7 +450,7 @@ static void dispatch(IpcSession *s, uint32_t *m) {
         rt_fatal("ipc: %s message type %u is not implemented", s->name, rq.type);
     }
     if (rq.type == T_CONTROL || rq.type == T_CONTROL_CTX) control(s, &rq, &rs);
-    else s->handler(s, &rq, &rs);
+    else target->handler(target, &rq, &rs);
     if (rt_trace & RT_TRACE_IPC) {
         char d[160];
         rt_log("ipc: %s %s %u -> %#x (copy %u move %u) from %s", s->name,
@@ -794,4 +1005,15 @@ int probe_ipc(void) {
     }
     printf("probe-ipc: passed\n");
     return 0;
+}
+
+// Create the applet state-changed event at boot and queue the launch message: the application starts in focus
+// (the system AppletManager: SetFocusState(InFocus) -> FocusStateChanged for an application).
+void ipc_applet_event_init(void) {
+    if (!g_applet_event) {
+        g_applet_event_w = kern_event_new();
+        g_applet_event = kern_event_readable(g_applet_event_w);
+        g_applet_focus = AM_FOCUS_IN;
+        ipc_applet_push_message(AM_MSG_FOCUS_STATE_CHANGED);
+    }
 }

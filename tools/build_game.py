@@ -354,7 +354,9 @@ def module_glue(layout, linked, hashes, paths, version):
     for name in ('exefs', 'romfs', 'profile'):
         out.append(f'const char rt_default_{name}[] = {c_string(paths[name].as_posix())};')
     number = int(DISPLAY_VERSIONS[version].replace('.', '')) if version in DISPLAY_VERSIONS else 0   # 1.4.3 -> 143
-    out += [f'const int rt_game_version = {number};', f'const char rt_port_version[] = {c_string(port_version())};', '']
+    out += ['const unsigned long long rt_app_pool_bytes = 0xCD500000ull;',   # Switch 1 retail application pool
+            'const int rt_nvn_api_version[2] = {55, 15};',   # NVN1: NX2NAVI main requires major 55, minor >= 15
+            f'const int rt_game_version = {number};', f'const char rt_port_version[] = {c_string(port_version())};', '']
     return '\n'.join(out)
 
 

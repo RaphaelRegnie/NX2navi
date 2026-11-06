@@ -1,4 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/services.c and loader.c @ b75be8c (MIT, Copyright (c) 2026
+﻿// Adapted from MacNativeGames games/<game>/runtime/services.c and loader.c @ b75be8c (MIT, Copyright (c) 2026
 // MacNativeGames contributors), and LAS Recomp runtime/main.c and platform/windows.c @ da35b83 (MIT, Copyright (c)
 // 2026 Peiikai).
 // Guest address space and the memory SVCs: heap, module data permissions, stack moves,
@@ -20,15 +20,15 @@
 #define PAGE 0x1000ull
 #define GiB (1ull << 30)
 #define LOW_SEARCH_FROM 0x100000000ull
-#define LOW_SIZE (6 * GiB)
+#define LOW_SIZE (14 * GiB)        // stack + heap block: room for a Switch 2 heap (HEAP_CAP)
 #define STACK_OFF 0x10000000ull
 #define STACK_SIZE 0x10000000ull
 #define HEAP_OFF (STACK_OFF + STACK_SIZE + 0x10000000ull)
-#define HEAP_CAP (4 * GiB)
+#define HEAP_CAP (12 * GiB)        // heap region: a Switch 2 application pool is 9809 MiB (the system 12 GB arrangement)
 #define ALIAS_SIZE (64 * GiB)
 #define ALIAS_ALIGN (4 * GiB)
 #define ALIAS_PAGES (ALIAS_SIZE / PAGE)
-#define DEFAULT_POOL 0xCD500000ull       // retail application pool
+#define DEFAULT_POOL rt_app_pool_bytes  // retail application pool of the title (generated: NX2NAVI 0xCD500000, Switch 2 9809 MiB)
 #define SYSTEM_RESOURCE_BUDGET (32ull << 20)
 #define MAX_STACK_MAPS 4096
 #define REEXEC_LIMIT 20
@@ -223,7 +223,7 @@ void mem_init(void) {
     uint64_t low = 0, alias = 0;
     for (uint64_t at = LOW_SEARCH_FROM; at + LOW_SIZE <= mods_lo && !low; at += GiB)
         if (reserve_at(at, LOW_SIZE, 1)) low = at;
-    if (!low) reexec_or_fail("a 6 GiB stack and heap block below 2^39");
+    if (!low) reexec_or_fail("a 14 GiB stack and heap block below 2^39");
     for (uint64_t at = align_up(low + LOW_SIZE, ALIAS_ALIGN); at + ALIAS_SIZE <= mods_lo && !alias; at += ALIAS_ALIGN)
         if (reserve_at(at, ALIAS_SIZE, 1)) alias = at;
     if (!alias) reexec_or_fail("a 64 GiB alias region below 2^39");
@@ -434,7 +434,9 @@ static void alias_runs(uint64_t first, uint64_t count, uint8_t want, int do_comm
 }
 
 static uint32_t alias_map(int unmap, uint64_t a, uint64_t n) {
-    if (!n || ((a | n) & (PAGE - 1))) return R_INVALID_ADDRESS;
+    if (!n) return R_INVALID_ADDRESS;
+    n = (n + PAGE - 1) & ~(uint64_t)(PAGE - 1);   // the SDK asks for byte ranges; a mapping is whole pages
+    if ((a | n) & (PAGE - 1)) return R_INVALID_ADDRESS;
     if (!inside(a, n, L.alias)) return R_INVALID_REGION;
     uint64_t first = (a - L.alias.base) / PAGE, count = n / PAGE;
     plat_mutex_lock(&lock);
@@ -505,6 +507,19 @@ static uint64_t run_start(const uint8_t *p, uint64_t i, uint8_t v) {   // first 
     while (i >= 8 && *(const uint64_t *)(p + i - 8) == w) i -= 8;
     while (i > 0 && p[i - 1] == v) i--;
     return i;
+}
+
+// Whether every byte of [a, a + n) can be read: no free, inaccessible or no-access page (mem_query's regions). For
+// host reads of guest memory the guest itself may never make, such as a texture upload of a pool slot no shader
+// samples (vk_exec_draw.c, texture pools: stale slots point at unmapped memory).
+int mem_readable(uint64_t a, uint64_t n) {
+    for (uint64_t end = a + n; a < end;) {
+        RtMemoryInfo r;
+        mem_query(a, &r);
+        if (r.state == ST_FREE || r.state == ST_INACCESSIBLE || !(r.perm & PERM_R) || r.base + r.size <= a) return 0;
+        a = r.base + r.size;
+    }
+    return 1;
 }
 
 uint32_t mem_query(uint64_t a, RtMemoryInfo *out) {

@@ -513,3 +513,51 @@ HOST_OVERRIDE("_ZN2nn3hid6detail22GetSixAxisSensorStatesEPiPNS0_18SixAxisSensorS
               ov_six_states);
 HOST_OVERRIDE("_ZN2nn3hid6detail21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE",
               ov_six_state);
+
+// ---- the public wrappers a Switch 2 title imports. NX2NAVI imports nn::hid::detail::*; Switch 2 titles import the
+// public functions, whose direct calls into detail:: no override reaches, so each public one is answered here with
+// the detail implementation above. Joy-Con 2 mouse (Nmouse), Jcms and sensor fusion have no host device: no
+// handles, starts that do nothing.
+// void StartSixAxisSensor(const SixAxisSensorHandle &) / void StopSixAxisSensor(...)
+static void ov_pub_six_start(Cpu *c) { ov_six_start(c); }
+// int GetSixAxisSensorStates(SixAxisSensorState *out, int count, const SixAxisSensorHandle &): the count filled
+static void ov_pub_six_states(Cpu *c) {
+    ret_x(c, (uint64_t)(int64_t)six_fill(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2), "GetSixAxisSensorStates"));
+}
+// void SetGyroscopeZeroDriftMode(const SixAxisSensorHandle &, const GyroscopeZeroDriftMode &): the host gyro has
+// its own calibration
+static void ov_pub_nothing(Cpu *c) { ret_x(c, 0); }
+// void InitializeVibrationDevice(const VibrationDeviceHandle &) / void SendVibrationValue(handle, value)
+static void ov_pub_vib_init(Cpu *c) { ov_vib_init(c); }
+static void ov_pub_vib_send(Cpu *c) { ov_vib_send(c); }
+// bool IsOunceVibrationDeviceMounted(const VibrationDeviceHandle &): Ounce is the Switch 2's own actuator; the
+// host's rumble devices count as mounted
+static void ov_pub_vib_ounce_mounted(Cpu *c) {
+    ret_x(c, vibration_side(arg_p(c, 0), "IsOunceVibrationDeviceMounted") >= 0);
+}
+// int GetSensorFusionHandles(...) / int GetNmouseHandles(NmouseHandle *, int, uint32_t): none
+static void ov_pub_no_handles(Cpu *c) { ret_x(c, 0); }
+// void GetNmouseTypeSet(BitFlagSet<32, NmouseType> *out, NmouseHandle): empty
+static void ov_pub_nmouse_types(Cpu *c) {
+    uint32_t *out = arg_p(c, 0);
+    if (out) *out = 0;
+}
+HOST_OVERRIDE("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", ov_pub_six_start);
+HOST_OVERRIDE("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE",
+              ov_pub_six_states);
+HOST_OVERRIDE("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE",
+              ov_pub_nothing);
+HOST_OVERRIDE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", ov_pub_vib_init);
+HOST_OVERRIDE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", ov_pub_vib_send);
+HOST_OVERRIDE("_ZN2nn3hid29IsOunceVibrationDeviceMountedERKNS0_21VibrationDeviceHandleE", ov_pub_vib_ounce_mounted);
+HOST_OVERRIDE("_ZN2nn3hid22GetSensorFusionHandlesEPNS0_18SensorFusionHandleEiRKjNS_4util10BitFlagSetILi32ENS0_"
+              "12NpadStyleTagEEE", ov_pub_no_handles);
+HOST_OVERRIDE("_ZN2nn3hid20FinalizeSensorFusionEv", ov_pub_nothing);
+HOST_OVERRIDE("_ZN2nn3hid16GetNmouseHandlesEPNS0_12NmouseHandleEij", ov_pub_no_handles);
+HOST_OVERRIDE("_ZN2nn3hid16GetNmouseTypeSetEPNS_4util10BitFlagSetILi32ENS0_10NmouseTypeEEENS0_12NmouseHandleE",
+              ov_pub_nmouse_types);
+HOST_OVERRIDE("_ZN2nn3hid14FinalizeNmouseEv", ov_pub_nothing);
+HOST_OVERRIDE("_ZN2nn3hid13GetJcmsHandleERKjRKNS0_8JcmsTypeE", ov_pub_nothing);
+HOST_OVERRIDE("_ZN2nn3hid9StartJcmsERKNS0_10JcmsHandleE", ov_pub_nothing);
+HOST_OVERRIDE("_ZN2nn3hid8StopJcmsERKNS0_10JcmsHandleE", ov_pub_nothing);
+HOST_OVERRIDE("_ZN2nn3hid12FinalizeJcmsEv", ov_pub_nothing);

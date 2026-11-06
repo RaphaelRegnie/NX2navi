@@ -7,6 +7,9 @@
 //                                   "ok <key>" or "fail <key> <message>"; a malformed line gets "fail ? <message>" and the loop continues.
 //   nx2navi_xlate <jobs.json> <outdir> batch mode: a JSON array of jobs, prints a summary, exit 1 if any failed.
 //   job: { "key", "stage": "vs|ps|cs", "code": path (graphics = 0x50-byte SPH + instructions, compute = instructions), "c1": hex,
+//          "sm86": bool + "size": bytes (an NVN2 program, lowered by AmpereLowering.cs), "nvn2_table": [start, textures,
+//          images] (NVN2 compute binding table), "lowered_out": path, "mesh": {"stage": 6|7, "threads", "maxv", "maxp",
+//          "topo", "payload", "task"} (stage "ts" / "ms": an NVN2 task or mesh program, AmpereLowering.MeshInfo),
 //          "tex": {slot: type}, "img": {slot: {type, fmt}}, "attr": {loc: float|sint|uint}, "fout": {idx: float|sint|uint},
 //          "local": [x, y, z], "shared": bytes, "debug": bool, "reduced": bool, "softfloat64": bool, "zero_locals": bool,
 //          "sbuf_align": int, "subgroup": int }
@@ -37,13 +40,21 @@ static class SwshXlate
         // 全部资源放进第 0 组，各占不同绑定号（spirv-cross 出成一个参数缓冲）；常量段号 index 的缓冲由翻译器给 binding = index+1 的惯例不依赖
         // All resources go into set 0, each with a distinct binding number (spirv-cross emits them as one argument buffer); the translator's convention of giving the buffer of constant segment number index binding = index+1 is not relied on
         public SetBindingPair CreateConstantBufferBinding(int index) => new(0, _binding++);
-        public SetBindingPair CreateImageBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
+        // A pool array (bindless) takes one binding number: the runtime moves it to its own set (vk_pipeline.c
+        // spirv_pool_rebind), and 32768 skipped numbers pushed the bindings after it past the runtime's 16-bit field.
+        static bool PoolArray(int count) => count == TexturePoolLength || count == SamplerPoolLength;
+        public SetBindingPair CreateImageBinding(int count, bool isBuffer) { int b = _binding; _binding += PoolArray(count) ? 1 : count; return new(0, b); }
         public SetBindingPair CreateStorageBufferBinding(int index) => new(0, _binding++);
-        public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
+        public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += PoolArray(count) ? 1 : count; return new(0, b); }
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
-        public int QuerySamplerArrayLengthFromPool() => 32;
+        // Bindless handles loaded from memory index the whole texture and sampler pools (Ryujinx BindlessElimination
+        // GenerateBindlessAccess): arrays of TexturePoolLength textures (handle bits 0-19) and SamplerPoolLength samplers
+        // (bits 20-31; NVN sampler ids are below 4096). res.json marks them "pool": 1 (textures) / 2 (samplers); the
+        // runtime binds them from its global pool set (vk_exec_draw.c, texture and sampler pools).
+        public const int TexturePoolLength = 32768, SamplerPoolLength = 4096;
+        public int QuerySamplerArrayLengthFromPool() => SamplerPoolLength;
         public int QueryTextureArrayLengthFromBuffer(int slot) => 32;
-        public int QueryTextureArrayLengthFromPool() => 32;
+        public int QueryTextureArrayLengthFromPool() => TexturePoolLength;
 
         string Get(string table, int slot) => _job[table] is JsonObject t && t[slot.ToString()] is JsonNode n ? (n is JsonObject o ? (string)o["type"] : (string)n) : null;
         int TexSlot(int handle, int cbufSlot)
@@ -68,9 +79,19 @@ static class SwshXlate
                 _ => SamplerType.Texture2D,
             };
         }
+        // Image handles: NVN1 c[2] 0x120 + 8 * slot (NVN2 compute handles are renumbered there by AmpereLowering.Handle);
+        // TexSlot knows only the separate texture range, so image formats were never answered (an R32UI view of an
+        // R11G11B10F target was declared float, and the raw words the shader packs were converted on store).
+        int ImgSlot(int handle, int cbufSlot)
+        {
+            (int off0, _, _) = TextureHandle.UnpackOffsets(handle);
+            int bytes = off0 * 4;
+            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= 0x120 && bytes < TexBase && (bytes - 0x120) % 8 == 0 ? (bytes - 0x120) / 8 : -1;
+        }
         public TextureFormat QueryTextureFormat(int handle, int cbufSlot = -1)
         {
-            int slot = TexSlot(handle, cbufSlot);
+            int slot = ImgSlot(handle, cbufSlot);
+            if (slot < 0) slot = TexSlot(handle, cbufSlot);
             if (slot >= 0) ImgQueried.Add(slot);
             string f = _job["img"] is JsonObject t && slot >= 0 && t[slot.ToString()] is JsonObject o ? (string)o["fmt"] : null;
             if (f == null) { Notes.Add($"图像句柄 {handle:X} 槽 {slot} 无 PC 格式，按 R8G8B8A8Unorm"); return TextureFormat.R8G8B8A8Unorm; }
@@ -80,6 +101,8 @@ static class SwshXlate
         public int QueryComputeLocalSizeX() => Local(0);
         public int QueryComputeLocalSizeY() => Local(1);
         public int QueryComputeLocalSizeZ() => Local(2);
+        // "local_mem": local memory bytes of a compute program (the lowering's spill area adds to it); else Ryujinx's 0x1000.
+        public int QueryComputeLocalMemorySize() => _job["local_mem"] is JsonNode n ? (int)n : 0x1000;
         public int QueryComputeSharedMemorySize() => _job["shared"] is JsonNode n ? (int)n : 0;   // 配对 PC 的 groupshared 声明之和 | sum of the paired PC shader's groupshared declarations
         static AttributeType Attr(string s) => s switch { "sint" => AttributeType.Sint, "uint" => AttributeType.Uint, _ => AttributeType.Float };
         public GpuGraphicsState QueryGraphicsState()
@@ -134,13 +157,58 @@ static class SwshXlate
             try
             {
                 byte[] code = File.ReadAllBytes((string)job["code"]);
+                AmpereLowering.MeshInfo mesh = null;
+                // "sm86": true: the code is an NVN2 (Switch 2) program as stored, "size" bytes long (control section +0x38);
+                // it is lowered to Maxwell first (AmpereLowering.cs). "lowered_out": a path that receives the Maxwell code.
+                if (job["sm86"] is JsonValue sm && sm.TryGetValue<bool>(out bool isSm86) && isSm86)
+                {
+                    int size = job["size"] is JsonNode sz ? (int)sz : code.Length;
+                    AmpereLowering.C1Bytes = job["c1"] is JsonNode c1h ? Convert.FromHexString((string)c1h) : null;
+                    int[] table = job["nvn2_table"] is JsonArray t && t.Count == 3 ? new[] { (int)t[0], (int)t[1], (int)t[2] } : null;
+                    if (job["mesh"] is JsonObject mj)
+                    {
+                        // A task or mesh program: lowered and translated as a compute program whose shared memory holds
+                        // the stage buffer, then rewritten into a TaskEXT / MeshEXT module (MeshSpirv.cs).
+                        mesh = new AmpereLowering.MeshInfo
+                        {
+                            Stage = (int)mj["stage"], Threads = (int)mj["threads"], MaxVertices = (int)mj["maxv"],
+                            MaxPrimitives = (int)mj["maxp"], Topology = (int)mj["topo"], PayloadBytes = (int)mj["payload"],
+                            HasTask = mj["task"] is JsonValue tv && tv.TryGetValue<bool>(out bool tb) && tb,
+                        };
+                        code = AmpereLowering.Lower(code, size, false, out int meshLocal, null, mesh);
+                        if (meshLocal != 0) job["local_mem"] = meshLocal;
+                        job["local"] = new JsonArray(mesh.Threads, 1, 1);
+                        job["shared"] = mesh.SharedBytes;
+                    }
+                    else
+                    {
+                        code = AmpereLowering.Lower(code, size, (string)job["stage"] != "cs", out int local, table);
+                        if (local != 0) job["local_mem"] = local;
+                    }
+                    if (job["lowered_out"] is JsonNode lo) File.WriteAllBytes((string)lo, code);
+                }
                 var acc = new Accessor(code, job);
                 // 作业 debug = false：关 DebugMode（DebugMode 会跳过 AST 优化器，产物满是临时变量；不改语义）
                 // Job debug = false: turn off DebugMode (DebugMode skips the AST optimizer and the output is full of temporaries; semantics unchanged)
-                var flags = (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] == "cs" ? TranslationFlags.Compute : 0);
+                var flags = (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] is "cs" or "ts" or "ms" ? TranslationFlags.Compute : 0);
                 var ctx = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                 ShaderProgram p = ctx.Translate();
-                File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), p.BinaryCode);
+                // "glsl_out": a path that receives the same program as GLSL, for reading (diagnosis only).
+                if (job["glsl_out"] is JsonNode go)
+                {
+                    var gctx = Translator.CreateContext(0, new Accessor(code, job), new TranslationOptions(TargetLanguage.Glsl, TargetApi.OpenGL, flags));
+                    File.WriteAllText((string)go, gctx.Translate().Code);
+                }
+                byte[] spirv = p.BinaryCode;
+                // A recursive call graph (subroutines the translator could not tell apart) is refused: Vulkan forbids it
+                // and NVIDIA's compiler overflows its stack on it (MeshSpirv.CallCycle).
+                if (MeshSpirv.CallCycle(spirv) is long cyc && cyc >= 0) throw new Exception($"recursive call graph (function %{cyc})");
+                if (mesh != null)
+                {
+                    if (job["compute_out"] is JsonNode co) File.WriteAllBytes((string)co, spirv);
+                    spirv = MeshSpirv.Convert(spirv, mesh);
+                }
+                File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), spirv);
                 var res = new JsonObject
                 {
                     ["key"] = key, ["stage"] = (string)job["stage"], ["notes"] = new JsonArray(acc.Notes.ConvertAll(n => (JsonNode)n).ToArray()),
@@ -149,10 +217,14 @@ static class SwshXlate
                     ["tex_queried"] = new JsonArray(acc.TexQueried.Select(x => (JsonNode)x).ToArray()), ["img_queried"] = new JsonArray(acc.ImgQueried.Select(x => (JsonNode)x).ToArray()),
                 };
                 if (acc.QueryMotionPrevious()) (res["mvprev"], res["mvprev_banks"]) = (acc.MotionPreviousLocation, acc.MotionPreviousBanks);
+                if (mesh != null)
+                    res["mesh"] = new JsonObject { ["lines"] = mesh.Lines.Count, ["shared"] = mesh.SharedBytes,
+                        ["outputs"] = new JsonArray(MeshSpirv.GenericLocations(mesh).Select(x => (JsonNode)x).ToArray()) };
                 foreach (var b in p.Info.CBuffers) res["cbufs"].AsArray().Add((JsonNode)new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot });
                 foreach (var b in p.Info.SBuffers) res["sbufs"].AsArray().Add((JsonNode)new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = b.SbCbSlot, ["cb_offset"] = b.SbCbOffset, ["flags"] = (int)b.Flags });
                 foreach (var (list, name) in new[] { (p.Info.Textures, "textures"), (p.Info.Images, "images") })
-                    foreach (var t in list) res[name].AsArray().Add((JsonNode)new JsonObject { ["binding"] = t.Binding, ["type"] = (int)t.Type, ["format"] = t.Format.ToString(), ["cbuf_slot"] = t.CbufSlot, ["handle"] = t.HandleIndex, ["array"] = t.ArrayLength, ["separate"] = t.Separate, ["flags"] = (int)t.Flags });
+                    foreach (var t in list) res[name].AsArray().Add((JsonNode)new JsonObject { ["binding"] = t.Binding, ["type"] = (int)t.Type, ["format"] = t.Format.ToString(), ["cbuf_slot"] = t.CbufSlot, ["handle"] = t.HandleIndex, ["array"] = t.ArrayLength, ["separate"] = t.Separate, ["flags"] = (int)t.Flags,
+                        ["pool"] = t.ArrayLength == Accessor.TexturePoolLength ? 1 : t.ArrayLength == Accessor.SamplerPoolLength ? 2 : 0 });
                 File.WriteAllText(Path.Combine(outDir, key + ".res.json"), res.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                 return null;
             }

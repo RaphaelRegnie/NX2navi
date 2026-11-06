@@ -33,7 +33,10 @@
 #include "host.h"
 #include "nvn_api.h"
 #include "vk.h"
+
 #include "vk_exec.h"
+uint64_t vk_exec_cs_storage_addr(const VkExec *ex, const GfxShaderRes *r);   // vk_exec_draw.c
+int vk_exec_raw_9e5(VkImage img, VkFormat f);                               // vk_exec_draw.c
 #include "platform/platform.h"
 
 #define MAX_PASSES 400
@@ -562,10 +565,28 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
         if (r && bd->kind == GFX_RES_SSBO) {   // where the address lives (c0: the stage's NVN slot table) and the stage's slots
             int st = nvn_stage(bd->stage);
             sp(b, "    %s ssbo at c%d+%#x%s, bound:", stn[st], r->cbuf_slot, r->handle * 4, r->flags & 1 ? " written" : "");
+            if (st == 5 && r->cbuf_slot == 0 && r->handle * 4 >= 0x10 && r->handle * 4 + 12 <= 0x10 + (int)sizeof ex->cs_push) {
+                uint64_t pa; uint32_t ps;   // an NVN2 compute push-constant pointer {address, size}
+                memcpy(&pa, ex->cs_push + r->handle * 4 - 0x10, 8), memcpy(&ps, ex->cs_push + r->handle * 4 - 0x10 + 8, 4);
+                sp(b, " (push pointer %#llx+%#x)", (unsigned long long)pa, ps);
+            }
+            if (st == 5) sp(b, " -> %#llx", (unsigned long long)vk_exec_cs_storage_addr(ex, r));
             for (int k = 0; k < 16; k++)
                 if (ex->ssbo[st][k].addr)
                     sp(b, " %d=%#llx+%#llx", k, (unsigned long long)ex->ssbo[st][k].addr, (unsigned long long)ex->ssbo[st][k].size);
             sp(b, "\n");
+            // NX2NAVI_DUMP_UBO: also the small storage buffers' guest bytes (GPU results as of the last write-back); per-view
+            // constants (exposure and such) live in such buffers.
+            for (int k = 0; dump_ubo && k < 16; k++) {
+                const p_bind_buf *u = &ex->ssbo[st][k];
+                VkMemSpan ms;
+                if (!u->addr || !u->size || u->size > 0x100 || !vk_mem_resolve(u->addr, 1, &ms)) continue;
+                const float *f = (const float *)(uintptr_t)u->addr;
+                sp(b, "      %s ssbo %d %#llx:", stn[st], k, (unsigned long long)u->addr);
+                for (uint64_t q = 0; q * 16 < u->size && q < (uint64_t)dump_ubo; q++)
+                    sp(b, " [%llu] %g %g %g %g", (unsigned long long)q, f[4 * q], f[4 * q + 1], f[4 * q + 2], f[4 * q + 3]);
+                sp(b, "\n");
+            }
             continue;
         }
         if (r && bd->kind == GFX_RES_UBO && dump_ubo && r->slot >= 3 && r->slot - 3 < 18) {
@@ -775,6 +796,15 @@ void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPip
             d->z, (unsigned long long)shader_hash(cs), (unsigned long long)(ex->prog ? ex->prog->serial : 0),
             (unsigned long long)d->caller, (unsigned long long)ex->fence, b.s ? b.s : "");
     free(b.s);
+    if (dump_ubo) {   // NX2NAVI_DUMP_UBO: the NVN2 push constants as 64-bit words
+        fprintf(passes_f, "    push:");
+        for (int q = 0; q < 0x80; q += 8) {
+            uint64_t v;
+            memcpy(&v, ex->cs_push + q, 8);
+            fprintf(passes_f, " %02x:%llx", q, (unsigned long long)v);
+        }
+        fprintf(passes_f, "\n");
+    }
     for (uint32_t i = 0; i < info->n_bindings && !pass_skip; i++) {   // storage images the dispatch writes
         const VkPipeBinding *bd = &info->bindings[i];
         if (!bd->res || bd->kind != GFX_RES_IMG || !(bd->res->flags & 4) || bd->type != VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
@@ -796,7 +826,8 @@ void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPip
                 if (luts_done[k] == t->image) luts_done[k] = VK_NULL_HANDLE;
         }
         const char *why = t->samples > 1 ? "multisampled" :
-                          copy_out(ex, t->image, t->format, t->aspect, lv, layer, w, hh, dd, name);
+                          copy_out(ex, t->image, vk_exec_raw_9e5(t->image, t->format) ? VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 : t->format,
+                                   t->aspect, lv, layer, w, hh, dd, name);
         fprintf(passes_f, "  writes img slot %d level %u layer %u depth %u -> %s.png%s%s\n", bd->res->slot, lv, layer,
                 dd, name, why ? " skipped: " : "", why ? why : "");
     }

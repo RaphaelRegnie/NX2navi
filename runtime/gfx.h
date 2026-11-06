@@ -26,7 +26,8 @@ int gfx_window_focused(void);
 int gfx_picture_rect(float out[4]);   // where the last present put the picture, fractions of the swapchain (x, y, w, h); 0 before one
 
 // ---- shader service client (gfx_shader.c)
-enum { GFX_STAGE_VS, GFX_STAGE_TCS, GFX_STAGE_TES, GFX_STAGE_GS, GFX_STAGE_FS, GFX_STAGE_CS };
+enum { GFX_STAGE_VS, GFX_STAGE_TCS, GFX_STAGE_TES, GFX_STAGE_GS, GFX_STAGE_FS, GFX_STAGE_CS,
+       GFX_STAGE_TS, GFX_STAGE_MS };   // TS / MS: NVN2 task and mesh programs (VK_EXT_mesh_shader)
 enum { GFX_TEX_1D = 1, GFX_TEX_1D_ARRAY, GFX_TEX_BUFFER, GFX_TEX_2D, GFX_TEX_2D_ARRAY, GFX_TEX_2D_MS,
        GFX_TEX_2D_MS_ARRAY, GFX_TEX_3D, GFX_TEX_CUBE, GFX_TEX_CUBE_ARRAY };   // gfx_shader.c tex_names order
 enum { GFX_TYPE_FLOAT, GFX_TYPE_SINT, GFX_TYPE_UINT };
@@ -97,6 +98,7 @@ typedef struct {
     uint16_t handle;            // TEX/IMG: raw handle (word offset; separate: texture | sampler << 14); SSBO: address offset
     uint16_t count;             // descriptors (array length)
     uint8_t separate;           // TEX: texture and sampler handles are separate
+    uint8_t pool;               // TEX: 1 the texture pool, 2 the sampler pool, indexed by bindless handles (set 2)
 } GfxShaderRes;
 typedef struct { uint8_t type, comps, packed; } GfxShaderIo;   // GFX_TYPE_*, components, 1 with a Component decoration
 int gfx_shader_stage(const GfxShader *s);                   // GFX_STAGE_VS, GFX_STAGE_FS or GFX_STAGE_CS
@@ -145,3 +147,9 @@ typedef struct { uint64_t frames, nvn_calls, nvn_distinct, unimplemented, valida
 GfxStats gfx_stats(void);
 void rt_frame_presented(const tex_t *t, uint64_t n);       // boot.c: --frames N ends the run after the Nth present
                                                            // (saves --shot first through read_texels)
+
+// Movie overlay (ov_movie2.c -> gfx_present.c): the latest decoded movie frame, RGBA8, shown over the game image
+// while frames keep coming (the game draws movies with its own shaders, which do not translate yet).
+void gfx_movie_frame(const uint8_t *rgba, int w, int h);
+void gfx_movie_frame_own(uint8_t *rgba, int w, int h);   // the same, taking the malloc'd buffer (freed later)
+void gfx_movie_stop(void);

@@ -18,6 +18,22 @@ static inline int romfs_path_valid_relative(const char *path) {
     return 1;
 }
 
+// Copies path into out (cap bytes) with each run of '/' after the first ':' folded into one, as a file system
+// reads "a//b". Switch 2 voice requests join "Voice/Resource/" and "/Stream/..." (Ocarina's
+// "content://Voice/Resource//Stream/USen_...bwav"). 0 when it does not fit.
+static inline int romfs_path_collapse(const char *path, char *out, size_t cap) {
+    const char *colon = path ? strchr(path, ':') : NULL;
+    size_t n = 0;
+    for (const char *p = path; p && *p; p++) {
+        if (colon && p > colon + 1 && *p == '/' && p[-1] == '/') continue;   // keep "<mount>:/" and one more
+        if (n + 1 >= cap) return 0;
+        out[n++] = *p;
+    }
+    if (!cap) return 0;
+    out[n] = 0;
+    return 1;
+}
+
 // "<mount>:/<path>" -> "<path>", or NULL. Audio stream requests join a mount root and a leading-slash resource,
 // producing "content://Sound/...": repeated root separators are skipped; traversal, backslashes and empty interior
 // components are still rejected.

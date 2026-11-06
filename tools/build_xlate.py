@@ -1,7 +1,7 @@
 """Build the shader translator: build/xlate/nx2navi_xlate.exe (Ryujinx 1.3.2 + patches, NativeAOT, SPIR-V for Vulkan).
 
 Copies tools/vendor/ryujinx to build/xlate/ryujinx, applies tools/xlate/patches/*.patch there (tools/vendor stays
-byte-identical; 0001-0004 are MNG's, 0005-0013, 0015 and 0016 are ours), then runs `dotnet publish`. Needs the .NET 10 SDK, the MSVC build
+byte-identical; 0001-0004 are MNG's, 0005-0013 and 0015-0020 are ours), then runs `dotnet publish`. Needs the .NET 10 SDK, the MSVC build
 tools and vswhere.exe (docs/building.md). Run with .venv. On Linux it builds build/xlate/nx2navi_xlate for linux-x64, which
 NativeAOT links with the system's clang (no MSVC); NativeAOT builds for the OS it runs on only.
 
@@ -99,8 +99,8 @@ def prepare_sources() -> Path:
     for junk in list(src.glob("src/*/obj")) + list(src.glob("src/*/bin")):
         shutil.rmtree(junk)
     patches = sorted((XLATE / "patches").glob("*.patch"))
-    if len(patches) != 15:
-        sys.exit(f"expected 15 patches, found {len(patches)}")
+    if len(patches) != 19:
+        sys.exit(f"expected 19 patches, found {len(patches)}")
     for patch in patches:
         # git apply works outside a repository when given a directory; --check first so a failure names the patch.
         for extra in (["--check"], []):
@@ -117,7 +117,7 @@ def prepare_sources() -> Path:
 def identity() -> str:
     """sha256 over the translator's inputs, in a fixed order: path and content hash of each file."""
     h = hashlib.sha256()
-    files = [Path(__file__).resolve(), XLATE / "Program.cs", XLATE / "nx2navi_xlate.csproj",
+    files = [Path(__file__).resolve(), XLATE / "Program.cs", XLATE / "AmpereLowering.cs", XLATE / "MeshSpirv.cs", XLATE / "nx2navi_xlate.csproj",
              *sorted((XLATE / "patches").glob("*.patch"))]
     for f in files:
         h.update(f"{f.name}\0{hashlib.sha256(f.read_bytes()).hexdigest()}\n".encode())
@@ -161,7 +161,7 @@ def main() -> None:
     work = BUILD / "xlate"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    for name in ("Program.cs", "nx2navi_xlate.csproj"):
+    for name in ("Program.cs", "AmpereLowering.cs", "MeshSpirv.cs", "nx2navi_xlate.csproj"):
         shutil.copy2(XLATE / name, work / name)
     out = BUILD / "publish"
     shutil.rmtree(out, ignore_errors=True)

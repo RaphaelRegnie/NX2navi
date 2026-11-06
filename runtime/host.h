@@ -143,6 +143,7 @@ uint32_t mem_set_attribute(uint64_t a, uint64_t n, uint32_t mask, uint32_t at); 
 uint32_t mem_map(uint64_t dst, uint64_t src, uint64_t n);                       // 0x04
 uint32_t mem_unmap(uint64_t dst, uint64_t src, uint64_t n);                     // 0x05
 uint32_t mem_query(uint64_t a, RtMemoryInfo *out);                              // 0x06
+int mem_readable(uint64_t a, uint64_t n);                                        // every page readable
 uint32_t mem_map_physical(uint64_t a, uint64_t n);                              // 0x2C
 uint32_t mem_unmap_physical(uint64_t a, uint64_t n);                            // 0x2D
 int mem_info(uint32_t id, uint64_t *out);                  // GetInfo memory ids 2-7, 12-17, 21, 22, 28; 0 if not a memory id
@@ -187,6 +188,8 @@ typedef struct { const char *file, *sha256; } RtFileHash;
 extern const RtFileHash rt_exefs_sha256[];                 // tools/data/expected-<version>.json "exefs_sha256"
 extern const int rt_exefs_sha256_count;
 extern const char rt_default_exefs[], rt_default_romfs[], rt_default_profile[];
+extern const unsigned long long rt_app_pool_bytes;        // the title's application memory pool (GetInfo 6)
+extern const int rt_nvn_api_version[2];                   // NVN_DEVICE_INFO_API_{MAJOR,MINOR}_VERSION the title requires
 extern const int rt_game_version;                          // the game build: 110 (1.1.0), 121 (1.2.1) or 143 (1.4.3)
 extern const char rt_port_version[];                       // VERSION at the build's root: 0.1.0, 0.1.0+973c626 in a release
 #define RT_V110 (rt_game_version == 110)                    // 1.1.0: its own boot constants and data slots
@@ -225,8 +228,10 @@ enum { KERN_SESSION = 4, KERN_TMEM = 5 };
 uint32_t kern_event_new(void);                             // writable handle
 uint32_t kern_event_readable(uint32_t writable);
 void kern_event_signal(uint32_t writable);
+void kern_event_clear(uint32_t writable);                  // server-side clear (e.g. a drained message queue)
 void kern_bind_system_event(Cpu *c, uint64_t ev, int autoclear);   // guest thread only
 void kern_signal_system_event(uint64_t ev);                // any thread
+void kern_clear_system_event(uint64_t ev);                 // any thread; a bound, live event only
 int kern_svc(Cpu *c, uint32_t imm);                        // thread/sync SVCs; 1 if handled
 uint64_t kern_now_ns(void);
 extern uint64_t rt_guest_start_ns;   // kern_now_ns when the guest started (boot.c), 0 before

@@ -816,6 +816,14 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
         ServerVoice *v = &r->voices[i];
         if (!v->in.in_use || v->state != SV_STARTED || !v->in.sample_rate || !v->valid[v->index]) continue;
         int cc = (int)v->in.channel_count; if (cc < 1 || cc > 6) { report_once(m, 2, "voice channel count unsupported", cc); continue; }
+        {   /* each sample format a started voice uses, logged once: one the mixer cannot decode plays as silence */
+            static volatile uint32_t seen;
+            unsigned f = v->in.sample_format & 31;
+            if (!(__atomic_fetch_or(&seen, 1u << f, __ATOMIC_RELAXED) & (1u << f)))
+                rt_log("audio: voice %d uses sample format %u (%s), %d channel(s) at %u Hz", i, v->in.sample_format,
+                       v->in.sample_format == FMT_ADPCM || fmt_bytes(v->in.sample_format) ? "decoded" : "NOT decoded: silent",
+                       cc, (unsigned)v->in.sample_rate);
+        }
         voice_render(r, v, vs, frames);
         for (int f = 0; f < 2; f++) if (v->in.biquads[f].enable) {
             const AudrenBiquad *b = &v->in.biquads[f];
@@ -886,6 +894,9 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
         if (!(m->reported & (1u << 6))) {
             m->reported |= 1u << 6;
             rt_log("audio: device sink has %u inputs, output %s", sink->input_count, oc == 6 ? "5.1" : "stereo");
+            rt_log("audio: device sink inputs %d %d %d %d %d %d, downmix %s %.3f %.3f %.3f %.3f", sink->inputs[0], sink->inputs[1],
+                   sink->inputs[2], sink->inputs[3], sink->inputs[4], sink->inputs[5], sink->downmix_enabled ? "on" : "off",
+                   sink->downmix[0], sink->downmix[1], sink->downmix[2], sink->downmix[3]);
         }
         const float gain = host_volume() * atomic_load(&device_volume) * (r->mixes[0].in_use ? r->mixes[0].volume : 1.0f);
         const float *ch[6] = {0};
@@ -966,6 +977,122 @@ void audio_device_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) 
         rs->copy[rs->ncopy++] = kern_event_readable(ev);
         return;
     }
+    // 17.0.0+: Acquire/Release Audio{Input,Output}DeviceNotification (15-18), 18.0.0+: SetAudioDeviceOutputVolume-
+    // AutoTuneEnabled (19) / IsAudioDeviceOutputVolumeAutoTuneEnabled (20), 21.0.0+:
+    // IsActiveOutputDeviceEstimatedLowLatency (21). Command ids from the system service/audio/audio_device.cpp. The
+    // device never changes and the host applies no auto-tuned volume, so the answers are "off" / "no".
+    case 15: case 17: {   // Acquire...Notification -> a readable event that is never signalled
+        uint32_t ev = kern_event_new();
+        rs->copy[rs->ncopy++] = kern_event_readable(ev);
+        return;
+    }
+    case 16: case 18: case 19: return;
+    case 20: case 21: { uint8_t no = 0; IPC_OUT(rs, no); return; }
     default: ipc_unimplemented(s, rq);
     }
+}
+
+// ---- auddmg:u: the Switch 2 audio device manager. Command 0 opens the virtual device manager. Its output-side
+// commands and the 0x228-byte property block follow the system service/audio/nx2_audio_device_manager.h
+// (INx2AudioVirtualDeviceManager); ids there are partly guessed. One virtual output device feeds the host mixer;
+// there are no input devices, so a command not listed here (the input side the SDK's ListVirtualInputDevices
+// reaches) is logged once and answered with success and a zero count.
+static const char virtual_output[] = "AudioVirtualOutput0";
+#define AUD_R_NOT_SUPPORTED 0x40299u      // audio module 153, description 513
+#define AUD_R_INVALID_ARGUMENT 0x70899u   // audio module 153, description 900
+
+static void put_block(const IpcRequest *rq, IpcResponse *rs, const void *src, size_t n) {
+    int pointer;
+    IpcBuffer b = out_buffer(rq, &pointer);
+    if (!b.size) return;
+    uint8_t *dst = ipc_guest(b.addr, b.size);
+    memset(dst, 0, b.size);
+    memcpy(dst, src, n < b.size ? n : b.size);
+    if (pointer) rs->xout[rs->nxout++] = (IpcBuffer){b.addr, b.size, b.index};
+}
+
+static void virtual_device_manager_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    (void)s;
+    switch (rq->cmd) {
+    case 0: {   // ListVirtualOutputDevices -> count, names (0x100 each)
+        char name[0x100] = {0};
+        memcpy(name, virtual_output, sizeof virtual_output);
+        int pointer;
+        IpcBuffer b = out_buffer(rq, &pointer);
+        uint32_t n = b.size >= sizeof name ? 1 : 0;
+        if (n) put_block(rq, rs, name, sizeof name);
+        IPC_OUT(rs, n);
+        return;
+    }
+    case 100: {   // GetDefaultVirtualOutputDevice -> name
+        char name[0x100] = {0};
+        memcpy(name, virtual_output, sizeof virtual_output);
+        put_block(rq, rs, name, sizeof name);
+        return;
+    }
+    case 300: {   // IsVirtualOutputDeviceStreamFormatSupported(sample type, channels, rate, functionality)
+        uint32_t channels = IPC_ARG(rq, uint32_t, 4), rate = IPC_ARG(rq, uint32_t, 8), fn = IPC_ARG(rq, uint32_t, 12);
+        rs->result = fn == 1 && (channels == 1 || channels == 2 || channels == 6) && rate == 48000 ? 0 : AUD_R_NOT_SUPPORTED;
+        return;
+    }
+    case 401: {   // GetVirtualOutputDeviceProperties(name) -> block
+        uint8_t block[0x228] = {0};
+        memcpy(block, virtual_output, sizeof virtual_output);
+        uint32_t v[4] = {3, 2, 2, 48000};   // type, (2), channels, sample rate
+        memcpy(block + 0x100, v, sizeof v);
+        memcpy(block + 0x110, device_name, sizeof device_name);
+        uint64_t latency_ns = 10000000;
+        memcpy(block + 0x218, &latency_ns, sizeof latency_ns);
+        uint32_t id = 1;   // nonzero: the SDK's output streams pass it on (the system: a zero breaks stream creation)
+        memcpy(block + 0x220, &id, sizeof id);
+        put_block(rq, rs, block, sizeof block);
+        return;
+    }
+    case 500: rs->copy[rs->ncopy++] = kern_event_readable(kern_event_new()); return;   // state change event
+    case 700: case 800: return;   // AttachStream / DetachStream
+    default: {
+        static volatile int32_t seen[64];
+        if (rq->cmd >= 64 || !__atomic_exchange_n(&seen[rq->cmd], 1, __ATOMIC_RELAXED))
+            rt_log("auddmg:u manager: command %u answered with success and a zero count (no input devices)", rq->cmd);
+        uint32_t zero = 0;
+        IPC_OUT(rs, zero);
+        return;
+    }
+    }
+}
+
+void audio_dmg_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    if (rq->cmd == 0) {   // OpenVirtualDeviceManager
+        rs->move[rs->nmove++] = ipc_session_new("auddmg:u manager", virtual_device_manager_handler, NULL, NULL);
+        return;
+    }
+    ipc_unimplemented(s, rq);
+}
+
+// ---- audsmx:u: the Switch 2 sound mixer (sysmix). Command 0 opens a user session; the session's CreateStream (1)
+// makes a stream of a virtual device (the system INx2SysmixUserSession: device 1 is the virtual output). This host
+// renders through audren, has no sysmix output streams yet and no input devices: CreateStream of a device other
+// than 1 fails with InvalidArgument (as the system does), and device 1 stops with its name so the first title that needs
+// a sysmix output stream says so. Engage/DisengageStreams (2/3) succeed.
+static void sysmix_session_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    (void)s;
+    switch (rq->cmd) {
+    case 1: {
+        uint32_t device = IPC_ARG(rq, uint32_t, 0), flags = IPC_ARG(rq, uint32_t, 4);
+        if (device == 1) rt_fatal("audsmx:u: CreateStream on the virtual output (flags %#x) is not implemented", flags);
+        rt_log("audsmx:u: CreateStream device %u flags %#x refused: no audio input devices", device, flags);
+        rs->result = AUD_R_INVALID_ARGUMENT;
+        return;
+    }
+    case 2: case 3: return;
+    default: ipc_unimplemented(s, rq);
+    }
+}
+
+void audio_sysmix_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
+    if (rq->cmd == 0) {   // OpenUserSession(process handle)
+        rs->move[rs->nmove++] = ipc_session_new("audsmx:u session", sysmix_session_handler, NULL, NULL);
+        return;
+    }
+    ipc_unimplemented(s, rq);
 }

@@ -409,6 +409,8 @@ static IpcBuffer pick(const IpcBuffer *a, unsigned na, const IpcBuffer *b, unsig
     return x.size ? x : y;
 }
 
+static uint32_t voice_drop_bits = 0x3f800000u;   // SetVoiceDropParameter's float (1.0 until set)
+
 static void renderer_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
     AudioRenderer *r = s->state;
     switch (rq->cmd) {
@@ -446,6 +448,20 @@ static void renderer_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *r
     case 7: rs->copy[rs->ncopy++] = kern_event_readable(r->event); return;   // QuerySystemEvent
     case 8: r->time_limit = IPC_ARG(rq, uint32_t, 0); return;                // SetRenderingTimeLimit
     case 9: { uint32_t v = r->time_limit ? r->time_limit : 100; IPC_OUT(rs, v); return; }   // GetRenderingTimeLimit
+    // 15.0.0+ Set/GetVoiceDropParameter (the system service/audio/audio_renderer.cpp): the factor the DSP uses to drop
+    // voices when a frame overruns its time. The host mixer renders every voice, so the value is only kept.
+    case 12: {
+        float v = IPC_ARG(rq, float, 0);
+        __atomic_store_n(&voice_drop_bits, isfinite(v) ? *(uint32_t *)&v : 0x3f800000u, __ATOMIC_RELAXED);
+        return;
+    }
+    case 13: {
+        uint32_t bits = __atomic_load_n(&voice_drop_bits, __ATOMIC_RELAXED);
+        float v;
+        memcpy(&v, &bits, sizeof v);
+        IPC_OUT(rs, v);
+        return;
+    }
     default: ipc_unimplemented(s, rq);
     }
 }

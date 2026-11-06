@@ -48,8 +48,9 @@
 #define CODE_SKIP 0x30                                     // graphics code starts after the first 0x30 bytes of the program
 #define BUCKETS 4096
 #define LINE_MAX_LEN 4096
-#define KEY_VERSION 4                                      // in every cache key; bump when the key layout or the use of the
-                                                           // output changes here (4: translator identity, input ids);
+#define KEY_VERSION 5                                      // in every cache key; bump when the key layout or the use of the
+                                                           // output changes here (4: translator identity, input ids; 5: the
+                                                           // NVN2 compute shared memory size in the request);
                                                            // translator changes are covered by its identity
 #define IN_VERSION 1                                       // in every input id and .in file: bump when the answers layout
                                                            // or the program hash changes (drops every stored input)
@@ -544,7 +545,8 @@ static int reflection_valid(const char *res, uint64_t size) {
     const char *st = strstr(b, "\"stage\"");
     if (!st) return 0;
     st = strchr(st + 7, '"');
-    return st && (!strncmp(st, "\"vs\"", 4) || !strncmp(st, "\"ps\"", 4) || !strncmp(st, "\"cs\"", 4));
+    return st && (!strncmp(st, "\"vs\"", 4) || !strncmp(st, "\"ps\"", 4) || !strncmp(st, "\"cs\"", 4) ||
+                  !strncmp(st, "\"ts\"", 4) || !strncmp(st, "\"ms\"", 4));   // ts / ms: NVN2 task and mesh stages
 }
 
 // Every instruction after the header has a word count and the last one ends at the module's end: a module with
@@ -571,7 +573,12 @@ static GfxShader *disk_load_from(const uint8_t key[32], const uint8_t *iid, int 
     if (!res) return NULL;
     if (!reflection_valid((const char *)res, res_size)) {
         int32_t n = plat_inc32(&n_bad);
-        if (n <= 3 || !(n & (n - 1))) rt_log("gfx_shader: %s.res.json is malformed, translating again (%d so far)", hex, n);
+        if (n <= 3 || !(n & (n - 1))) {   // say what was wrong: an unknown stage name has cost a session before
+            const char *st = strstr((const char *)res, "\"stage\"");
+            char what[24] = "no stage field";
+            if (st) snprintf(what, sizeof what, "%.16s", st + 8);
+            rt_log("gfx_shader: %s.res.json is malformed (stage %s), translating again (%d so far)", hex, what, n);
+        }
         free(res);
         return NULL;
     }
@@ -723,6 +730,7 @@ static void add_res(GfxShader *s, int kind, const char *o, const char *e) {
     r->handle = (uint16_t)handle;
     r->count = (uint16_t)json_int(o, e, "array", 1);
     r->separate = sep && *sep == 't';
+    r->pool = (uint8_t)json_int(o, e, "pool", 0);
     r->slot = (int16_t)handle_slot(kind, r->cbuf_slot, handle, r->separate);
 }
 
@@ -846,7 +854,8 @@ static void reflect(GfxShader *s) {
     const char *js = s->reflection;
     char stage[8];
     json_str(js, js + strlen(js), "stage", stage, sizeof stage);
-    s->stage = !strcmp(stage, "cs") ? GFX_STAGE_CS : !strcmp(stage, "ps") ? GFX_STAGE_FS : GFX_STAGE_VS;
+    s->stage = !strcmp(stage, "cs") ? GFX_STAGE_CS : !strcmp(stage, "ps") ? GFX_STAGE_FS : !strcmp(stage, "ts") ? GFX_STAGE_TS
+             : !strcmp(stage, "ms") ? GFX_STAGE_MS : GFX_STAGE_VS;
     s->mvprev_banks = (uint32_t)json_int(js, js + strlen(js), "mvprev_banks", 0);
     for (int k = 0; k < GFX_RES_KINDS; k++) {
         int count = json_objects(js, kinds[k], NULL, s, k);
@@ -1157,25 +1166,56 @@ static size_t build_request(char *o0, const char *hex, const char *stage, const 
         o += sprintf(o, "},\"fout\":{");
         for (int i = 0; i < 8; i++)
             if (a->frag_out_type[i]) o += sprintf(o, "%s\"%d\":\"%s\"", sep, i, attr_name(a->frag_out_type[i])), sep = ",";
-        o += sprintf(o, "},\"shared\":%u", a->shared_bytes);
+        // NVN2 compute programs carry their shared memory size in the control section (+0x64, bytes; nonzero exactly
+        // for the programs that use shared memory). Without it the translator declares its 4 KiB default, and a
+        // program that uses more (80 of 2643 in a gameplay dump, up to 18 KiB) stores out of range, which NVIDIA
+        // GPUs fault on (device lost at the first gameplay frame).
+        uint32_t shared = a->shared_bytes, magic0;
+        memcpy(&magic0, control, 4);
+        if (!shared && magic0 == 0x98761234u && !strcmp(stage, "cs")) memcpy(&shared, control + 0x64, 4);
+        o += sprintf(o, "},\"shared\":%u", shared);
     }
     if (!strcmp(stage, "cs")) {
         uint32_t l[3] = {1, 1, 1};
         if (a && (a->local[0] | a->local[1] | a->local[2])) l[0] = a->local[0], l[1] = a->local[1], l[2] = a->local[2];
-        else memcpy(l, control + 0x748, 12);
+        else memcpy(l, control + (*(const uint32_t *)control == 0x98761234u ? 0x58 : 0x748), 12);   // NVN2: +0x58
+        if (!(l[0] | l[1] | l[2])) l[0] = l[1] = l[2] = 1;   // NVN2 controls carry no workgroup size there
         o += sprintf(o, ",\"local\":[%u,%u,%u]", l[0], l[1], l[2]);
     }
     /* Control byte +0x718 of a fragment shader: early fragment tests (the NVN driver's early-Z-force, MacNativeGames
        ae8f4f4). Without it a shader that stores to memory is depth-tested late, and the G-buffer draws' EQUAL test
        after the depth prepass fails along contour lines. Already part of the code hash (the whole control section). */
     if (!strcmp(stage, "ps") && (control[0x718] & 1)) o += sprintf(o, ",\"early_fragment_tests\":true");
-    int si = !strcmp(stage, "vs") ? 0 : !strcmp(stage, "cs") ? 2 : 1;   // gfx_shader_set_host answers
+    int si = !strcmp(stage, "vs") ? 0 : !strcmp(stage, "cs") || !strcmp(stage, "ts") || !strcmp(stage, "ms") ? 2 : 1;   // gfx_shader_set_host answers
     if (!host_f64) o += sprintf(o, ",\"softfloat64\":true");
     if (a && a->mvprev && !strcmp(stage, "vs")) o += sprintf(o, ",\"mvprev\":true");
     if (host_sbuf) o += sprintf(o, ",\"sbuf_align\":%u", host_sbuf);
     if (host_sg[si] != 32) o += sprintf(o, ",\"subgroup\":%u", host_sg[si]);
     if (host_gather) o += sprintf(o, ",\"gather_bias\":%u", host_gather);
     if (host_zero_locals) o += sprintf(o, ",\"zero_locals\":true");
+    uint32_t magic, nvn2_size;
+    memcpy(&magic, control, 4), memcpy(&nvn2_size, control + 0x38, 4);
+    if (magic == 0x98761234u) {   // NVN2_CONTROL_MAGIC, below
+        o += sprintf(o, ",\"sm86\":true,\"size\":%u", nvn2_size);
+        if (!strcmp(stage, "ts") || !strcmp(stage, "ms")) {
+            // Task and mesh programs (tools/xlate/AmpereLowering.cs MeshInfo): +0x58 workgroup size (low 16 bits) and
+            // payload size in 256 bytes (bits 24-31); +0x5c byte 3 the primitive type, byte 2 a task stage feeds the
+            // mesh stage; +0x60 vertex limit (low 16 bits) and primitive limit (high 16 bits).
+            uint32_t w58, w5c, w60;
+            memcpy(&w58, control + 0x58, 4), memcpy(&w5c, control + 0x5c, 4), memcpy(&w60, control + 0x60, 4);
+            o += sprintf(o, ",\"mesh\":{\"stage\":%d,\"threads\":%u,\"payload\":%u,\"maxv\":%u,\"maxp\":%u,\"topo\":%u,\"task\":%s}",
+                         !strcmp(stage, "ts") ? 6 : 7, w58 & 0xffff, (w58 >> 24) * 256, w60 & 0xffff, w60 >> 16, w5c >> 24,
+                         (w5c >> 16 & 0xff) ? "true" : "false");
+        }
+        if (!strcmp(stage, "cs")) {
+            // The compute binding table in the driver bank: texture entries (byte +0xb3), image entries (+0xb6), and
+            // where the table ends (u16 at +0xba); 8 bytes an entry, textures first.
+            uint16_t end;
+            memcpy(&end, control + 0xba, 2);
+            int ntex = control[0xb3], nimg = control[0xb6];
+            if (end >= 8 * (ntex + nimg)) o += sprintf(o, ",\"nvn2_table\":[%d,%d,%d]", end - 8 * (ntex + nimg), ntex, nimg);
+        }
+    }
     o += sprintf(o, "},\"out\":\"");
     json_esc(&o, cache_dir);
     o += sprintf(o, "\"}");
@@ -1231,6 +1271,8 @@ static const GfxShader *fail(const char *why, const char *hex) {
 typedef struct {
     const char *stage_name;
     uint32_t length, c1_len;
+    uint32_t skip;                                         // bytes of the program before what the translator reads
+    int sm86;                                              // an NVN2 program (lowered to Maxwell by the translator)
     const uint8_t *c1;
     uint8_t code_hash[32];
     uint8_t key[32];                                       // cache key, or the provisional one with final 0
@@ -1238,13 +1280,50 @@ typedef struct {
     int final;
 } Req;
 
+// NVN2 (Switch 2) programs: a 0xe0-byte control section (magic 0x98761234, version at +4, code size including
+// the 0x80-byte shader program header at +0x38, register count at +0x4c) and SM86 code (128-bit Volta+
+// instructions after a Turing-style 0x80-byte header; compute programs have no header). The translator lowers them
+// to Maxwell (tools/xlate/AmpereLowering.cs, job "sm86"); the code is sent from its first byte and has no c1 part.
+// The control section is the first 0xe0 bytes only: nvn2_control copies them into a zeroed CONTROL_SIZE buffer at
+// the entry points, so the bytes after it (other guest data) stay out of the hashes, stored inputs and jobs.
+#define NVN2_CONTROL_MAGIC 0x98761234u
+#define NVN2_CONTROL_SIZE 0xe0
+static volatile int64_t n_sm86;
+uint64_t gfx_shader_sm86_refused(void) { return (uint64_t)n_sm86; }   // NVN2 programs the translator refused
+
+static int is_nvn2(const uint8_t *control) {
+    uint32_t magic;
+    memcpy(&magic, control, 4);
+    return magic == NVN2_CONTROL_MAGIC;
+}
+
+static const uint8_t *nvn2_control(const uint8_t *control, uint8_t buf[CONTROL_SIZE]) {
+    if (!control || !is_nvn2(control)) return control;
+    memset(buf, 0, CONTROL_SIZE);
+    memcpy(buf, control, NVN2_CONTROL_SIZE);
+    return buf;
+}
+
 static int req_init(Req *r, int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size, const uint8_t *c1,
                     const GfxShaderAnswers *a) {
-    r->stage_name = stage == GFX_STAGE_VS ? "vs" : stage == GFX_STAGE_FS ? "ps" : stage == GFX_STAGE_CS ? "cs" : NULL;
+    r->stage_name = stage == GFX_STAGE_VS ? "vs" : stage == GFX_STAGE_FS ? "ps" : stage == GFX_STAGE_CS ? "cs"
+                  : stage == GFX_STAGE_TS ? "ts" : stage == GFX_STAGE_MS ? "ms" : NULL;
     if (!r->stage_name) return fail("stage is not translated", NULL), 0;
     uint32_t c1_off;
-    memcpy(&c1_off, control + 0x700, 4), memcpy(&r->length, control + 0x704, 4);
-    uint64_t skip = stage == GFX_STAGE_CS ? 0 : CODE_SKIP;
+    r->sm86 = is_nvn2(control);
+    if (r->sm86) {
+        // NVN2: the code (+0x38 bytes), alignment padding, then the c1 constants (jump tables of BRX, compiler
+        // constants) from +0x40 to +0x44. They are hashed and sent with the code.
+        uint32_t size, c1_start, c1_end;
+        memcpy(&size, control + 0x38, 4), memcpy(&c1_start, control + 0x40, 4), memcpy(&c1_end, control + 0x44, 4);
+        r->length = size, c1_off = size;
+        if (c1_start >= size && c1_end >= c1_start && c1_end <= code_size) r->length = c1_end, c1_off = c1_start;
+        r->skip = 0;
+    } else {
+        memcpy(&c1_off, control + 0x700, 4), memcpy(&r->length, control + 0x704, 4);
+        r->skip = stage == GFX_STAGE_CS ? 0 : CODE_SKIP;
+    }
+    uint64_t skip = r->skip;
     if (!code || r->length > code_size || c1_off > r->length || skip >= r->length) return fail("bad control section", NULL), 0;
     r->c1_len = r->length - c1_off;
     r->c1 = c1 ? c1 : code + c1_off;
@@ -1265,6 +1344,30 @@ static void ans_note(const Req *r, int stage, const uint8_t *control, const uint
 static const GfxShader *get_async_one(Req r, int stage, const uint8_t *control, const uint8_t *code,
                                       const GfxShaderAnswers *a, int *pending);
 
+// Keys whose translation failed in this process, so the synchronous path does not send the same program to the
+// translator on every draw (the background path keeps failed keys in X.waits). Open addressing; when full, failures
+// are no longer remembered.
+#define FAILED_N 4096
+static uint8_t failed_keys[FAILED_N][32];
+static uint8_t failed_used[FAILED_N];
+static PlatMutex failed_lock = PLAT_MUTEX_INIT;
+
+static int failed_slot(const uint8_t key[32], int insert) {
+    uint32_t h = (uint32_t)key[0] | (uint32_t)key[1] << 8 | (uint32_t)key[2] << 16;
+    int found = 0;
+    plat_mutex_lock(&failed_lock);
+    for (uint32_t k = 0; k < 64; k++) {
+        uint32_t i = (h + k) % FAILED_N;
+        if (!failed_used[i]) {
+            if (insert) memcpy(failed_keys[i], key, 32), failed_used[i] = 1;
+            break;
+        }
+        if (!memcmp(failed_keys[i], key, 32)) { found = 1; break; }
+    }
+    plat_mutex_unlock(&failed_lock);
+    return found;
+}
+
 static const GfxShader *get_one(const Req *r, int stage, const uint8_t *control, const uint8_t *code,
                                 const GfxShaderAnswers *a) {
     GfxShader *s = mem_find(r->key);
@@ -1272,11 +1375,16 @@ static const GfxShader *get_one(const Req *r, int stage, const uint8_t *control,
     paths();
     if (!cache_dir[0]) return fail("no cache directory", NULL);
     if (r->final && (s = disk_load(r->key, r->iid))) return plat_inc64(&n_hits), mem_insert(s);
-    return translate(r, stage, control, code, a);
+    if (failed_slot(r->key, 0)) return NULL;
+    const GfxShader *t = translate(r, stage, control, code, a);
+    if (!t) failed_slot(r->key, 1);
+    return t;
 }
 
 const GfxShader *gfx_shader_get(int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size,
                                 const uint8_t *c1, const GfxShaderAnswers *a) {
+    uint8_t ctl2[CONTROL_SIZE];
+    control = nvn2_control(control, ctl2);
     Req r;
     if (!req_init(&r, stage, control, code, code_size, c1, a)) return NULL;
     const GfxShader *s = get_one(&r, stage, control, code, a);
@@ -1362,7 +1470,7 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
     if (look && (s = mem_find(look))) return plat_inc64(&n_hits), s;
     if (look && (s = disk_load(look, look_iid))) return plat_inc64(&n_hits), mem_insert(s);
 
-    uint64_t skip = stage == GFX_STAGE_CS ? 0 : CODE_SKIP;
+    uint64_t skip = r->skip;
     char hex[65], code_path[PATH_CAP + 80], spv_path[PATH_CAP + 80], res_path[PATH_CAP + 80];
     key_hex(key, hex);
     mkdir_p(cache_dir);
@@ -1390,6 +1498,7 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
     if (!ok) return fail("translator unavailable", hex);
     if (strncmp(reply, "ok ", 3)) {
         plat_file_delete(spv_path), plat_file_delete(res_path);
+        if (r->sm86) plat_inc64(&n_sm86);
         return fail(reply, hex);
     }
     plat_file_flush(spv_path), plat_file_flush(res_path);   // the translator wrote them; on disk before use or rename
@@ -1489,6 +1598,8 @@ static void xlate_worker(void *arg) {
 const GfxShader *gfx_shader_get_async(int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size,
                                       const GfxShaderAnswers *a, int *pending) {
     *pending = 0;
+    uint8_t ctl2[CONTROL_SIZE];
+    control = nvn2_control(control, ctl2);
     Req r;
     if (!req_init(&r, stage, control, code, code_size, NULL, a)) return NULL;
     const GfxShader *s = get_async_one(r, stage, control, code, a, pending);
@@ -1546,6 +1657,8 @@ static const GfxShader *get_async_one(Req r, int stage, const uint8_t *control, 
 const GfxShader *gfx_shader_await(int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size,
                                   const GfxShaderAnswers *a) {
     int pending;
+    uint8_t ctl2[CONTROL_SIZE];
+    control = nvn2_control(control, ctl2);
     const GfxShader *s = gfx_shader_get_async(stage, control, code, code_size, a, &pending);
     Req r;
     if (!pending || !req_init(&r, stage, control, code, code_size, NULL, a)) return s;
@@ -2079,7 +2192,7 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
     if (n < 0) return 1;
     uint8_t *recs = calloc((size_t)n + 1, PRP_REC);
     static const uint8_t zero[32];
-    size_t u = 0, by[3] = {0}, stages[6] = {0};
+    size_t u = 0, by[3] = {0}, stages[8] = {0};
     Set64 seen = {0};
     for (long long i = 0; recs && i < n; i++) {           // seed records come in priority order: the first id wins
         if (!memcmp(iid[i], zero, 32) || !set_add(&seen, hash8(iid[i]))) continue;

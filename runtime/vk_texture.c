@@ -362,6 +362,11 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     if (!ds && (ff & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if ((d->flags & NVN_TEXTURE_FLAGS_IMAGE) && (ff & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) && samples == 1)
         usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    // NVN2 titles (API 200+) number the texture flags differently: Ocarina's compute targets (the title movie's RGBA8
+    // frames) carry 0x1, NVN1's DISPLAY. Every single-sample colour texture whose format allows it can be a storage
+    // image there, so a compute write into one is never dropped.
+    if (rt_nvn_api_version[0] >= 200 && !ds && (ff & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) && samples == 1)
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     // contact shadows (vk_contact.c) darken the game's B10G11R11 scene colour in place from a compute shader
     if (f.vk == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) && samples == 1 &&
         (ff & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) && w >= 640 && vk_contact_strength())
@@ -670,6 +675,13 @@ static void upload(Tex *e) {
     const nvn_texdesc *d = &t->d;
     int bw, bh, bpb = nvn_fmt_bpb(d->format, &bw, &bh);
     if (!bpb || !t->mem) return;
+    if (!mem_readable(e->pub.addr, e->t.L.size)) {   // a stale slot (the bindless pools look every slot up): no upload;
+        static volatile int32_t n_unmapped;          // a later write to mapped storage uploads it (make_fresh_snap)
+        log_limited(&n_unmapped, "texture %#llx (%llu bytes): storage not mapped; not uploaded",
+                    (unsigned long long)e->pub.addr, (unsigned long long)e->t.L.size);
+        e->uploaded = 1;
+        return;
+    }
     uint64_t p0 = perf_begin(), u0 = kern_now_ns();
     int linear = nvn_tex_is_linear(d), is3d = d->target == NVN_TEXTURE_TARGET_3D, one_d = e->pub.type == VK_IMAGE_TYPE_1D;
     uint32_t levels = linear ? 1 : e->pub.levels, layers = linear ? 1 : e->pub.layers;
@@ -1115,6 +1127,14 @@ void vk_texture_register(int id, const tex_t *t, const view_t *v) {
 
 // The entry slot s resolves to, and the view and has_view a caller gets with it (the slot's, with the descriptor's
 // swizzle when the entry is another descriptor at the same storage). NULL when the slot names no texture.
+// Entry creation budget of slot lookups (vk_texture_create_budget_locked): -1 none. The bindless pools look up every
+// registered slot, and most of a pool is stale descriptors (storage freed or reused); with a budget a lookup creates at
+// most that many entries, only for mapped storage, and notes the slots it left for later (create_deferred).
+static int create_budget = -1, create_deferred;
+
+void vk_texture_create_budget_locked(int n) { create_budget = n, create_deferred = 0; }
+int vk_texture_create_deferred_locked(void) { int d = create_deferred; create_deferred = 0; return d; }
+
 static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
     *view = s->v;
     *has_view = s->has_view;
@@ -1134,7 +1154,11 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
         }
         if (!e) e = any ? any : own;
     }
-    if (!e) e = s->t.mem ? entry_of(&s->t) : NULL;
+    if (!e && s->t.mem) {
+        if (create_budget < 0) e = entry_of(&s->t);
+        else if (!create_budget) create_deferred = 1;
+        else if (mem_readable((uint64_t)(uintptr_t)s->t.mem, s->t.L.size)) e = entry_of(&s->t), create_budget--;
+    }
     // A followed texture is another descriptor at the same storage: its image holds the content, but sampling takes the
     // slot descriptor's swizzle. The UI renders text into RGBA8 and samples it through a (A,A,A,A) descriptor; with the
     // render target's RGBA swizzle the text blur saw R = 1 everywhere and drew solid boxes behind tips and labels.
@@ -1165,6 +1189,8 @@ uint64_t vk_texture_slot_token(int id) {
     return v ? (v >> 16) << 32 | __atomic_load_n(&agen[v & 0xffff], __ATOMIC_ACQUIRE) : 0;
 }
 uint32_t vk_sampler_gen(void) { return __atomic_load_n(&samp_gen, __ATOMIC_RELAXED); }
+int vk_texture_slot_count_locked(void) { return ntslots; }
+int vk_sampler_slot_count_locked(void) { return nsslots; }
 
 const VkTexImage *vk_texture_by_id(int id, view_t *view, int *has_view) {
     lock();

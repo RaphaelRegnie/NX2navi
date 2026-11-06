@@ -8,10 +8,12 @@
 // AAPCS64 registers (host.h arg_x / arg_s / arg_p) and every result returned with ret_x. Command-buffer procs are in
 // nvn_api_cmd.c, the NX2NAVI extension procs in nvn_ext.c.
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "gfx.h"
+#include "cfg.h"
 #include "host.h"
 #include "nvn_api.h"
 #include "nvn_hmap.h"
@@ -188,6 +190,13 @@ static void tex_release(tex_t *o) {
 NVN_API(nvnTextureInitialize) {
     tex_t *o = arg_p(c, 0);
     const tex_builder_t *s = arg_p(c, 1);
+    if (cfg_get("NX2NAVI_LOG_TEX_FLAGS")) {   // diagnosis: each distinct (flags, format) pair once
+        static uint64_t seen[256]; static int n;
+        uint64_t key = (uint64_t)(uint32_t)s->d.flags << 32 | (uint32_t)s->d.format;
+        int known = 0;
+        for (int i = 0; i < n; i++) known |= seen[i] == key;
+        if (!known && n < 256) { seen[n++] = key; rt_log("nvn: texture flags %#x format %#x %ux%u", s->d.flags, s->d.format, s->d.width, s->d.height); }
+    }
     if (o->magic == NVN_TEX_MAGIC && o->serial) {   // initialized again without Finalize: release the old serial
         NVN_LOG("texture %p initialized again without Finalize (serial %llu released)", (void *)o,
                 (unsigned long long)o->serial);
@@ -435,8 +444,10 @@ static int prog_set_shaders(prog_t *o, int n, const NVNshaderData *sd) {
     return 1;
 }
 // NVNboolean nvnProgramSetShaders(NVNprogram *p, int n, const NVNshaderData *sd)
+static void shader_dump(const prog_t *o, int n, const NVNshaderData *sd);
 NVN_API(nvnProgramSetShaders) {
     NVN_BLOCKING();
+    shader_dump(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2));
     ret_x(c, prog_set_shaders(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2)));
 }
 // NVNboolean nvnProgramSetShadersExt(NVNprogram *p, int n, const NVNshaderDataExt *sd): no prototype in nvn.h; the
@@ -459,7 +470,86 @@ NVN_API(nvnProgramSetShadersExt) {
             rt_fatal("nvn: ProgramSetShadersExt: unknown non-zero field %#llx in stage %d", (unsigned long long)sd[i].reserved, i);
         plain[i] = (NVNshaderData){sd[i].data, sd[i].control};
     }
+    shader_dump(o, n, plain);
     ret_x(c, prog_set_shaders(o, n, plain));
+}
+
+// ---------- NVN2 program builder (Switch 2): SetDefaults / SetDevice / SetShaders on a builder, then
+// nvnProgramInitializeFromBuilder(program, builder). No driver reference is available (the NVN2 driver is not in the
+// title's modules), so the signatures are taken to mirror nvnProgramSetShaders: SetShaders(builder, n, shader data).
+// The builder keeps the caller's array pointer, as NVN builders reference their inputs until the object is made.
+// NX2NAVI_SHADER_DUMP=<dir> writes each stage's control section and code there for studying the NVN2 layout.
+typedef struct { uint32_t magic; int32_t n; NVNdevice *dev; const NVNshaderData *sd; } prog_builder_t;
+#define NVN_PROG_BUILDER_MAGIC 0x50524742u   // "BGRP"
+
+static void shader_dump(const prog_t *o, int n, const NVNshaderData *sd) {
+    // Every distinct NVN2 stage number, once (mesh and task programs: which numbers the title uses)
+    for (int i = 0; sd && i < n && i < 8; i++) {
+        static uint32_t seen;
+        const uint8_t *ctl = (const uint8_t *)sd[i].control;
+        uint32_t magic, st;
+        if (!ctl) continue;
+        memcpy(&magic, ctl, 4), memcpy(&st, ctl + 0x54, 4);
+        st >>= 16;
+        if (magic == 0x98761234u && st < 32 && !(__atomic_fetch_or(&seen, 1u << st, __ATOMIC_RELAXED) >> st & 1))
+            rt_log("nvn: first NVN2 program with stage %u (%d stages in the program)", st, n);
+    }
+    const char *dir = cfg_get("NX2NAVI_SHADER_DUMP");
+    if (!dir || !*dir) return;
+    static volatile int32_t count;
+    int k = __atomic_fetch_add(&count, 1, __ATOMIC_RELAXED);
+    if (k >= 20000) return;   // the gameplay programs too (mesh and task ones, and many draws, come late)
+    if (k == 0) {
+        const uint64_t *raw = (const uint64_t *)sd;
+        rt_log("nvn: shader dump: first program %p, %d stages, raw shader data %#llx %#llx %#llx %#llx %#llx %#llx",
+               (const void *)o, n, (unsigned long long)raw[0], (unsigned long long)raw[1], (unsigned long long)raw[2],
+               (unsigned long long)raw[3], (unsigned long long)raw[4], (unsigned long long)raw[5]);
+    }
+    for (int i = 0; i < n; i++) {
+        char path[1100];
+        snprintf(path, sizeof path, "%s/p%04d_s%d.ctl", dir, k, i);
+        if (sd[i].control) plat_file_write(path, sd[i].control, 0x880);
+        const pool_t *p = nvn_pool_find(sd[i].data, 1);
+        if (p && p->mem && !nvn_gpu_only(sd[i].data)) {
+            uint64_t end = (uint64_t)(uintptr_t)p->mem + p->size, len = end - sd[i].data;
+            if (len > 0x40000) len = 0x40000;
+            snprintf(path, sizeof path, "%s/p%04d_s%d.code", dir, k, i);
+            plat_file_write(path, (const void *)(uintptr_t)sd[i].data, (size_t)len);
+        }
+    }
+}
+
+// void nvnProgramBuilderSetDefaults(NVNprogramBuilder *b)
+NVN_API(nvnProgramBuilderSetDefaults) {
+    *(prog_builder_t *)arg_p(c, 0) = (prog_builder_t){NVN_PROG_BUILDER_MAGIC, 0, NULL, NULL};
+}
+// void nvnProgramBuilderSetDevice(NVNprogramBuilder *b, NVNdevice *d)
+NVN_API(nvnProgramBuilderSetDevice) { ((prog_builder_t *)arg_p(c, 0))->dev = arg_p(c, 1); }
+// void nvnProgramBuilderSetShaders(NVNprogramBuilder *b, int n, const NVNshaderData *sd)
+NVN_API(nvnProgramBuilderSetShaders) {
+    prog_builder_t *b = arg_p(c, 0);
+    b->n = (int32_t)arg_x(c, 1);
+    b->sd = arg_p(c, 2);
+}
+// NVNboolean nvnProgramInitializeFromBuilder(NVNprogram *p, const NVNprogramBuilder *b)
+NVN_API(nvnProgramInitializeFromBuilder) {
+    NVN_BLOCKING();
+    prog_t *o = arg_p(c, 0);
+    const prog_builder_t *b = arg_p(c, 1);
+    if (!o || !b || b->magic != NVN_PROG_BUILDER_MAGIC) {
+        rt_log("nvn: ProgramInitializeFromBuilder with builder %p (not set up by SetDefaults)", (const void *)b);
+        ret_x(c, 0);
+        return;
+    }
+    const char *mode = cfg_get("NX2NAVI_NVN2_PROGRAMS");   // =off: refuse every program (diagnosis)
+    if (mode && !strcmp(mode, "off")) {
+        ret_x(c, 0);
+        return;
+    }
+    memset(o, 0, sizeof *o);
+    o->magic = NVN_PROG_MAGIC;
+    shader_dump(o, b->n, b->sd);
+    ret_x(c, prog_set_shaders(o, b->n, b->sd));
 }
 
 // ---------- State objects: packed in place (nvn_obj.h)

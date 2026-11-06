@@ -966,6 +966,13 @@ void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
     fault_install();
 }
 
+void plat_crash_context(const char *s) { (void)s; }   // the Windows crash notes only
+
+int plat_frame_capture(PlatJmp *out, int (*want)(uintptr_t rip, void *arg), void *arg) {   // not on Linux yet
+    (void)out, (void)want, (void)arg;
+    return 0;
+}
+
 void plat_crash_hook(void (*fn)(const PlatCrash *c)) {
     crash_fn = fn;
     fault_install();

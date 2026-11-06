@@ -712,6 +712,31 @@ NVN_API(nvnCommandBufferReportCounter) {
 NVN_API(nvnCommandBufferCopyBufferToBuffer) {
     *REC(cmd_of(c), OP_COPY_B2B, p_copy_b2b) = (p_copy_b2b){arg_x(c, 1), arg_x(c, 2), arg_x(c, 3)};
 }
+// NVN2: void nvnCommandBufferPushComputeConstants(NVNcommandBuffer *cmd, offset, ?, size_t size, const void *data):
+// constants the compute stage reads from its driver bank (c0, from byte 0x10), copied at record time. Arguments as the
+// game calls it (Ocarina main+0x20f811c: x1 0, x2 0, x3 0x40, x4 the data); x1 is taken as the byte offset.
+#define PUSH_CC_MAX 1024
+NVN_API(nvnCommandBufferPushComputeConstants) {
+    uint64_t off = arg_x(c, 1), n = arg_x(c, 3);
+    const void *data = arg_p(c, 4);
+    static int logged;
+    if (arg_x(c, 2) && !logged++) NVN_LOG("PushComputeConstants: second argument %#llx not understood", (unsigned long long)arg_x(c, 2));
+    static struct { uint64_t a1, a2, a3; } seen[24];   // diagnosis: the argument shapes the game uses
+    static int nseen;
+    int known = 0;
+    for (int i = 0; i < nseen; i++) known |= seen[i].a1 == off && seen[i].a2 == arg_x(c, 2) && seen[i].a3 == n;
+    if (!known && nseen < 24) {
+        seen[nseen++] = (typeof(seen[0])){off, arg_x(c, 2), n};
+        rt_log("nvn: PushComputeConstants: x1 %#llx x2 %#llx x3 %#llx x4 %p x5 %#llx x6 %#llx", (unsigned long long)off,
+                (unsigned long long)arg_x(c, 2), (unsigned long long)n, data, (unsigned long long)arg_x(c, 5),
+                (unsigned long long)arg_x(c, 6));
+    }
+    if (!data || off + n > PUSH_CC_MAX) { NVN_LOG("PushComputeConstants: %#llx bytes at %#llx dropped", (unsigned long long)n, (unsigned long long)off); return; }
+    p_push_cc *r = rec(cmd_of(c), OP_PUSH_CC, offsetof(p_push_cc, data) + n);
+    r->offset = (uint32_t)off;
+    r->size = (uint32_t)n;
+    memcpy(r->data, data, n);
+}
 // void nvnCommandBufferUpdateUniformBuffer(NVNcommandBuffer *cmd, NVNbufferAddress buffer, size_t buffer_size,
 // ptrdiff_t offset, size_t size, const void *data): the data is copied at record time (the caller may change it
 // afterwards) and written into the buffer at replay
@@ -1023,6 +1048,23 @@ NVN_API(nvnCommandBufferDispatchCompute) {
 NVN_API(nvnCommandBufferDispatchComputeIndirect) {
     *REC(cmd_of(c), OP_DISPATCH_IND, p_dispatch_ind) = (p_dispatch_ind){arg_x(c, 1), c->x[30]};
 }
+// NVN2: void nvnCommandBufferDrawMeshTasks(NVNcommandBuffer *cmd, int first, int count): count task (or, without a
+// task stage, mesh) workgroups of the bound program from index first (as the game calls it: x1 0, x2 12).
+NVN_API(nvnCommandBufferDrawMeshTasks) {
+    *REC(cmd_of(c), OP_DRAW_MESH, p_draw_mesh) = (p_draw_mesh){(uint32_t)arg_x(c, 1), (uint32_t)arg_x(c, 2), c->x[30]};
+}
+// NVN2: nvnCommandBufferDrawMeshTasksIndirect(cmd, NVNbufferAddress indirect, x2, x3, x4): the workgroup count is read
+// by the GPU at indirect. The game passes x2 1, x3 the same address, x4 0x4040; taken as one draw.
+NVN_API(nvnCommandBufferDrawMeshTasksIndirect) {
+    *REC(cmd_of(c), OP_DRAW_MESH_IND, p_draw_mesh_ind) =
+        (p_draw_mesh_ind){arg_x(c, 1), arg_x(c, 3), (uint32_t)arg_x(c, 2), (uint32_t)arg_x(c, 4), c->x[30]};
+}
+// NVN2: nvnCommandBufferSetGeometryProcessingMode(cmd, mode): mode 1 before mesh draws. The replay picks the stages
+// from the bound program, so nothing is recorded.
+NVN_API(nvnCommandBufferSetGeometryProcessingMode) {
+    static int logged;
+    if (!logged++) NVN_LOG("SetGeometryProcessingMode(%llu): taken from the bound program", (unsigned long long)arg_x(c, 1));
+}
 // void nvnCommandBufferClearBuffer(NVNcommandBuffer *cmd, NVNbufferAddress addr, size_t size, uint32_t value)
 NVN_API(nvnCommandBufferClearBuffer) {
     *REC(cmd_of(c), OP_CLEAR_BUF, p_clear_buf) = (p_clear_buf){arg_x(c, 1), arg_x(c, 2), (uint32_t)arg_x(c, 3), 0};
@@ -1103,6 +1145,15 @@ NVN_API(nvnCommandBufferDownsample) {
 }
 // void nvnCommandBufferSetCopyRowStride(NVNcommandBuffer *cmd, ptrdiff_t stride)
 NVN_API(nvnCommandBufferSetCopyRowStride) { REC(cmd_of(c), OP_COPY_STRIDE, p_copy_stride)->stride = (int64_t)arg_x(c, 1); }
+// void nvnCommandBufferSetCopyImageStride(NVNcommandBuffer *cmd, ptrdiff_t stride): the byte distance between the
+// 2D slices of a buffer side in 3D / array buffer <-> texture copies. Not replayed yet: the Vulkan copies keep
+// tightly packed slices (bufferImageHeight 0). TODO: carry it as bufferImageHeight = stride / row stride.
+NVN_API(nvnCommandBufferSetCopyImageStride) {
+    static volatile int32_t logged;
+    int64_t stride = (int64_t)arg_x(c, 1);
+    if (stride && !plat_xchg32(&logged, 1))
+        rt_log("nvn: copy image stride %lld not replayed (slices assumed tightly packed)", (long long)stride);
+}
 // void nvnCommandBufferSetBlendColor(NVNcommandBuffer *cmd, const float *rgba)
 NVN_API(nvnCommandBufferSetBlendColor) { memcpy(REC(cmd_of(c), OP_BLEND_COLOR, p_blend_color)->rgba, arg_p(c, 1), 16); }
 
@@ -1215,7 +1266,7 @@ const char *nvn_op_name(uint32_t op) {
         "BIND_VSTREAM", "BIND_VBUF", "BIND_UBO", "BIND_SSBO", "BIND_TEX", "BIND_SAMP", "STENCIL", "POLY_OFFSET", "DRAW",
         "DRAW_IDX", "DISPATCH", "BARRIER", "SET_TEX_POOL", "SET_SAMP_POOL", "COPY_B2T", "COPY_STRIDE", "BLEND_COLOR",
         "COPY_T2B", "BIND_IMG", "COPY_T2T", "RESET_COUNTER", "CLEAR_TEX", "DEPTH_CLAMP", "RENDER_ENABLE",
-        "RASTER_DISCARD", "RENDER_COND", "PRIM_RESTART", "DRAW_IDX_IND", "DISPATCH_IND", "CLEAR_BUF",
+        "RASTER_DISCARD", "RENDER_COND", "PRIM_RESTART", "DRAW_IDX_IND", "DISPATCH_IND", "CLEAR_BUF", "PUSH_CC", "DRAW_MESH", "DRAW_MESH_IND",
     };
     _Static_assert(sizeof names / sizeof *names == OP_COUNT_, "one name per op");
     return op < OP_COUNT_ ? names[op] : "?";

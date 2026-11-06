@@ -20,7 +20,11 @@ static uint8_t rnd8(void) {
 }
 
 // Byte offset inside a 64 x 8 GOB from the bit layout: x[3:0] -> 0-3, y[0] -> 4, x[4] -> 5, y[2:1] -> 6-7, x[5] -> 8.
+// Bit by bit, independent of tex_deswizzle.c's arithmetic: Tegra X1, or Switch 2 for NVN2 titles (the order
+// tex_deswizzle.c describes).
 static unsigned gob_bits(unsigned x, unsigned y) {
+    if (rt_nvn_api_version[0] >= 200)
+        return (x & 15) | (y & 3) << 4 | (x >> 4 & 1) << 6 | (y >> 2 & 1) << 7 | (x >> 5 & 1) << 8;
     return (x & 15) | (y & 1) << 4 | (x >> 4 & 1) << 5 | (y >> 1 & 3) << 6 | (x >> 5 & 1) << 8;
 }
 

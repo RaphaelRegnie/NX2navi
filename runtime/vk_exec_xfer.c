@@ -96,17 +96,68 @@ static void write_counter(uint64_t addr, uint64_t counter) {
     memcpy((void *)(uintptr_t)addr, rec, sizeof rec);
 }
 
+// Reports other than samples passed (timestamps; the statistics counters are not modelled) write a counter of 0. The
+// counter word matters: Ocarina writes {1, 0} into a record from the CPU, reports TIMESTAMP_TOP into it and gates
+// clears on it differing from a zero record (mode 1), clears that must not run.
+static void pending_written(uint64_t addr, uint64_t seq);   // below, with the pending table
+
+typedef struct { uint64_t addr, seq; } CounterWrite;
+
 static void counter_cb(void *arg) {
-    uint64_t *addr = arg;
-    write_counter(*addr, 0);
-    free(addr);
+    CounterWrite *w = arg;
+    write_counter(w->addr, 0);
+    pending_written(w->addr, w->seq);
+    free(w);
 }
 
 // Reports queued by the replay that the GPU has not finished. The condition of RENDER_COND reads a timestamp one as 0
 // and a samples-passed one as unknown.
-#define PENDING 256
-static struct { uint64_t addr, fence; int unknown; } pending[PENDING];
-static unsigned pending_head;
+// The newest report per address, in a table probed over PENDING_PROBE slots from the address's hash: Ocarina issues
+// hundreds of occlusion reports a frame and conditions draws on them in the same frame, so a ring of the last 256
+// reports had dropped the report a condition referred to, which then read an older query's count (often 0) and culled
+// visible ground and trees. It also rotates through tens of thousands of record addresses, so an entry whose value is
+// in memory (written >= seq: a condition reads memory anyway) gives its slot to a new address; a table that only grew
+// filled up after a minute and conditions on the newer records read the CPU's 1 again.
+#define PENDING (1u << 16)
+#define PENDING_PROBE 32
+// seq: the newest report to addr; written: the newest whose value the completion thread has put in guest memory. A
+// report counts as pending until then, not until its fence passes: the callback runs after the fence, and in between
+// the record still held what the CPU wrote (Ocarina re-arms its condition records with 1 for the next frame), so a
+// condition read 1 where the GPU had written 0, a depth clear ran after the depth copy and frames showed only sky.
+typedef struct { uint64_t addr, seq; volatile uint64_t written; int unknown, type; } Pending;
+static Pending pending[PENDING];
+static uint64_t report_seq;
+
+static Pending *pending_slot(uint64_t addr, int insert);
+
+// Completion thread: the value of report seq to addr is in guest memory.
+static void pending_written(uint64_t addr, uint64_t seq) {
+    Pending *e = pending_slot(addr, 0);
+    if (!e) return;
+    uint64_t w = __atomic_load_n(&e->written, __ATOMIC_RELAXED);
+    while (w < seq && !__atomic_compare_exchange_n(&e->written, &w, seq, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
+}
+
+// Lookups run on the replay thread and the completion thread; only the replay thread inserts.
+static Pending *pending_slot(uint64_t addr, int insert) {
+    if (!addr) return NULL;
+    uint32_t i = (uint32_t)((addr * 0x9E3779B97F4A7C15ull) >> 48) & (PENDING - 1);
+    Pending *free_ = NULL, *victim = NULL;
+    for (unsigned n = 0; n < PENDING_PROBE; n++, i = (i + 1) & (PENDING - 1)) {
+        Pending *e = &pending[i];
+        uint64_t a = __atomic_load_n(&e->addr, __ATOMIC_ACQUIRE);
+        if (a == addr) return e;
+        if (!insert) continue;
+        if (!a) { if (!free_) free_ = e; continue; }
+        if (__atomic_load_n(&e->written, __ATOMIC_ACQUIRE) >= e->seq && (!victim || e->seq < victim->seq)) victim = e;
+    }
+    Pending *e = free_ ? free_ : victim;
+    if (!e) return NULL;   // every probed entry still has a report in flight
+    e->seq = 0, e->unknown = 0, e->type = -1;
+    __atomic_store_n(&e->written, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&e->addr, addr, __ATOMIC_RELEASE);
+    return e;
+}
 
 // ---- occlusion counts (samples passed)
 //
@@ -137,7 +188,7 @@ static uint32_t oq_nseg, oq_capseg;
 static int oq_lost;                      // replay: the segment missed a draw (ring full)
 static uint64_t oq_count;                // completion thread: samples since the last reset
 
-typedef struct { uint64_t addr; int reset, lost; uint32_t n; uint32_t q[]; } OqSegment;
+typedef struct { uint64_t addr, seq; int reset, lost; uint32_t n; uint32_t q[]; } OqSegment;
 
 static int oq_ready(void) {
     if (oq_state) return oq_state > 0;
@@ -231,7 +282,7 @@ static void oq_cb(void *arg) {
     else {
         oq_count += sum;
         if (s->lost && !oq_count) oq_count = 1;
-        if (s->addr) write_counter(s->addr, oq_count);
+        if (s->addr) write_counter(s->addr, oq_count), pending_written(s->addr, s->seq);
     }
     free(s);
 }
@@ -241,7 +292,7 @@ static void oq_segment(VkExec *ex, uint64_t addr, int reset) {
     oq_close(ex);
     OqSegment *s = malloc(sizeof *s + sizeof *s->q * oq_nseg);
     if (!s) rt_fatal("vk: out of memory");
-    s->addr = addr, s->reset = reset, s->lost = oq_lost, s->n = oq_nseg;
+    s->addr = addr, s->seq = report_seq, s->reset = reset, s->lost = oq_lost, s->n = oq_nseg;
     memcpy(s->q, oq_seg, sizeof *s->q * oq_nseg);
     oq_nseg = 0, oq_lost = 0;
     vk_completion_add(ex->fence, oq_cb, s);
@@ -274,6 +325,7 @@ static void signal_event(VkExec *ex, const p_signal_event *p) {
 
 static void report_counter(VkExec *ex, const p_report_counter *p) {
     int samples = p->type == NVN_COUNTER_TYPE_SAMPLES_PASSED && oq_ready();
+    report_seq++;   // before oq_report / counter_cb take it
     if (nvn_gpu_only(p->addr)) {   // CPU-invisible pool: no host memory behind it
         if (samples) oq_report(ex, 0);
         return;
@@ -284,28 +336,34 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
     vk_mem_count(m.cls, VK_MUSE_GPU_WRITE, sizeof(NVNcounterData));
     if (samples) oq_report(ex, p->addr);
     else {
-        uint64_t *a = malloc(sizeof *a);
+        CounterWrite *a = malloc(sizeof *a);
         if (!a) rt_fatal("vk: out of memory");
-        *a = p->addr;
+        *a = (CounterWrite){p->addr, report_seq};
         vk_completion_add(ex->fence, counter_cb, a);
     }
-    pending[pending_head++ % PENDING] = (typeof(pending[0])){p->addr, ex->fence, samples};
+    Pending *e = pending_slot(p->addr, 1);
+    if (e) e->seq = report_seq, e->unknown = samples, e->type = (int)p->type;
+    else LOG_ONCE("vk: a counter report's table neighbourhood is all in flight: conditions on %#llx read memory",
+                  (unsigned long long)p->addr);
 }
 
 // ---- conditional rendering
 
-// 1: *v read, 0: not readable, 2: a samples-passed report not done yet (unknown)
+// 1: *v read, 0: not readable, 2: a samples-passed report not in memory yet (unknown)
 static int counter_word(uint64_t addr, uint64_t *v) {
-    uint64_t done = vk_sync_fence_done();
-    for (unsigned k = 1; k <= PENDING; k++) {   // newest first: the last report to addr decides
-        unsigned i = (pending_head - k) % PENDING;
-        if (pending[i].addr == addr && pending[i].fence > done) return *v = 0, pending[i].unknown ? 2 : 1;
-    }
+    const Pending *e = pending_slot(addr, 0);   // the last report to addr decides
+    if (e && __atomic_load_n(&e->written, __ATOMIC_ACQUIRE) < e->seq) return *v = 0, e->unknown ? 2 : 1;
     VkMemSpan m;
     if (nvn_gpu_only(addr) || !vk_mem_resolve(addr, sizeof *v, &m)) return 0;
     memcpy(v, (const void *)(uintptr_t)addr, sizeof *v);
     vk_mem_count(m.cls, VK_MUSE_CPU_READ, sizeof *v);
     return 1;
+}
+
+// The counter type of the newest report to addr the ring still holds, -1 when there is none (NX2NAVI_LOG_RCOND).
+static int last_type(uint64_t addr) {
+    const Pending *e = pending_slot(addr, 0);
+    return e ? e->type : -1;
 }
 
 static int cond_enabled(const p_render_cond *c) {
@@ -316,7 +374,24 @@ static int cond_enabled(const p_render_cond *c) {
         return 1;
     }
     if (rx == 2 || ry == 2) return 1;   // a samples-passed count not done yet
-    return c->mode == 0 ? x == y : x != y;
+    int on = c->mode == 0 ? x == y : x != y;
+    // NX2NAVI_LOG_RCOND=1: one condition in 499 (up to 300 lines), on or off, with the counter types last reported there
+    static int log_on = -1, nlog;
+    static unsigned ncond;
+    if (log_on < 0) log_on = rt_knob("LOG_RCOND", "0");
+    if (log_on && ncond++ % 499 == 0 && nlog < 300) {
+        nlog++;
+        // (pending: the report value has not reached guest memory yet)
+        int px = 0, py = 0;   // the word came from a report not done yet (forced to 0) rather than memory
+        const Pending *ex_ = pending_slot(c->addr, 0), *ey_ = pending_slot(c->addr + 16, 0);
+        px = ex_ && ex_->written < ex_->seq, py = ey_ && ey_->written < ey_->seq;
+        const uint64_t *m = (const uint64_t *)(uintptr_t)c->addr;
+        rt_log("vk: render condition %s at %#llx mode %d: %llu (type %d%s) vs %llu (type %d%s); memory %llx %llx %llx %llx",
+               on ? "on" : "off", (unsigned long long)c->addr, c->mode, (unsigned long long)x, last_type(c->addr), px ? ", pending" : "",
+               (unsigned long long)y, last_type(c->addr + 16), py ? ", pending" : "", (unsigned long long)m[0],
+               (unsigned long long)m[1], (unsigned long long)m[2], (unsigned long long)m[3]);
+    }
+    return on;
 }
 
 // ---- textures

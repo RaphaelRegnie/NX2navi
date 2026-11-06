@@ -262,6 +262,34 @@ __asm__(".text\n"
         "    movl $1, %eax\n"
         "    jmpq *72(%rcx)\n");
 
+int plat_frame_capture(PlatJmp *out, int (*want)(uintptr_t rip, void *arg), void *arg) {
+    CONTEXT c;
+    RtlCaptureContext(&c);
+    ULONG_PTR low, high;
+    GetCurrentThreadStackLimits(&low, &high);
+    for (int i = 0; i < 256 && c.Rsp >= low && c.Rsp + 8 <= high; i++) {
+        DWORD64 img;
+        RUNTIME_FUNCTION *fe = RtlLookupFunctionEntry(c.Rip, &img, NULL);
+        if (fe) {
+            void *data;
+            DWORD64 frame;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, img, c.Rip, fe, &c, &data, &frame, NULL);
+        } else {   // a leaf: the return address is on top of the stack
+            c.Rip = *(const DWORD64 *)c.Rsp;
+            c.Rsp += 8;
+        }
+        if (!c.Rip) return 0;
+        if (!want((uintptr_t)c.Rip, arg)) continue;
+        out->gpr[0] = c.Rbx, out->gpr[1] = c.Rbp, out->gpr[2] = c.Rdi, out->gpr[3] = c.Rsi;
+        out->gpr[4] = c.R12, out->gpr[5] = c.R13, out->gpr[6] = c.R14, out->gpr[7] = c.R15;
+        out->gpr[8] = c.Rsp, out->gpr[9] = c.Rip;
+        __asm__ volatile("stmxcsr %0\n\tfnstcw %1" : "=m"(out->mxcsr), "=m"(out->fpcw));
+        memcpy(out->xmm, &c.Xmm6, 160);   // xmm6-xmm15, consecutive in CONTEXT
+        return 1;
+    }
+    return 0;
+}
+
 int plat_thread_spawn(PlatThreadFn fn, void *arg, const char *name, size_t stack) {
     PlatThread *t = plat_thread_new_ex(fn, arg, name, stack);
     if (t) plat_thread_detach(t);
@@ -626,8 +654,33 @@ void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
 
 static void (*crash_fn)(const PlatCrash *c);
 
+// A line written straight to the standard error handle, for the crash path: no C runtime buffering or locks.
+static const char *image_name(const char *base);
+static __thread const char *crash_ctx;
+void plat_crash_context(const char *s) { crash_ctx = s; }
+static void raw_note(const char *tag, DWORD code, uintptr_t rip, uintptr_t addr) {
+    char b[256];
+    void *base = NULL;
+    RtlPcToFileHeader((void *)rip, &base);
+    ULONG_PTR lo = 0, hi = 0;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    int n = snprintf(b, sizeof b, "[host] %s: exception %#lx at %p (%s+%#llx), address %p, thread %lu, stack %llu KiB reserved\n", tag,
+                     (unsigned long)code, (void *)rip, base ? image_name(base) : "no module",
+                     (unsigned long long)(rip - (uintptr_t)base), (void *)addr, (unsigned long)GetCurrentThreadId(),
+                     (unsigned long long)(hi - lo) >> 10);
+    DWORD w;
+    if (n > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), b, (DWORD)n, &w, NULL);
+    if (crash_ctx) {
+        n = snprintf(b, sizeof b, "[host] %s: the thread was %s\n", tag, crash_ctx);
+        if (n > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), b, (DWORD)n, &w, NULL);
+    }
+}
+
 static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_ILLEGAL_INSTRUCTION)
+        raw_note("crash_veh", code, (uintptr_t)ep->ContextRecord->Rip,
+                 ep->ExceptionRecord->NumberParameters >= 2 ? (uintptr_t)ep->ExceptionRecord->ExceptionInformation[1] : 0);
     const char *what = code == EXCEPTION_ACCESS_VIOLATION ? "access violation"
                      : code == EXCEPTION_ILLEGAL_INSTRUCTION ? "illegal instruction"
                      : code == EXCEPTION_INT_DIVIDE_BY_ZERO ? "integer division by zero"
@@ -643,6 +696,13 @@ static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {
     PlatCrash c = {what, (uint32_t)code, rip, rip - (uintptr_t)mi.lpBaseOfDll, -1, 0};
     if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
         c.access = (int)ep->ExceptionRecord->ExceptionInformation[0], c.addr = ep->ExceptionRecord->ExceptionInformation[1];
+    {   // the faulting host stack, so the report can name the runtime frame that took it
+        void *f[32];
+        USHORT n = RtlCaptureStackBackTrace(0, 32, f, NULL);
+        for (USHORT i = 0; i < n && c.nframes < (int)(sizeof c.frames / sizeof *c.frames); i++)
+            if ((uintptr_t)f[i] - (uintptr_t)mi.lpBaseOfDll < mi.SizeOfImage)
+                c.frames[c.nframes++] = (uintptr_t)f[i];
+    }
     crash_fn(&c);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -708,6 +768,7 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     const EXCEPTION_RECORD *er = ep->ExceptionRecord;
     DWORD code = er->ExceptionCode;
     uintptr_t rip = (uintptr_t)ep->ContextRecord->Rip;
+    raw_note("crash_filter", code, rip, er->NumberParameters >= 2 ? (uintptr_t)er->ExceptionInformation[1] : 0);
     PlatCrash c = {code == EXCEPTION_ACCESS_VIOLATION        ? "access violation"
                    : code == EXCEPTION_ILLEGAL_INSTRUCTION   ? "illegal instruction"
                    : code == EXCEPTION_INT_DIVIDE_BY_ZERO    ? "integer division by zero"
@@ -754,6 +815,7 @@ void plat_crash_hook(void (*fn)(const PlatCrash *c)) {
 // A fresh process gets a fresh layout: Windows places DLLs, heaps and thread stacks at random addresses. The parent
 // waits and exits with the child's code.
 void plat_reexec(void) {
+    fprintf(stderr, "[host] memory: a fixed region is taken; re-running the process\n");
     fflush(stdout);
     fflush(stderr);
     STARTUPINFOW si = {.cb = sizeof si};

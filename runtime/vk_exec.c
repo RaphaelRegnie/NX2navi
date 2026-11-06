@@ -739,8 +739,21 @@ static void clear_attachment(VkExec *ex, const VkClearAttachment *a) {
     ex->fb_dirty |= a->aspectMask & VK_IMAGE_ASPECT_COLOR_BIT ? 1u << a->colorAttachment : 0x100u;
 }
 
+// NX2NAVI_LOG_RCOND=1: clears issued under a render condition (the first 400), run or skipped, with their target.
+static void clear_cond_log(const VkExec *ex, const char *what, int index) {
+    static int on = -1, n;
+    if (on < 0) on = rt_knob("LOG_RCOND", "0");
+    if (!on || !ex->has_render_cond || n >= 400) return;
+    n++;
+    const VkExecTarget *t = index < 0 ? &ex->depth : index < (int)ex->pass_ncolor ? &ex->color[index] : NULL;
+    rt_log("vk: %s clear %d under the condition at %#llx (mode %d): %s, target %ux%u", what, index,
+           (unsigned long long)ex->render_cond.addr, ex->render_cond.mode, ex->render_disabled ? "skipped" : "run",
+           t ? t->width : 0, t ? t->height : 0);
+}
+
 static void clear_color(VkExec *ex, const p_clear_color *c) {
     vk_exec_frame.clears++;
+    clear_cond_log(ex, "colour", c->index);
     if (ex->render_disabled) return;
     resolve_rt(ex);
     int i = c->index;
@@ -771,6 +784,7 @@ static void clear_color(VkExec *ex, const p_clear_color *c) {
 }
 
 static void clear_ds(VkExec *ex, const p_clear_ds *c) {
+    clear_cond_log(ex, "depth", -1);
     if (ex->render_disabled) return;
     resolve_rt(ex);
     const VkExecTarget *t = &ex->depth;
@@ -908,7 +922,8 @@ static void walk(VkExec *ex, const op_hdr *h, int depth) {
             if (h->op == OP_DRAW || h->op == OP_DRAW_IDX || h->op == OP_DRAW_IDX_IND) vk_exec_frame.draws_seen++, split_draws++;
             if (h->op == OP_DISPATCH || h->op == OP_DISPATCH_IND) vk_exec_frame.dispatches++, split_draws++;
         case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
-        case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG:
+        case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_PUSH_CC:
+        case OP_DRAW_MESH: case OP_DRAW_MESH_IND:
             vk_exec_op_draw(ex, h->op, a);
             break;
         case OP_COPY_B2B: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX:

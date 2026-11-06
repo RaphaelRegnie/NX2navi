@@ -127,6 +127,12 @@ __attribute__((noinline)) static void hostfn_tracked(Cpu *c, GuestFn fn) {
     int *d = kern_host_depth(t);
     __atomic_store_n(d, *d + 1, __ATOMIC_RELAXED);
     fn(c);
+    // fn may have switched fibers (SwitchToFiber is a host call) and this context may resume on another OS thread:
+    // the fiber switch moved this context's depth to that thread, whose RtThread the fiber's Cpu now names
+    if (c->thread != t) {
+        t = c->thread;
+        d = kern_host_depth(t);
+    }
     int n = *d - 1;
     __atomic_store_n(d, n, __ATOMIC_RELAXED);
     if (!n && kern_preempt_pending(t)) kern_host_left(t);

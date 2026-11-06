@@ -78,6 +78,11 @@ typedef struct { jmp_buf b; } PlatJmp;
 #define plat_jmp_save(j) setjmp((j)->b)
 #define plat_jmp_go(j) longjmp((j)->b, 1)
 #endif
+// The host state of a caller further up this thread's stack, as it will be when the call it is making returns: the
+// stack is unwound frame by frame (from the caller of this function) until want(return address, arg) accepts one, and
+// that frame's callee-saved registers, stack pointer and return address go to *out for plat_jmp_go, which then makes
+// that call return a second time (eax 1). 1 on success, 0 when no frame is accepted (or on a platform without it).
+int plat_frame_capture(PlatJmp *out, int (*want)(uintptr_t rip, void *arg), void *arg);
 // Scheduling priority, Windows' seven levels: of the calling thread, or of t. On Linux a thread lowered without the
 // right to raise its priority again (CAP_SYS_NICE, or an RLIMIT_NICE of 20) could never return to normal, and the
 // runtime lowers threads that later take shared locks at normal priority; without that right every change is skipped
@@ -239,6 +244,9 @@ typedef struct {
     const char *module;        // the module holding rip: NULL for this executable, "" for none (a jump to address 0)
 } PlatCrash;
 void plat_crash_hook(void (*fn)(const PlatCrash *c));
+// What this thread is doing, named by the crash notes (a stack overflow leaves no room for the full report); NULL
+// clears it. s must stay valid until it is cleared.
+void plat_crash_context(const char *s);
 int plat_mem_read(uint64_t addr, void *out, size_t n);    // copies n bytes, 0 instead of faulting on unmapped memory
 int plat_mem_readable(uint64_t addr, uint64_t n);         // every page of [addr, addr + n) can be read; no fault
 void *plat_aligned_alloc(size_t size, size_t align);      // free with plat_aligned_free; NULL on failure

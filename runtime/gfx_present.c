@@ -562,6 +562,148 @@ void gfx_fit_rect(int cw, int ch, int dw, int dh, int out[4]) {
     out[0] = (dw - out[2]) / 2, out[1] = (dh - out[3]) / 2;
 }
 
+// ---- Movie overlay (ov_movie2.c): the latest decoded movie frame goes over the game image, fit to the window
+// with black bars, while frames keep coming (GFX_MOVIE_HOLD_NS after the last one it disappears). It made movies
+// visible before the game's own shaders translated; now the game draws them itself (its YUV compute pass, then the
+// upscaler fallback of vk_exec_draw.c), under its menus, so the overlay is off unless NX2NAVI_MOVIE_OVERLAY=1. One staging buffer per frame in flight: the CPU writes slot i only after
+// that slot's fence (the present waits it before recording), the GPU copies it into one RGBA8 image.
+#define GFX_MOVIE_HOLD_NS 400000000ull
+static PlatMutex g_mv_lock = PLAT_MUTEX_INIT;
+static uint8_t *g_mv_rgba;
+static int g_mv_w, g_mv_h;
+static uint64_t g_mv_ns, g_mv_serial;
+static VkBuffer g_mvb[FRAMES];
+static VmaAllocation g_mva[FRAMES];
+static void *g_mvp[FRAMES];
+static VkDeviceSize g_mvsz[FRAMES];
+static uint64_t g_mv_slot_serial[FRAMES];
+static VkImage g_mvi;
+static VmaAllocation g_mvia;
+static int g_mvi_w, g_mvi_h;
+
+void gfx_movie_frame(const uint8_t *rgba, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    plat_mutex_lock(&g_mv_lock);
+    size_t need = (size_t)w * h * 4;
+    if (w != g_mv_w || h != g_mv_h || !g_mv_rgba) {
+        free(g_mv_rgba);
+        g_mv_rgba = malloc(need);
+        g_mv_w = g_mv_rgba ? w : 0, g_mv_h = g_mv_rgba ? h : 0;
+    }
+    if (g_mv_rgba) {
+        memcpy(g_mv_rgba, rgba, need);
+        g_mv_ns = plat_now_ns();
+        g_mv_serial++;
+    }
+    plat_mutex_unlock(&g_mv_lock);
+}
+
+void gfx_movie_frame_own(uint8_t *rgba, int w, int h) {
+    if (w <= 0 || h <= 0 || !rgba) {
+        free(rgba);
+        return;
+    }
+    plat_mutex_lock(&g_mv_lock);
+    uint8_t *old = g_mv_rgba;
+    g_mv_rgba = rgba;
+    g_mv_w = w, g_mv_h = h;
+    g_mv_ns = plat_now_ns();
+    g_mv_serial++;
+    plat_mutex_unlock(&g_mv_lock);
+    free(old);
+}
+
+void gfx_movie_stop(void) {
+    plat_mutex_lock(&g_mv_lock);
+    g_mv_ns = 0;
+    plat_mutex_unlock(&g_mv_lock);
+}
+
+// Records the overlay into cb for swapchain image dst (in TRANSFER_DST_OPTIMAL, left so). 1 when drawn.
+static int movie_overlay(VkCommandBuffer cb, int slot, VkImage dst) {
+    static int off = -1;
+    if (off < 0) {
+        const char *v = cfg_get("NX2NAVI_MOVIE_OVERLAY");
+        off = !(v && strcmp(v, "0"));
+    }
+    if (off) return 0;
+    VkCtx *c = vk_ctx();
+    plat_mutex_lock(&g_mv_lock);
+    if (!g_mv_ns || plat_now_ns() - g_mv_ns > GFX_MOVIE_HOLD_NS || !g_mv_rgba) {
+        plat_mutex_unlock(&g_mv_lock);
+        return 0;
+    }
+    int w = g_mv_w, h = g_mv_h;
+    VkDeviceSize need = (VkDeviceSize)w * h * 4;
+    if (g_mvsz[slot] != need) {
+        if (g_mvb[slot]) vmaDestroyBuffer(c->vma, g_mvb[slot], g_mva[slot]);
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = need,
+                                 .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                               VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        if (vmaCreateBuffer(c->vma, &bi, &ai, &g_mvb[slot], &g_mva[slot], &info) != VK_SUCCESS) {
+            g_mvb[slot] = VK_NULL_HANDLE, g_mvsz[slot] = 0;
+            plat_mutex_unlock(&g_mv_lock);
+            return 0;
+        }
+        g_mvp[slot] = info.pMappedData;
+        g_mvsz[slot] = need;
+        g_mv_slot_serial[slot] = 0;
+    }
+    if (g_mv_slot_serial[slot] != g_mv_serial) {
+        memcpy(g_mvp[slot], g_mv_rgba, (size_t)need);
+        g_mv_slot_serial[slot] = g_mv_serial;
+    }
+    plat_mutex_unlock(&g_mv_lock);
+    if (g_mvi_w != w || g_mvi_h != h) {
+        if (g_mvi) {
+            vkDeviceWaitIdle(c->device);
+            vmaDestroyImage(c->vma, g_mvi, g_mvia);
+            g_mvi = VK_NULL_HANDLE;
+        }
+        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+                                .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {(uint32_t)w, (uint32_t)h, 1},
+                                .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(c->vma, &ii, &ai, &g_mvi, &g_mvia, NULL) != VK_SUCCESS) {
+            g_mvi = VK_NULL_HANDLE, g_mvi_w = g_mvi_h = 0;
+            return 0;
+        }
+        g_mvi_w = w, g_mvi_h = h;
+    }
+    sync_barrier(cb, g_mvi, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy bc = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                            .imageExtent = {(uint32_t)w, (uint32_t)h, 1}};
+    vkCmdCopyBufferToImage(cb, g_mvb[slot], g_mvi, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    sync_barrier(cb, g_mvi, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_ACCESS_2_TRANSFER_READ_BIT);
+    // the game image's blit wrote dst: black bars first, then the frame
+    sync_barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkClearColorValue black = {.float32 = {0, 0, 0, 1}};
+    VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+    sync_barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    int to[4];
+    gfx_fit_rect(w, h, (int)g_sc_ext.width, (int)g_sc_ext.height, to);
+    VkImageBlit region = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .srcOffsets = {{0, 0, 0}, {w, h, 1}},
+                          .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .dstOffsets = {{to[0], to[1], 0}, {to[0] + to[2], to[1] + to[3], 1}}};
+    vkCmdBlitImage(cb, g_mvi, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
+                   VK_FILTER_LINEAR);
+    return 1;
+}
+
 static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int h, const int crop[4], int defer) {
     int general = layout == VK_IMAGE_LAYOUT_GENERAL;
     gfx_window_start();
@@ -609,6 +751,25 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                      g_sc_ext.height, cw, ch, g_scaler};
     int overlay = g_sc_view[idx] &&
                   menu_overlay_frame(__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED), &mt, &menu_shot);
+    // NX2NAVI_SHOT_EVERY=<s> with NX2NAVI_SHOT_DIR=<dir>: the presented frame as shot_<n>.png every s seconds
+    // (a check of what the window shows, for runs nobody watches)
+    static char shot_path[1100];
+    {
+        static double every = -1;
+        static uint64_t next_ns;
+        static int n;
+        if (every < 0) {
+            const char *e = cfg_get("NX2NAVI_SHOT_EVERY");
+            every = e ? atof(e) : 0;
+            next_ns = plat_now_ns() + (uint64_t)(every * 1e9);
+        }
+        const char *dir = cfg_get("NX2NAVI_SHOT_DIR");
+        if (!menu_shot && every > 0 && dir && plat_now_ns() >= next_ns && n < 200) {
+            snprintf(shot_path, sizeof shot_path, "%s/shot_%03d.png", dir, n++);
+            menu_shot = shot_path;
+            next_ns = plat_now_ns() + (uint64_t)(every * 1e9);
+        }
+    }
     int cap = (g_capture || menu_shot) && ensure_capture_buffer();
     int thumb = g_th_n && ensure_thumbs();
 
@@ -662,6 +823,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
             sync_barrier(cb, psrc, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0);
     }
+    if (!g_sc_hdr) movie_overlay(cb, slot, dst);   // a movie frame over the game image (SDR swapchains)
     // last: the image's layout, and the stage and access of its last write, as each step leaves it
     VkImageLayout last = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     VkPipelineStageFlags2 last_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;

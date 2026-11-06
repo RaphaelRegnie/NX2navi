@@ -34,6 +34,8 @@ typedef struct {
     unsigned ncopy, nmove;
     IpcBuffer xout[IPC_MAX_BUF];           // pointer data the service placed into the client's C buffers
     unsigned nxout;
+    int domain;                            // the reply carries a domain message header
+    unsigned domain_objects;               // objects the service appended to the client's domain
 } IpcResponse;
 
 typedef struct IpcSession IpcSession;
@@ -47,7 +49,15 @@ struct IpcSession {
     void *state;
     void (*close)(void *state);
     int32_t refs;
+    int is_domain;                         // ConvertCurrentObjectToDomain ran: requests carry a domain header
+    IpcSession *root;                      // the domain session every object id belongs to (objects share it)
+    IpcSession *objects[32];               // object 1 is this session, then what the service handed out
+    int nobjects;
+    uint32_t event;                        // readable event handed to the client (applet state changes)
 };
+
+// Register an object inside a domain (1-based id returned, 0 when full).
+unsigned ipc_domain_add(IpcSession *domain, IpcSession *object);
 
 uint32_t ipc_session_new(const char *name, IpcHandler handler, void *state, void (*close)(void *state));   // handle
 void ipc_out(IpcResponse *rs, const void *p, uint32_t n);
@@ -66,3 +76,5 @@ uint64_t ipc_sessions_released(void);
 
 // The guest frame chain of the request being served, for fatal reports from services.
 void ipc_backtrace(void);
+void ipc_applet_event_init(void);   // call once at boot, before the guest starts
+void ipc_applet_push_message(uint32_t msg);   // queue an AppletMessage and signal the applet event

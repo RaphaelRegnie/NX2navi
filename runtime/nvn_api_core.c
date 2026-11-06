@@ -1,4 +1,4 @@
-// NVN front end, first slice: device, queue, memory pool, buffer, sync and
+﻿// NVN front end, first slice: device, queue, memory pool, buffer, sync and
 // event objects. Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/hle_nvn.c @ b75be8cf (MIT,
 // Copyright (c) 2026 jhaizhou; origin d2r-mobile), lines 137-253, 534-645 and 1975-2001; Metal, mach, the translation
 // thread and Apple diagnostics dropped. Calls that reached Metal go to gfx_backend() (gfx.h). nvnQueuePresentTexture
@@ -58,6 +58,15 @@ void nvn_guest_written(uint64_t addr, uint64_t size) {
 // arguments are undefined for memcpy anyway.
 static void ov_memcpy(Cpu *c) {
     uint64_t dst = arg_x(c, 0), src = arg_x(c, 1), n = arg_x(c, 2);
+    {
+        static int logged;
+        if (logged < 500) {
+            logged++;
+            fprintf(stderr, "[probe] memcpy dst=%#llx src=%#llx n=%#llx\n",
+                    (unsigned long long)dst, (unsigned long long)src, (unsigned long long)n);
+            fflush(stderr);
+        }
+    }
     if (n >= 1024) gfx_backend()->guest_read(src, n);
     memmove((void *)(uintptr_t)dst, (const void *)(uintptr_t)src, n);
     ret_x(c, dst);
@@ -167,7 +176,7 @@ static int pool_gpu_visible(const pool_t *o) { return !(o->flags & NVN_MEMORY_PO
 
 // ---------- Device
 static const int devinfo[] = {   // Tegra X1 values (nnheaders nvn_DeviceConstantsNX.h, measured on SMO)
-    [0x00] = 55, [0x01] = 15,    // ABI: NX2NAVI main requires major 55, minor >= 15
+    [0x00] = 55, [0x01] = 15,    // ABI: replaced by the title's rt_nvn_api_version (NX2NAVI 55.15, Switch 2 231.40)
     [0x02] = 14, [0x03] = 65536, [0x04] = 256, [0x05] = 8, [0x06] = 16, [0x07] = 4, [0x08] = 16, [0x09] = 32,
     [0x0A] = 16, [0x0B] = 4, [0x0C] = 4, [0x0D] = 4, [0x0E] = 16, [0x0F] = 32, [0x10] = 32, [0x11] = 256, [0x12] = 256,
     [0x13] = 4, [0x14] = 8, [0x15] = 512, [0x16] = 256, [0x17] = 2, [0x18] = 256, [0x19] = 4096, [0x1A] = 131072,
@@ -202,8 +211,27 @@ NVN_API(nvnDeviceFinalize) { ((dev_t_ *)arg_p(c, 0))->magic = 0; }
 NVN_API(nvnDeviceGetInteger) {
     unsigned w = (unsigned)arg_x(c, 1);
     int *out = arg_p(c, 2);
-    if (w >= sizeof devinfo / sizeof *devinfo) rt_fatal("nvn: unsupported NVN device property %#x", w);
-    *out = devinfo[w];
+    if (w >= sizeof devinfo / sizeof *devinfo) {
+        // NVN2 adds device properties past NVN1's 0x5F; no reference gives their values.
+        // 0x67: read first in the game's descriptor-pool layout (main+0x20e8500, with the descriptor sizes 0x0F/0x10)
+        // and used there as an alignment (size & -align): 0 made every sub-allocation 0 bytes and an assertion fail
+        // (main+0x20e53f0). The memory pool page size is a safe alignment for it.
+        if (w == 0x67) {
+            if (out) *out = 0x1000;
+            return;
+        }
+        // Others: 0, each logged once.
+        static volatile uint64_t seen[4];
+        if (w < 256 && !(__atomic_fetch_or(&seen[w / 64], 1ull << (w % 64), __ATOMIC_RELAXED) & (1ull << (w % 64))))
+        {
+            char at[160];
+            rt_log("nvn: NVN2 device property %#x (unknown here) answered 0, asked from %s", w,
+                   ldr_describe(c->x[30], at, sizeof at));
+        }
+        if (out) *out = 0;
+        return;
+    }
+    *out = w <= NVN_DEVICE_INFO_API_MINOR_VERSION ? rt_nvn_api_version[w] : devinfo[w];
     NVN_LOG("DeviceGetInteger %#x -> %d", w, *out);
 }
 // NVNboolean nvnDeviceRegisterFastClearColor{,i,ui}(NVNdevice *d, const T *color, NVNformat format), ...Depth(d, float):
@@ -470,6 +498,18 @@ NVN_API(nvnQueueFenceSync) {
     sync_t *s = arg_p(c, 1);
     s->fenced = 1;
     s->fence = nvn_fence_last();
+}
+// NVNboolean nvnQueueWaitSync(NVNqueue *q, const NVNsync *s): the queue's later work waits for the sync on the GPU.
+// Every queue here submits into one back-end timeline in submission order, so work submitted after FenceSync
+// already runs after it: a fenced sync needs nothing. A sync not fenced yet would stall the queue on hardware until
+// another queue fences it; that ordering cannot be expressed here and is logged once.
+NVN_API(nvnQueueWaitSync) {
+    const sync_t *s = arg_p(c, 1);
+    if (s && !s->fenced) {
+        static volatile int32_t logged;
+        if (!plat_xchg32(&logged, 1)) rt_log("nvn: QueueWaitSync on a sync not fenced yet: not waited for");
+    }
+    ret_x(c, 1);
 }
 // NVNsyncWaitResult nvnSyncWait(const NVNsync *s, uint64_t timeout_ns): a sync never fenced reports a timeout at once;
 // a fenced one is released only after the back end completed that fence value

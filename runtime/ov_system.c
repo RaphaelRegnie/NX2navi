@@ -119,7 +119,29 @@ static void ov_desired_language(Cpu *c) {
     ret_x(c, v);
 }
 
-static void ov_oe_initialize(Cpu *c) { (void)c; rt_log("oe: application environment: a local host process"); }
+// nn::oe::Initialize opens the appletOE service (served by ipc.c now that domains are supported) and builds the
+// module's own service object, which the oe wrappers the game calls internally dereference. It must run: observe
+// it and call the guest definition instead of replacing it.
+static void ov_oe_initialize(Cpu *c) {
+    rt_original(c);
+    rt_log("oe: application environment: a local host process");
+}
+HOST_OBSERVER("_ZN2nn2oe10InitializeEv", ov_oe_initialize);
+
+// void SetGraphicsScaleChangedNotificationEnabled(bool): a thin wrapper over the appletOE service object, which
+// the overridden Initialize never builds; the notification is a no-op on a desktop window.
+static void ov_oe_graphics_scale(Cpu *c) { (void)c; }
+HOST_OVERRIDE("_ZN2nn2oe42SetGraphicsScaleChangedNotificationEnabledEb", ov_oe_graphics_scale);
+
+// GraphicsScalingParameters GetGraphicsScalingParameters(): 12 bytes returned in x0 (words 0-1) and w1 (word 2).
+// Word 0 is a scale *mode*, not a float: the SDK's own caller (sdk+0x59a690) maps 10 -> 0, 20 -> 1, 30 -> 2 and
+// aborts on anything else (an earlier {1.0f, 1.0f} here hit that abort). 10 is the console's default (the system
+// IGraphicsScaleController::GetCurrentGraphicsScale); the other two words are zero.
+static void ov_oe_scaling_parameters(Cpu *c) {
+    ret_x(c, 10);
+    c->x[1] = 0;
+}
+HOST_OVERRIDE("_ZN2nn2oe28GetGraphicsScalingParametersEv", ov_oe_scaling_parameters);
 
 // void SetPerformanceConfiguration(PerformanceMode mode, int config)
 static void ov_performance_config(Cpu *c) {
@@ -266,6 +288,24 @@ static void ov_report_save(Cpu *c) {   // Result PlayReport::Save() and Save(con
     ret_x(c, 0);
 }
 static void ov_result_ok(Cpu *c) { ret_x(c, 0); }   // RequestImmediateTransmission, AddInternetConnectionStatus
+// Switch 2: Result PlayReport::Send(const account::Uid &) replaces Save (kept local like it);
+// Result AsyncContext::GetCompletionEvent(SystemEvent *out): out becomes a signalled event; AsyncContext::GetResult();
+// SystemEvent *GetOverSaveFrequencyLimitEvent(): an event that never fires (no save limit here)
+static void ov_report_event(Cpu *c) {
+    void *out = arg_p(c, 1);
+    if (out) {
+        kern_bind_system_event(c, (uint64_t)(uintptr_t)out, 0);
+        kern_signal_system_event((uint64_t)(uintptr_t)out);
+    }
+    ret_x(c, 0);
+}
+static void ov_report_limit_event(Cpu *c) {
+    static uint8_t ev[0x40];   // an nn::os::SystemEventType
+    static volatile int32_t bound;
+    if (!plat_xchg32(&bound, 1)) kern_bind_system_event(c, (uint64_t)(uintptr_t)ev, 0);
+    ret_x(c, (uint64_t)(uintptr_t)ev);
+}
+static void ov_nothing(Cpu *c) { (void)c; }
 
 // nn::nfp: NFC reader & amiibo support
 static volatile int32_t nfp_state;
@@ -404,6 +444,17 @@ static void ov_aoc_list(Cpu *c) {
     if (offset < 0 || count < 0) rt_fatal("aoc: ListAddOnContent range %d+%d", offset, count);
     ret_x(c, 0);
 }
+// ==== nn::nifm: this build is offline. Initialize succeeds without the nifm:u session, the network is never
+// available, a request completes at once (unaccepted), and the calls that report its error return
+// NetworkCommunicationDisabled (nifm module 110, description 1111: the system service/nifm/nifm.cpp).
+#define NIFM_R_COMMUNICATION_DISABLED 0x8ae6eu
+static void ov_nifm_initialize(Cpu *c) { rt_log("nifm: offline, no network"); ret_x(c, 0); }
+static void ov_nifm_available(Cpu *c) { ret_x(c, 0); }
+static void ov_nifm_request(Cpu *c) { (void)c; }
+static void ov_nifm_error(Cpu *c) { ret_x(c, NIFM_R_COMMUNICATION_DISABLED); }
+
+// int CountAddOnContent(): the SDK's own reads the aoc service object the overridden Initialize never opens.
+static void ov_aoc_count(Cpu *c) { ret_x(c, 0); }
 static void ov_err_context(Cpu *c) { (void)c; rt_log("err: error contexts stay local"); }
 static void ov_pctl_initialize(Cpu *c) { (void)c; rt_log("pctl: no parental controls"); }
 static void ov_abort_observer(Cpu *c) { (void)c; rt_log("diag: the host crash reporter observes aborts"); }
@@ -693,6 +744,30 @@ static void ov_current_time(Cpu *c) {
 // returning the 0x18-byte struct through x8 would write through a stale pointer (time_host.c).
 static void ov_steady_now(Cpu *c) { ret_x(c, (uint64_t)steady_now().value); }
 
+// Result GetStandardSteadyClockCurrentTimespec(timespec *) / GetStandardUserSystemClockCurrentTimespec(timespec *):
+// the SDK libc's clock_gettime(CLOCK_MONOTONIC / CLOCK_REALTIME) once a title selects the nn::time clocks
+// (sdk+0xaf0f8 mode 3; Switch 2 titles do, via std::chrono::steady_clock). The SDK's own versions need the time
+// service state the overridden Initialize never builds, fail, and libc++ then throws std::system_error.
+typedef struct { int64_t sec, nsec; } GuestTimespec;
+static void ov_steady_timespec(Cpu *c) {
+    GuestTimespec *out = arg_p(c, 0);
+    if (!out) { ret_x(c, TIME_R_INVALID); return; }
+    uint64_t ns = plat_now_ns();
+    out->sec = (int64_t)(ns / 1000000000u);
+    out->nsec = (int64_t)(ns % 1000000000u);
+    ret_x(c, 0);
+}
+static void ov_user_timespec(Cpu *c) {
+    GuestTimespec *out = arg_p(c, 0);
+    if (!out) { ret_x(c, TIME_R_INVALID); return; }
+    uint64_t ns = plat_unix_time_ns();
+    out->sec = (int64_t)(ns / 1000000000u);
+    out->nsec = (int64_t)(ns % 1000000000u);
+    ret_x(c, 0);
+}
+HOST_OVERRIDE("_ZN2nn4time37GetStandardSteadyClockCurrentTimespecEP8timespec", ov_steady_timespec);
+HOST_OVERRIDE("_ZN2nn4time41GetStandardUserSystemClockCurrentTimespecEP8timespec", ov_user_timespec);
+
 // Result ToCalendarTime(CalendarTime *out, CalendarAdditionalInfo *info, const PosixTime &t): local time
 static void ov_to_calendar(Cpu *c) {
     CalendarTime *out = arg_p(c, 0);
@@ -860,7 +935,7 @@ static void ov_font_size(Cpu *c) {
 }
 
 // ==== registration
-HOST_OVERRIDE("_ZN2nn2oe10InitializeEv", ov_oe_initialize);
+/* installed as HOST_OBSERVER above */
 HOST_OVERRIDE("_ZN2nn2oe18GetDesiredLanguageEv", ov_desired_language);
 HOST_OVERRIDE("_ZN2nn2oe27SetPerformanceConfigurationENS0_15PerformanceModeEi", ov_performance_config);
 HOST_OVERRIDE("_ZN2nn2oe15SetCpuBoostModeENS0_12CpuBoostModeE", ov_cpu_boost);
@@ -887,6 +962,11 @@ HOST_OVERRIDE("_ZN2nn2oe22PopNotificationMessageEv", ov_pop);
 HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SaveEv", ov_report_save);
 HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SaveERKNS_7account3UidE", ov_report_save);
 HOST_OVERRIDE("_ZN2nn5prepo28RequestImmediateTransmissionEv", ov_result_ok);
+HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SendERKNS_7account3UidE", ov_report_save);
+HOST_OVERRIDE("_ZN2nn5prepo12AsyncContext18GetCompletionEventEPNS_2os11SystemEventE", ov_report_event);
+HOST_OVERRIDE("_ZN2nn5prepo12AsyncContext9GetResultEv", ov_result_ok);
+HOST_OVERRIDE("_ZN2nn5prepo12AsyncContextD1Ev", ov_nothing);
+HOST_OVERRIDE("_ZN2nn5prepo30GetOverSaveFrequencyLimitEventEv", ov_report_limit_event);
 HOST_OVERRIDE("_ZN2nn5prepo27AddInternetConnectionStatusEPNS0_10PlayReportEPKcS4_S4_", ov_result_ok);
 HOST_OVERRIDE("_ZN2nn3nfp10InitializeEv", ov_nfp_initialize);
 HOST_OVERRIDE("_ZN2nn3nfp8FinalizeEv", ov_nfp_finalize);
@@ -906,7 +986,14 @@ HOST_OVERRIDE("_ZN2nn3err9ShowErrorENS_6ResultE", ov_show_error);
 
 HOST_OVERRIDE("nndiagStartup", ov_diag_startup);
 HOST_OVERRIDE("_ZN2nn3aoc10InitializeEv", ov_aoc_initialize);
+HOST_OVERRIDE("_ZN2nn4nifm10InitializeEv", ov_nifm_initialize);
+HOST_OVERRIDE("_ZN2nn4nifm18IsNetworkAvailableEv", ov_nifm_available);
+HOST_OVERRIDE("_ZN2nn4nifm27SubmitNetworkRequestAndWaitEv", ov_nifm_request);
+HOST_OVERRIDE("_ZN2nn4nifm20CancelNetworkRequestEv", ov_nifm_request);
+HOST_OVERRIDE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", ov_nifm_error);
+HOST_OVERRIDE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", ov_nifm_error);
 HOST_OVERRIDE("_ZN2nn3aoc16ListAddOnContentEPiii", ov_aoc_list);
+HOST_OVERRIDE("_ZN2nn3aoc17CountAddOnContentEv", ov_aoc_count);
 HOST_OVERRIDE("_ZN2nn3err26InitializeContextWriterApiEv", ov_err_context);
 HOST_OVERRIDE("_ZN2nn4pctl10InitializeEv", ov_pctl_initialize);
 HOST_OVERRIDE("_ZN2nn4diag34InitializeApplicationAbortObserverEv", ov_abort_observer);

@@ -24,7 +24,11 @@ class Nso:
             comp_size = struct.unpack_from('<I', raw, 0x60 + i * 4)[0]
             data = raw[file_off:file_off + comp_size]
             if flags & (1 << i):
-                data = lz4.block.decompress(data, uncompressed_size=dec_size)
+                if flags & 0x80:  # ZBIC (Switch 2 modules): Nintendo's zstd variant
+                    import zbic
+                    data = zbic.decompress(data)
+                else:
+                    data = lz4.block.decompress(data, uncompressed_size=dec_size)
             segs.append((mem_off, data))
         self.bss_size = struct.unpack_from('<I', raw, 0x3C)[0]
         self.text = (segs[0][0], len(segs[0][1]))

@@ -64,7 +64,23 @@ static PlatFile *image;
 static const uint8_t *image_map;
 static char image_file[2048];
 static char index_dir[2048];         // the directory of romfs-index.bin: the proof file's default place
-static char mount_name[32];
+// The names the RomFS is mounted under: one for NX2NAVI; Switch 2 titles mount it again under other names
+// (nn::fs::MountRom(const char *)), each an alias of the same image.
+#define NROM_NAMES 4
+static char mount_names[NROM_NAMES][32];
+
+// The path relative to the RomFS root when path is "<a mounted name>:/...", else NULL.
+// Repeated '/' inside the path read as one (romfs_path_collapse); the result lives in a per-thread buffer until the
+// thread's next call.
+static const char *rom_relative(const char *path) {
+    static __thread char folded[2048];
+    if (path && strstr(path, "//") && romfs_path_collapse(path, folded, sizeof folded)) path = folded;
+    for (int i = 0; i < NROM_NAMES && mount_names[i][0]; i++) {
+        const char *p = romfs_path_relative(mount_names[i], path);
+        if (p) return p;
+    }
+    return NULL;
+}
 static PlatMutex lock = PLAT_MUTEX_INIT;
 static uint64_t handles[NH];         // file index + 1; 0 is free
 static uint32_t handle_ovl[NH];      // overlay slot + 1 of an open handle, 0 = original
@@ -1023,30 +1039,54 @@ const char *romfs_overlay(size_t k, const char **file, uint64_t *size, int *is_a
 }
 
 int romfs_owns(const char *path) {
-    size_t n = strlen(mount_name);
-    return n && path && !strncmp(path, mount_name, n) && path[n] == ':';
+    if (!path) return 0;
+    for (int i = 0; i < NROM_NAMES && mount_names[i][0]; i++) {
+        size_t n = strlen(mount_names[i]);
+        if (!strncmp(path, mount_names[i], n) && path[n] == ':') return 1;
+    }
+    return 0;
 }
 
 int romfs_handle(uint64_t h) { return h > ROMFS_HANDLE_BASE && h < ROMFS_HANDLE_BASE + NH; }
 
 uint32_t romfs_mount(const char *name) {
     fs_init();
-    if (!name || !romfs_path_valid_relative(name) || strlen(name) >= sizeof mount_name || strchr(name, '/') ||
+    if (!name || !romfs_path_valid_relative(name) || strlen(name) >= sizeof mount_names[0] || strchr(name, '/') ||
         strchr(name, ':'))
         return FS_R_INVALID;
     plat_mutex_lock(&lock);
-    if (*mount_name && strcmp(name, mount_name)) rt_fatal("second RomFS mount %s (%s is mounted)", name, mount_name);
-    strcpy(mount_name, name);
+    int i = 0;
+    while (i < NROM_NAMES && mount_names[i][0] && strcmp(mount_names[i], name)) i++;
+    if (i == NROM_NAMES) rt_fatal("RomFS mounted under more than %d names (%s)", NROM_NAMES, name);
+    strcpy(mount_names[i], name);
     plat_mutex_unlock(&lock);
     rt_log("fs mount %s: -> RomFS", name);
     return 0;
 }
 
+// NX2NAVI_MOVIES=off skips movies: the RomFS reports .webm files as absent, and the game's movie player
+// (main+0x3b5eb40), which opens the file with nn::fs::OpenFile before it creates a decoder, abandons the movie
+// cleanly. Movies play otherwise (ov_movie2.c decodes them).
+static int movie_skipped(const char *p) {
+    size_t n = strlen(p);
+    if (n < 5 || strcmp(p + n - 5, ".webm")) return 0;
+    const char *v = cfg_get("NX2NAVI_MOVIES");
+    if (!v || strcmp(v, "off")) return 0;   // movies play (ov_movie2.c) unless NX2NAVI_MOVIES=off
+    rt_log("fs: movie %s skipped (NX2NAVI_MOVIES=off)", p);
+    return 1;
+}
+
 uint32_t romfs_open(uint64_t *out, const char *path, int mode) {
     fs_trace("rom", path);
     if (!out || mode != FS_OPEN_READ) return FS_R_UNSUPPORTED_OPEN;
-    const char *p = romfs_path_relative(mount_name, path);
+    const char *p = rom_relative(path);
     if (!p) return FS_R_PATH_NOT_FOUND;
+    if (movie_skipped(p)) return FS_R_PATH_NOT_FOUND;
+    // NX2NAVI_NPLN=off: the online client's configuration is absent (diagnosis of the crashes that follow its start)
+    if (!strcmp(p, "npln_config.json") && cfg_get("NX2NAVI_NPLN") && !strcmp(cfg_get("NX2NAVI_NPLN"), "off")) {
+        rt_log("fs: %s hidden (NX2NAVI_NPLN=off)", p);
+        return FS_R_PATH_NOT_FOUND;
+    }
     uint64_t i = file_index(p);
     if (i == UINT64_MAX) return FS_R_PATH_NOT_FOUND;
     uint32_t ov = overlay_slot(i);
@@ -1142,7 +1182,7 @@ void romfs_close(uint64_t h) {
 
 uint32_t romfs_entry_type(int *out, const char *path) {
     if (!out) return FS_R_INVALID;
-    const char *p = romfs_path_relative(mount_name, path);
+    const char *p = rom_relative(path);
     if (!p) return FS_R_PATH_NOT_FOUND;
     if (file_index(p) != UINT64_MAX) {
         *out = FS_ENTRY_FILE;
@@ -1157,9 +1197,40 @@ uint32_t romfs_entry_type(int *out, const char *path) {
     return FS_R_PATH_NOT_FOUND;
 }
 
+// Directory listing over the sorted index: every path under "<p>/" is contiguous, and so is every path under one
+// subdirectory, so one pass emits each file and each distinct subdirectory once. Files the RomFS-mods manifest adds
+// (added[]) are not listed yet.
+uint32_t romfs_list(const char *path, int (*fn)(const char *name, int is_dir, uint64_t size, void *ctx), void *ctx) {
+    const char *p = rom_relative(path);
+    if (!p) return FS_R_PATH_NOT_FOUND;
+    char dir[4096];
+    if (snprintf(dir, sizeof dir, *p ? "%s/" : "%s", p) >= (int)sizeof dir) return FS_R_INVALID;
+    size_t n = strlen(dir);
+    if (n && !folder_exists(dir)) return FS_R_PATH_NOT_FOUND;
+    char last[4096] = "";
+    for (uint64_t i = lower(dir); i < file_count; i++) {
+        Entry e = entry(i);
+        const char *name = entry_name(e);
+        if (strncmp(name, dir, n)) break;
+        const char *rest = name + n, *slash = strchr(rest, '/');
+        if (!slash) {
+            if (!fn(rest, 0, e.size, ctx)) break;
+            continue;
+        }
+        size_t k = (size_t)(slash - rest);
+        if (k >= sizeof last) continue;
+        if (!strncmp(last, rest, k) && last[k] == 0) continue;
+        memcpy(last, rest, k);
+        last[k] = 0;
+        if (!fn(last, 1, 0, ctx)) break;
+    }
+    return 0;
+}
+
 // ---- overrides
 // nn::Result nn::fs::MountRom(const char *name, void *cache, size_t cache_size)
 static void ov_mount_rom(Cpu *c) { ret_x(c, romfs_mount(arg_p(c, 0))); }
+// nn::Result nn::fs::MountRom(const char *name): the Switch 2 SDK's form, without a cache
 // nn::Result nn::fs::QueryMountRomCacheSize(size_t *out): no cache needed, the host reads the image directly
 static void ov_query_cache(Cpu *c) {
     uint64_t *out = arg_p(c, 0);
@@ -1173,5 +1244,6 @@ static void ov_initialize(Cpu *c) {
 }
 
 HOST_OVERRIDE("_ZN2nn2fs8MountRomEPKcPvm", ov_mount_rom);
+HOST_OVERRIDE("_ZN2nn2fs8MountRomEPKc", ov_mount_rom);
 HOST_OVERRIDE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", ov_query_cache);
 HOST_OVERRIDE("_ZN2nn2fs24InitializeForApplicationEv", ov_initialize);

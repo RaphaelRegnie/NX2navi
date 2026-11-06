@@ -197,27 +197,50 @@ static float menu_scale(uint32_t h) {
     return ((float)h >= least ? (float)h : least) / 1080.0f;
 }
 
-// SavageWindRecomp's colours: dark green panels, gold accents.
+// Ocarina of Time colours: a night-sky navy panel, Kokiri green for what is selected, Triforce gold for accents and
+// the cursor, the Ocarina's blue for the active control.
+static const ImVec4 kGold(0.95f, 0.78f, 0.30f, 1), kGreen(0.16f, 0.42f, 0.26f, 1), kNavy(0.05f, 0.07f, 0.13f, 0.96f),
+    kOcarina(0.26f, 0.48f, 0.82f, 1);
 static void style_init(ImGuiStyle &s) {
     ImGui::StyleColorsDark(&s);
-    s.WindowRounding = 14; s.FrameRounding = 8; s.GrabRounding = 8; s.TabRounding = 8; s.ChildRounding = 10;
-    s.WindowPadding = ImVec2(28, 22); s.FramePadding = ImVec2(14, 8); s.ItemSpacing = ImVec2(14, 12);
-    s.WindowBorderSize = 0; s.ScrollbarSize = 18;
+    s.WindowRounding = 10; s.FrameRounding = 6; s.GrabRounding = 6; s.TabRounding = 6; s.ChildRounding = 8;
+    s.WindowPadding = ImVec2(30, 22); s.FramePadding = ImVec2(14, 8); s.ItemSpacing = ImVec2(14, 12);
+    s.WindowBorderSize = 2; s.ScrollbarSize = 16;
     ImVec4 *c = s.Colors;
-    ImVec4 gold(0.93f, 0.76f, 0.33f, 1), green(0.15f, 0.36f, 0.25f, 1);
-    c[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.09f, 0.08f, 0.94f);
+    c[ImGuiCol_WindowBg] = kNavy;
+    c[ImGuiCol_Border] = ImVec4(kGold.x, kGold.y, kGold.z, 0.55f);
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_Text] = ImVec4(0.96f, 0.94f, 0.88f, 1);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.64f, 0.58f, 1);
-    c[ImGuiCol_Button] = ImVec4(0.14f, 0.22f, 0.18f, 1);
-    c[ImGuiCol_ButtonHovered] = green;
-    c[ImGuiCol_ButtonActive] = ImVec4(0.21f, 0.50f, 0.34f, 1);
-    c[ImGuiCol_Tab] = ImVec4(0.12f, 0.18f, 0.15f, 1);
-    c[ImGuiCol_TabHovered] = green;
-    c[ImGuiCol_TabSelected] = ImVec4(0.21f, 0.44f, 0.31f, 1);
-    c[ImGuiCol_TabSelectedOverline] = gold;
-    c[ImGuiCol_NavCursor] = gold;
-    c[ImGuiCol_Separator] = ImVec4(0.30f, 0.36f, 0.30f, 1);
+    c[ImGuiCol_PopupBg] = kNavy;
+    c[ImGuiCol_Text] = ImVec4(0.97f, 0.95f, 0.88f, 1);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.64f, 0.70f, 1);
+    c[ImGuiCol_FrameBg] = ImVec4(0.10f, 0.14f, 0.22f, 1);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.13f, 0.24f, 0.22f, 1);
+    c[ImGuiCol_FrameBgActive] = kGreen;
+    c[ImGuiCol_SliderGrab] = kOcarina;
+    c[ImGuiCol_SliderGrabActive] = kGold;
+    c[ImGuiCol_CheckMark] = kGold;
+    c[ImGuiCol_Button] = ImVec4(0.12f, 0.18f, 0.28f, 1);
+    c[ImGuiCol_ButtonHovered] = kGreen;
+    c[ImGuiCol_ButtonActive] = kOcarina;
+    c[ImGuiCol_Header] = ImVec4(0.13f, 0.24f, 0.22f, 1);
+    c[ImGuiCol_HeaderHovered] = kGreen;
+    c[ImGuiCol_HeaderActive] = kOcarina;
+    c[ImGuiCol_Tab] = ImVec4(0.09f, 0.13f, 0.21f, 1);
+    c[ImGuiCol_TabHovered] = kGreen;
+    c[ImGuiCol_TabSelected] = ImVec4(0.14f, 0.36f, 0.24f, 1);
+    c[ImGuiCol_TabSelectedOverline] = kGold;
+    c[ImGuiCol_NavCursor] = kGold;
+    c[ImGuiCol_Separator] = ImVec4(kGold.x, kGold.y, kGold.z, 0.30f);
+    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.20f, 0.28f, 0.40f, 1);
+}
+
+// The Triforce, its top at (x, y), h high, drawn with the title.
+static void triforce(ImDrawList *dl, float x, float y, float h, ImU32 col) {
+    float w = h * 1.1547f;   // equilateral: width = height * 2 / sqrt(3)
+    ImVec2 t(x, y), l(x - w / 2, y + h), r(x + w / 2, y + h), ml(x - w / 4, y + h / 2), mr(x + w / 4, y + h / 2), mb(x, y + h);
+    dl->AddTriangleFilled(t, mr, ml, col);
+    dl->AddTriangleFilled(ml, mb, l, col);
+    dl->AddTriangleFilled(mr, r, mb, col);
 }
 
 static void make_context(void) {
@@ -380,7 +403,7 @@ extern "C" void menu_vk_release(void) {
 // NX2NAVI_MENU_TEST_SET=<frame>:<key>=<value>[,<key>=<value>...][;<frame>:...]: cfg_set of each key (NX2NAVI_ prefix
 // optional) at that presented frame; changes live settings with no input, menu open or not. nx2navi.ini is written only by
 // the pseudo-key SAVE=1 (cfg_save, as a row change does; a failed write shows the menu's save note).
-enum { TAB_SCREEN, TAB_GAME, TAB_SOUND, TAB_CONTROLS, TAB_AMIIBO, TAB_MENU, TAB_ADVANCED, TAB_MODS, TAB_CHEATS, TAB_COUNT };
+enum { TAB_SCREEN, TAB_GAME, TAB_SOUND, TAB_CONTROLS, TAB_COUNT };   // Ocarina of Time: the options this port has
 enum { TEST_PAGE_FRAMES = 30, TEST_SETS = 16 };
 struct TestSet { uint64_t frame; char key[64], value[64]; };
 static struct {
@@ -661,38 +684,12 @@ static void tab_screen(float scale) {
     opt_choice("NX2NAVI_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();
-    row_render_scale();
-    row_shadow_res();
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
     opt_choice("NX2NAVI_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("NX2NAVI_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
-    opt_slider("NX2NAVI_FOV", UI_MENU_FOV, 70, 140, UI_MENU_FOV_DESC, 5, "%.0f %%");
-    static const char *const aniso[] = {"game", "2", "4", "8", "16"};
-    const char *aniso_names[] = {menu_text(UI_MENU_ANISO_GAME), "2x", "4x", "8x", "16x"};
-    opt_choice_list("NX2NAVI_ANISO", UI_MENU_ANISO, aniso, aniso_names, 5, UI_MENU_ANISO_DESC);
-    row_shadow_scale();
-    row_shadow_range();
-    opt_slider("NX2NAVI_PCSS", UI_MENU_PCSS, 0, 200, UI_MENU_PCSS_DESC, 10, "%.0f %%");
-    opt_slider("NX2NAVI_CONTACT_SHADOWS", UI_MENU_CONTACT_SHADOWS, 0, 100, UI_MENU_CONTACT_SHADOWS_DESC, 10, "%.0f %%");
-    opt_toggle("NX2NAVI_DLAA", UI_MENU_DLAA, UI_MENU_DLAA_DESC);
-    static const UiTextId dlss[] = {UI_MENU_DLSS_DLAA, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED,
-                                    UI_MENU_DLSS_PERFORMANCE, UI_MENU_DLSS_ULTRA};
-    opt_choice("NX2NAVI_DLSS", UI_MENU_DLSS, dlss, 5, UI_MENU_DLSS_DESC);
-    static const UiTextId preset[] = {UI_MENU_DLSS_PRESET_DEFAULT, UI_MENU_DLSS_PRESET_K, UI_MENU_DLSS_PRESET_J};
-    opt_choice("NX2NAVI_DLSS_PRESET", UI_MENU_DLSS_PRESET, preset, 3, UI_MENU_DLSS_PRESET_DESC);
-    static const UiTextId chars[] = {UI_MENU_DLSS_CHARS_OFF, UI_MENU_DLSS_CHARS_LIGHT, UI_MENU_DLSS_CHARS_MEDIUM,
-                                     UI_MENU_DLSS_CHARS_FULL};
-    opt_choice("NX2NAVI_DLSS_CHAR_MASK", UI_MENU_DLSS_CHARS, chars, 4, UI_MENU_DLSS_CHARS_DESC);
-    opt_toggle("NX2NAVI_FXAA", UI_MENU_FXAA, UI_MENU_FXAA_DESC);
     rows_color();
-    opt_group(UI_MENU_HDR_GROUP);
-    opt_toggle("NX2NAVI_HDR", UI_MENU_HDR, UI_MENU_HDR_DESC);
-    opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 10000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f");
-    opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f");
-    opt_slider("NX2NAVI_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f");
-    opt_slider("NX2NAVI_HDR_HUE", UI_MENU_HDR_HUE, 0, 100, UI_MENU_HDR_HUE_DESC, 5, "%.0f %%");
     opt_end();
 }
 
@@ -830,24 +827,10 @@ static void tab_controls(float scale) {
     opt_begin("##controls", scale);
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
     opt_choice("NX2NAVI_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
-    static const UiTextId prompts[] = {UI_MENU_PROMPTS_NINTENDO, UI_MENU_PROMPTS_XBOX, UI_MENU_PROMPTS_PC};
-    bool restart;
-    const char *note = prompts_note(&restart);
-    opt_choice("NX2NAVI_PROMPTS", UI_MENU_PROMPTS, prompts, 3, UI_MENU_PROMPTS_DESC, note);
-    bool ask = restart && opt_button("##restart", UI_MENU_RESTART, UI_MENU_RESTART_DESC);
     opt_toggle("NX2NAVI_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);
     opt_slider("NX2NAVI_RUMBLE_STRENGTH", UI_MENU_RUMBLE_STRENGTH, 0, 300, UI_MENU_RUMBLE_STRENGTH_DESC, 10, "%.0f %%");
     opt_slider("NX2NAVI_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");
     opt_toggle("NX2NAVI_RUMBLE_TRIGGERS", UI_MENU_RUMBLE_TRIGGERS, UI_MENU_RUMBLE_TRIGGERS_DESC);
-    static const UiTextId mouse_modes[] = {UI_MENU_MOUSE_STICK, UI_MENU_MOUSE_DIRECT};
-    opt_choice("NX2NAVI_MOUSE_MODE", UI_MENU_MOUSE_MODE, mouse_modes, 2, UI_MENU_MOUSE_MODE_DESC);
-    opt_slider("NX2NAVI_MOUSE_SENS", UI_MENU_MOUSE_SENS, 0, 10, UI_MENU_MOUSE_SENS_DESC, 0.1f, "%.1f");
-    opt_toggle("NX2NAVI_MENU_CURSOR", UI_MENU_MENU_CURSOR, UI_MENU_MENU_CURSOR_DESC);
-    row_walk_key();
-    opt_slider("NX2NAVI_WALK_SCALE", UI_MENU_WALK_SCALE, 0.2f, 0.9f, UI_MENU_WALK_SCALE_DESC, 0.01f, "%.2f");
-    // Analog sticks: one dead zone row per stick, falling back to NX2NAVI_STICK_DEADZONE (both sticks) while unset. With
-    // a gamepad connected each row shows its stick's deflection now, before the dead zone: a drifting stick's resting
-    // value, to set it above.
     opt_group(UI_MENU_GROUP_STICKS);
     double now[2];
     bool pad = input_pad_stick_percent(now) != 0;
@@ -862,181 +845,9 @@ static void tab_controls(float scale) {
     binds_rows(scale);
     opt_end();
     binds_after_page();
-    if (ask) ImGui::OpenPopup("##restart_confirm");   // at the level BeginPopupModal looks it up
-    restart_confirm();
 }
 
-static void tab_menu(float scale) {
-    opt_begin("##menu", scale);
-    static const UiTextId langs[] = {UI_MENU_MENU_LANG_AUTO, UI_MENU_LANGNAME_EN, UI_MENU_LANGNAME_RU,
-                                     UI_MENU_LANGNAME_PT_BR, UI_MENU_LANGNAME_ZH_HANS};
-    opt_choice("NX2NAVI_MENU_LANG", UI_MENU_MENU_LANG, langs, sizeof langs / sizeof *langs, UI_MENU_MENU_LANG_DESC);
-    opt_toggle("NX2NAVI_DISCORD_RPC", UI_MENU_DISCORD_RPC, UI_MENU_DISCORD_RPC_DESC);
-    opt_end();
-}
-
-// ---- Advanced: the testing and troubleshooting keys, the bug report helpers and the reset of every setting
-
-// A thread count with no fixed default: Automatic (unset), then the common counts.
-static void row_threads(const char *key, UiTextId label, UiTextId desc) {
-    static const char *const vals[] = {"", "1", "2", "4", "6", "8", "12", "16", "24", "32", "48", "64"};
-    enum { N = sizeof vals / sizeof *vals };
-    const char *names[N];
-    names[0] = menu_text(UI_MENU_AUTO);
-    for (int i = 1; i < N; i++) names[i] = vals[i];
-    opt_choice_list(key, label, vals, names, N, desc);
-}
-
-// A free-text key shown as Off (unset) / On (value set): On writes on_value, any set value reads as On.
-static void row_set_or_not(const char *key, UiTextId label, UiTextId desc, const char *on_value) {
-    const char *vals[] = {"", on_value}, *names[] = {menu_text(UI_MENU_OFF), menu_text(UI_MENU_ON)};
-    opt_choice_list(key, label, vals, names, 2, desc, *cfg_value(key) ? 1 : 0);
-}
-
-static bool validation_layer_present(void) {
-    static int have = -1;
-    if (have < 0) {
-        uint32_t n = 0;
-        vkEnumerateInstanceLayerProperties(&n, nullptr);
-        VkLayerProperties *l = (VkLayerProperties *)calloc(n ? n : 1, sizeof *l);
-        if (l && vkEnumerateInstanceLayerProperties(&n, l) >= 0)
-            for (uint32_t i = 0; i < n && have <= 0; i++) have = !strcmp(l[i].layerName, "VK_LAYER_KHRONOS_validation");
-        free(l);
-        if (have < 0) have = 0;
-    }
-    return have != 0;
-}
-
-// Every setting the menu shows back to its default (the environment's keys stay), written to nx2navi.ini.
-static void reset_all(void) {
-    const char *keys[128];
-    int n = 0;
-    for (const CfgMeta *m; n < 128 && (m = cfg_meta_at(n)); n++) keys[n] = m->key;
-    int done = cfg_reset(keys, n);
-    opt_save_soon();
-    rt_log("menu: reset %d settings to their defaults", done);
-}
-
-// A button's result shown in its value for a few seconds: 1 done (done_text), -1 failed.
-struct ActionNote { uint64_t until; int result; };
-
-static const char *action_value(const ActionNote &a, UiTextId done_text) {
-    if (!a.result || plat_now_ns() > a.until) return "";
-    return menu_text(a.result > 0 ? done_text : UI_MENU_ACTION_FAILED);
-}
-
-static void action_done(ActionNote &a, bool ok) { a = {plat_now_ns() + 3000000000ull, ok ? 1 : -1}; }
-
-static void tab_advanced(float scale) {
-    static ActionNote copy_note, log_note;
-    opt_begin("##advanced", scale);
-    opt_text(UI_MENU_ADV_WARNING, true);
-
-    opt_group(UI_MENU_GROUP_SCHED);
-    static const UiTextId preempt[] = {UI_MENU_PREEMPT_OFF, UI_MENU_PREEMPT_ON, UI_MENU_PREEMPT_INHERIT};   // 0|1|2
-    opt_choice("NX2NAVI_ASYNC_PREEMPT", UI_MENU_ASYNC_PREEMPT, preempt, 3, UI_MENU_ASYNC_PREEMPT_DESC);
-    opt_toggle("NX2NAVI_REPLAY_ASYNC", UI_MENU_REPLAY_ASYNC, UI_MENU_REPLAY_ASYNC_DESC);
-    opt_toggle("NX2NAVI_TIMER_1MS", UI_MENU_TIMER_1MS, UI_MENU_TIMER_1MS_DESC);
-
-    opt_group(UI_MENU_GROUP_SHADERS);
-    static const UiTextId wait[] = {UI_MENU_PIPE_WAIT_DEFAULT, UI_MENU_PIPE_WAIT_DRAW};
-    opt_choice("NX2NAVI_PIPE_WAIT", UI_MENU_PIPE_WAIT, wait, 2, UI_MENU_PIPE_WAIT_DESC);
-    static const UiTextId skip[] = {UI_MENU_PIPE_SKIP_STRICT, UI_MENU_PIPE_SKIP_ANY, UI_MENU_PIPE_SKIP_FULLSCREEN};
-    opt_choice("NX2NAVI_PIPE_SKIP", UI_MENU_PIPE_SKIP, skip, 3, UI_MENU_PIPE_SKIP_DESC);
-    opt_toggle("NX2NAVI_LIB_PREBUILD", UI_MENU_LIB_PREBUILD, UI_MENU_LIB_PREBUILD_DESC);
-    row_threads("NX2NAVI_LIB_PREBUILD_THREADS", UI_MENU_LIB_PREBUILD_THREADS, UI_MENU_LIB_PREBUILD_THREADS_DESC);
-    opt_toggle("NX2NAVI_PIPE_PREBUILD", UI_MENU_PIPE_PREBUILD, UI_MENU_PIPE_PREBUILD_DESC);
-    row_threads("NX2NAVI_PREWARM_XLATE", UI_MENU_PREWARM_XLATE, UI_MENU_PREWARM_XLATE_DESC);
-    opt_toggle("NX2NAVI_GPL", UI_MENU_GPL, UI_MENU_GPL_DESC);
-
-    opt_group(UI_MENU_GROUP_TEXMEM);
-    static const UiTextId astc[] = {UI_MENU_ASTC_AUTO, UI_MENU_ASTC_GPU, UI_MENU_ASTC_NATIVE, UI_MENU_ASTC_CPU};
-    opt_choice("NX2NAVI_ASTC", UI_MENU_ASTC, astc, 4, UI_MENU_ASTC_DESC);
-    static const UiTextId mem[] = {UI_MENU_MEMORY_AUTO, UI_MENU_MEMORY_IMPORT, UI_MENU_MEMORY_MIRROR,
-                                   UI_MENU_MEMORY_VERIFY};
-    opt_choice("NX2NAVI_MEMORY", UI_MENU_MEMORY, mem, 4, UI_MENU_MEMORY_DESC);
-    opt_toggle("NX2NAVI_TEX_ALIAS", UI_MENU_TEX_ALIAS, UI_MENU_TEX_ALIAS_DESC);
-    opt_slider("NX2NAVI_TEX_VRAM_PRESSURE", UI_MENU_TEX_VRAM_PRESSURE, 0, 100, UI_MENU_TEX_VRAM_PRESSURE_DESC, 1, "%.0f%%");
-    static const UiTextId astc_bc[] = {UI_MENU_AUTO, UI_MENU_OFF, UI_MENU_ON};   // unset, 0, 1
-    opt_choice("NX2NAVI_ASTC_BC", UI_MENU_ASTC_BC, astc_bc, 3, UI_MENU_ASTC_BC_DESC);
-
-    opt_group(UI_MENU_GROUP_FIXES);
-    opt_toggle("NX2NAVI_LOD_GUARD", UI_MENU_LOD_GUARD, UI_MENU_LOD_GUARD_DESC);
-    opt_toggle("NX2NAVI_FIX_C0", UI_MENU_FIX_C0, UI_MENU_FIX_C0_DESC);
-    opt_toggle("NX2NAVI_FIX_ZERO", UI_MENU_FIX_ZERO, UI_MENU_FIX_ZERO_DESC);
-    opt_toggle("NX2NAVI_BIND_SKIP", UI_MENU_BIND_SKIP, UI_MENU_BIND_SKIP_DESC);
-    opt_toggle("NX2NAVI_SHADER_MEMO", UI_MENU_SHADER_MEMO, UI_MENU_SHADER_MEMO_DESC);
-    opt_toggle("NX2NAVI_PIPE_MEMO", UI_MENU_PIPE_MEMO, UI_MENU_PIPE_MEMO_DESC);
-    opt_toggle("NX2NAVI_TEX_MEMO", UI_MENU_TEX_MEMO, UI_MENU_TEX_MEMO_DESC);
-    opt_toggle("NX2NAVI_DESC_TEMPLATE", UI_MENU_DESC_TEMPLATE, UI_MENU_DESC_TEMPLATE_DESC);
-    opt_toggle("NX2NAVI_PUSH_SKIP", UI_MENU_PUSH_SKIP, UI_MENU_PUSH_SKIP_DESC);
-    opt_slider("NX2NAVI_SPLIT_DRAWS", UI_MENU_SPLIT_DRAWS, 0, 1000, UI_MENU_SPLIT_DRAWS_DESC, 8, "%.0f");
-
-    opt_group(UI_MENU_GROUP_VULKAN);
-    if (!validation_layer_present() && !cfg_bool("NX2NAVI_VK_VALIDATION")) opt_disable_next(UI_MENU_VK_VALIDATION_MISSING);
-    opt_toggle("NX2NAVI_VK_VALIDATION", UI_MENU_VK_VALIDATION, UI_MENU_VK_VALIDATION_DESC);
-    static const UiTextId dyn[] = {UI_MENU_AUTO, UI_MENU_OFF, UI_MENU_ON};   // unset, 0, 1
-    opt_choice("NX2NAVI_VK_DYN_VERTEX", UI_MENU_VK_DYN_VERTEX, dyn, 3, UI_MENU_VK_DYN_VERTEX_DESC);
-    opt_choice("NX2NAVI_VK_DYN_A2C", UI_MENU_VK_DYN_A2C, dyn, 3, UI_MENU_VK_DYN_A2C_DESC);
-    opt_toggle("NX2NAVI_VK_SUBGROUP_PIN", UI_MENU_VK_SUBGROUP_PIN, UI_MENU_VK_SUBGROUP_PIN_DESC);
-
-    opt_group(UI_MENU_GROUP_DIAG);
-    row_set_or_not("NX2NAVI_TRACE", UI_MENU_TRACE, UI_MENU_TRACE_DESC, "perf");
-    opt_toggle("NX2NAVI_FLIGHT", UI_MENU_FLIGHT, UI_MENU_FLIGHT_DESC);
-    opt_slider("NX2NAVI_FLIGHT_SPIKE_MS", UI_MENU_FLIGHT_SPIKE_MS, 20, 1000, UI_MENU_FLIGHT_SPIKE_MS_DESC, 10, "%.0f");
-    opt_choice("NX2NAVI_PASS_CRUMBS", UI_MENU_PASS_CRUMBS, dyn, 3, UI_MENU_PASS_CRUMBS_DESC);   // vk_crumbs.c pass marks
-    static char rec_path[600];   // the recording goes beside the log
-    if (!rec_path[0]) {
-        char dir[512];
-        snprintf(rec_path, sizeof rec_path, "%s/input-record.txt", sysinfo_log_folder(dir, sizeof dir) ? dir : ".");
-    }
-    row_set_or_not("NX2NAVI_INPUT_RECORD", UI_MENU_INPUT_RECORD, UI_MENU_INPUT_RECORD_DESC, rec_path);
-    if (opt_button("##open_log", UI_MENU_OPEN_LOG, UI_MENU_OPEN_LOG_DESC, action_value(log_note, UI_MENU_OPEN_LOG))) {
-        char dir[512];
-        bool ok = sysinfo_log_folder(dir, sizeof dir) && plat_open_folder(dir);
-        if (!ok) action_done(log_note, false);   // success shows as the opened folder
-    }
-    if (opt_button("##copy_info", UI_MENU_COPY_INFO, UI_MENU_COPY_INFO_DESC,
-                   action_value(copy_note, UI_MENU_COPY_INFO_DONE))) {
-        static char text[16384];
-        action_done(copy_note, sysinfo_text(text, sizeof text) > 0 && plat_clipboard_set(text));
-    }
-    bool ask = opt_button("##reset", UI_MENU_RESET, UI_MENU_RESET_DESC);
-    opt_end();
-    if (ask) ImGui::OpenPopup("##reset_confirm");   // at the level BeginPopupModal looks it up
-
-    // the confirmation, over the menu; Cancel has the cursor first
-    g_modal = false;
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("##reset_confirm", nullptr,
-                               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize)) {
-        g_modal = true;
-        ImGui::TextUnformatted(menu_text(UI_MENU_RESET_CONFIRM));
-        ImGui::Spacing();
-        const char *yes = menu_text(UI_MENU_RESET_YES), *no = menu_text(UI_MENU_RESET_NO);
-        const ImGuiStyle &st = ImGui::GetStyle();
-        float bw = fmaxf(ImGui::CalcTextSize(yes).x, ImGui::CalcTextSize(no).x) + st.FramePadding.x * 4;
-        bool close = false;
-        if (ImGui::Button(no, ImVec2(bw, 0))) close = true;
-        if (ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
-        ImGui::SameLine();
-        if (ImGui::Button(yes, ImVec2(bw, 0))) {
-            reset_all();
-            close = true;
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
-            close = true;
-        if (close) {
-            ImGui::CloseCurrentPopup();
-            opt_focus_key("##reset");   // back on the row it came from
-        }
-        ImGui::EndPopup();
-    }
-}
-
-static const UiTextId kTabNames[TAB_COUNT] = {UI_MENU_TAB_SCREEN,   UI_MENU_TAB_GAME,   UI_MENU_TAB_SOUND,
-                                              UI_MENU_TAB_CONTROLS, UI_MENU_TAB_AMIIBO, UI_MENU_TAB_MENU,
-                                              UI_MENU_TAB_ADVANCED, UI_MENU_TAB_MODS,   UI_MENU_TAB_CHEATS};
+static const UiTextId kTabNames[TAB_COUNT] = {UI_MENU_TAB_SCREEN, UI_MENU_TAB_GAME, UI_MENU_TAB_SOUND, UI_MENU_TAB_CONTROLS};
 static int g_tab;               // the tab shown
 static int g_tab_request = -1;  // select this tab at the next layout; -1 none
 static int g_focus_page = -1;   // this tab's first row takes the cursor once it is shown; -1 none
@@ -1047,112 +858,28 @@ static void go_to(int tab, const char *key) {
     opt_focus_key(key);
 }
 
-// ---- Mods: the mods folder (mods.c) with switches and the load order, then the port's own patches. The folder was
-// read at start; the rows change the order and switches for the next start.
-static void mods_builtin_rows(void) {
-    opt_group(UI_MENU_MODS_BUILTIN);
-    char fps[64], res[64];
-    const char *lim = cfg_value("NX2NAVI_FPS_LIMIT");
-    if (!strcmp(lim, "display")) snprintf(fps, sizeof fps, "%s", menu_text(UI_MENU_FPS_DISPLAY));
-    else snprintf(fps, sizeof fps, "%s FPS", lim);
-    if (opt_button("##mods_fps60", UI_MENU_MODS_FPS60, UI_MENU_MODS_FPS60_DESC, fps)) go_to(TAB_GAME, "NX2NAVI_FPS_LIMIT");
-    int w = 0, h = 0;
-    sscanf(cfg_value("NX2NAVI_OUTPUT_RES"), "%dx%d", &w, &h);
-    snprintf(res, sizeof res, "%d × %d", w, h);   // U+00D7, as row_output_res shows it
-    if (opt_button("##mods_res", UI_MENU_MODS_RES, UI_MENU_MODS_RES_DESC, res)) go_to(TAB_SCREEN, "NX2NAVI_OUTPUT_RES");
-    opt_toggle("NX2NAVI_REALTIME", UI_MENU_REALTIME, UI_MENU_REALTIME_DESC);
-    opt_toggle("NX2NAVI_CLOTH_REALTIME", UI_MENU_CLOTH_REALTIME, UI_MENU_CLOTH_REALTIME_DESC);
-    opt_toggle("NX2NAVI_HIGHFPS_FIX", UI_MENU_HIGHFPS_FIX, UI_MENU_HIGHFPS_FIX_DESC);
-    opt_button("##mods_quickmenu", UI_MENU_MODS_QUICKMENU, UI_MENU_MODS_QUICKMENU_DESC,
-               menu_text(romfs_patches_loaded() ? UI_MENU_ON : UI_MENU_OFF));
-}
-
-static void tab_mods(float scale) {
-    opt_begin("##mods", scale);
-    opt_group(UI_MENU_MODS_INSTALLED);
-    int n = mods_count();
-    if (!n) opt_text(UI_MENU_MODS_NONE);
-    const char *after = mods_changed() ? menu_text(UI_MENU_AFTER_RESTART) : nullptr;
-    for (int i = 0; i < n; i++) {
-        const ModInfo *m = mods_at(i);
-        char id[32], desc[1536];
-        snprintf(id, sizeof id, "##mod%d", i);
-        char over[512] = "", other[512] = "";
-        if (m->overridden) snprintf(over, sizeof over, menu_text(UI_MENU_MODS_OVERRIDDEN), m->overridden, m->overridden_by);
-        if (m->other_version) snprintf(other, sizeof other, menu_text(UI_MENU_MODS_OTHER_VERSION), m->other_version);
-        char cheat[256] = "";
-        if (m->kind & MOD_CHEATS) {   // its cheats as read at start, or the file they come from
-            int count = 0;
-            for (int j = 0; j < cheats_count(); j++)
-                count += !strcmp(cheats_info(j)->mod, m->name) && cheats_info(j)->kind != CHEAT_HEADING;
-            if (count) snprintf(cheat, sizeof cheat, menu_text(UI_MENU_MODS_CHEATS), count);
-            else snprintf(cheat, sizeof cheat, menu_text(UI_MENU_MODS_CHEATS_FILE), cheats_file());
-        }
-        char code[512] = "", problem[512] = "";
-        if (m->nsets && m->overrides[0])
-            snprintf(code, sizeof code, menu_text(UI_MENU_MODS_REPLACES_BUILTIN), m->nsets, m->overrides);
-        else if (m->nsets)
-            snprintf(code, sizeof code, menu_text(UI_MENU_MODS_EXEFS_ON), m->nsets);
-        switch (m->problem) {
-        case MOD_EMPTY: snprintf(problem, sizeof problem, "%s", menu_text(UI_MENU_MODS_EMPTY)); break;
-        case MOD_PLUGIN: snprintf(problem, sizeof problem, "%s", menu_text(UI_MENU_MODS_SUBSDK)); break;
-        case MOD_EXEFS_LATER: snprintf(problem, sizeof problem, "%s", menu_text(UI_MENU_MODS_EXEFS_LATER)); break;
-        case MOD_EXEFS_UNSUPPORTED:
-            snprintf(problem, sizeof problem, menu_text(UI_MENU_MODS_EXEFS_UNSUPPORTED), m->note);
-            break;
-        case MOD_EXEFS_OTHER: snprintf(problem, sizeof problem, "%s", menu_text(UI_MENU_MODS_EXEFS_OTHER)); break;
-        case MOD_BAD_NAME: snprintf(problem, sizeof problem, "%s", menu_text(UI_MENU_MODS_BAD_NAME)); break;
-        default: break;
-        }
-        int k = snprintf(desc, sizeof desc, menu_text(UI_MENU_MODS_ROW_DESC), m->replaced, m->added);
-        const char *parts[] = {over, other, cheat, code, problem, menu_text(UI_MENU_MODS_MOVE_HINT)};
-        for (const char *part : parts)
-            if (*part && k >= 0 && k < (int)sizeof desc) k += snprintf(desc + k, sizeof desc - k, "\n\n%s", part);
-        const char *note = m->enabled && m->problem != MOD_OK ? menu_text(UI_MENU_MODS_UNUSED) : after;
-        int s = opt_text_row(id, m->name, menu_text(m->enabled ? UI_MENU_ON : UI_MENU_OFF), note, desc, true);
-        if (s == 2 || s == -1 || s == 1) {
-            mods_set_enabled(i, !m->enabled);
-            opt_save_soon();
-        } else if ((s == 3 && i > 0) || (s == 4 && i + 1 < n)) {
-            int to = s == 3 ? i - 1 : i + 1;
-            mods_move(i, to - i);
-            snprintf(id, sizeof id, "##mod%d", to);
-            opt_focus_key(id);   // the cursor follows the mod
-            opt_save_soon();
-        }
-    }
-    bool rebuild =
-        cheats_rebuild_pending() && opt_button("##restart", UI_MENU_CHEATS_REBUILD, UI_MENU_CHEATS_REBUILD_DESC);
-    static uint64_t open_failed;   // plat_now_ns until which the button says it failed
-    if (opt_button("##mods_open", UI_MENU_MODS_OPEN, UI_MENU_MODS_OPEN_DESC,
-                   plat_now_ns() < open_failed ? menu_text(UI_MENU_ACTION_FAILED) : "")) {
-        bool ok = mods_dir()[0] != 0;
-        if (ok) plat_file_mkdir_p(mods_dir());
-        if (!ok || !plat_open_folder(mods_dir())) open_failed = plat_now_ns() + 3000000000ull;
-    }
-    mods_builtin_rows();
-    opt_end();
-    if (rebuild) {
-        restart_rebuild = true;
-        ImGui::OpenPopup("##restart_confirm");
-    }
-    restart_confirm();
-}
-
-// ---- the window: title, tabs (L / R or Q / E switch), the page, and the bottom row with "Continue" and "Quit game".
-// B on the gamepad and Esc close it.
 static void layout_menu(uint32_t w, uint32_t h, float scale) {
-    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), IM_COL32(0, 0, 0, 120));
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), IM_COL32(4, 8, 20, 140));
     float ww = fminf(w * 0.88f, 1400 * scale), wh = fminf(h * 0.86f, 820 * scale);
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(ww, wh), ImGuiCond_Always);
     ImGui::Begin("##menu", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                         ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", menu_text(UI_MENU_TITLE));
+    {   // the Triforce, then "Ocarina of Time" and the page title
+        ImVec2 at = ImGui::GetCursorScreenPos();
+        float th = ImGui::GetTextLineHeight();
+        triforce(ImGui::GetWindowDrawList(), at.x + th * 0.6f, at.y + th * 0.02f, th * 0.96f, ImGui::GetColorU32(kGold));
+        ImGui::SetCursorScreenPos(ImVec2(at.x + th * 1.5f, at.y));
+        ImGui::TextColored(kGold, "Ocarina of Time");
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::TextUnformatted(menu_text(UI_MENU_TITLE));
+    }
     // the port version and the game update, right-aligned on the title line: what a bug report needs first
     char game[16], version[96];
     snprintf(game, sizeof game, "%d.%d.%d", rt_game_version / 100, rt_game_version / 10 % 10, rt_game_version % 10);
-    snprintf(version, sizeof version, menu_text(UI_MENU_VERSION), rt_port_version, game);
+    snprintf(version, sizeof version, "Ocarina Recomp %s  -  game %s", rt_port_version, game);
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - ImGui::CalcTextSize(version).x);
     ImGui::TextDisabled("%s", version);
 
@@ -1183,19 +910,8 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
             switch (k) {
             case TAB_SCREEN: tab_screen(scale); break;
             case TAB_GAME: tab_game(scale); break;
-            case TAB_MODS: tab_mods(scale); break;
             case TAB_SOUND: tab_sound(scale); break;
             case TAB_CONTROLS: tab_controls(scale); break;
-            case TAB_AMIIBO: tab_amiibo(scale); break;
-            case TAB_MENU: tab_menu(scale); break;
-            case TAB_CHEATS:
-                if (tab_cheats(scale)) {
-                    restart_rebuild = true;
-                    ImGui::OpenPopup("##restart_confirm");
-                }
-                restart_confirm();
-                break;
-            case TAB_ADVANCED: tab_advanced(scale); break;
             }
             ImGui::EndTabItem();
         }
@@ -1217,7 +933,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     ImGui::SameLine();
     if (ImGui::Button(quit, ImVec2(bw, 0))) gfx_window_request_close();
     bool was_modal = g_modal || binds_modal();
-    if (g_tab != TAB_ADVANCED && g_tab != TAB_CONTROLS) g_modal = false;
+    if (g_tab != TAB_CONTROLS) g_modal = false;
     if (!was_modal && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)))
         set_open(0);
     ImGui::End();

@@ -33,8 +33,11 @@ static void ov_devtools_allocator(Cpu *c) { set_allocator(c, &nv.devtools); }
 // void nv::InitializeGraphics(void *memory, size_t size)
 static void ov_initialize_graphics(Cpu *c) {
     uint64_t mem = arg_x(c, 0), size = arg_x(c, 1);
-    if (!mem || !size) rt_fatal("nv::InitializeGraphics: no graphics work memory (%#llx, %#llx)", (unsigned long long)mem,
-                                (unsigned long long)size);
+    // Switch 2 titles pass (nullptr, 0): that SDK also has nv::InitializeGraphics() and the driver takes its memory
+    // from the allocator nv::SetGraphicsAllocator installed. Only a half-given region is an error.
+    if (!mem != !size) rt_fatal("nv::InitializeGraphics: inconsistent graphics work memory (%#llx, %#llx)",
+                                (unsigned long long)mem, (unsigned long long)size);
+    if (!mem) rt_log("nv: no graphics work memory given; the driver allocates through the graphics allocator");
     plat_mutex_lock(&lock);
     nv.memory = mem;
     nv.memory_size = size;
@@ -115,8 +118,65 @@ static void ov_nvn_bootstrap(Cpu *c) {
 // registration runs at start-up instead of through boot.c.
 __attribute__((constructor)) static void ov_nvn_procs_register(void) { nvn_procs_register(); }
 
+// ---- Switch 2 vi display and layer queries. The SDK versions reach the display and layer objects through the
+// vi service; the overridden OpenDefaultDisplay/CreateLayer hand out host stand-ins, so the SDK code would call
+// through them (main+0x4dc1e0 hit a null virtual in ClearLayerExtendedSwapInterval). A desktop window is SDR,
+// fixed 60 Hz, without VRR; HDR metadata and swap-interval changes are accepted and dropped.
+static void vi_ok(Cpu *c) { ret_x(c, 0); }
+// Result QueryDisplayHdrStatus(bool *enabled, HdrOutputFormat *format, uint16_t *peak, const Display *)
+static void ov_vi_hdr_status(Cpu *c) {
+    uint8_t *on = arg_p(c, 0);
+    uint32_t *format = arg_p(c, 1);
+    uint16_t *peak = arg_p(c, 2);
+    if (on) *on = 0;
+    if (format) *format = 0;
+    if (peak) *peak = 0;
+    ret_x(c, 0);
+}
+// Result QueryDisplayHdrPaperWhite(uint16_t *nits, const Display *): the SDR reference white
+static void ov_vi_paper_white(Cpu *c) {
+    uint16_t *nits = arg_p(c, 0);
+    if (nits) *nits = 203;
+    ret_x(c, 0);
+}
+// Result QueryDisplayCurrentRefreshRate(RefreshRate *rate, bool *variable, const Display *): RefreshRate is taken
+// to be a 32-bit Hz value (a guess: no reference describes it); 60, not variable.
+static void ov_vi_refresh_rate(Cpu *c) {
+    uint32_t *rate = arg_p(c, 0);
+    uint8_t *variable = arg_p(c, 1);
+    if (rate) *rate = 60;
+    if (variable) *variable = 0;
+    ret_x(c, 0);
+}
+// Result QueryDisplayVrrSupported(bool *supported, const Display *)
+static void ov_vi_vrr_supported(Cpu *c) {
+    uint8_t *out = arg_p(c, 0);
+    if (out) *out = 0;
+    ret_x(c, 0);
+}
+HOST_OVERRIDE("_ZN2nn2vi21QueryDisplayHdrStatusEPbPNS0_15HdrOutputFormatEPtPKNS0_7DisplayE", ov_vi_hdr_status);
+HOST_OVERRIDE("_ZN2nn2vi25QueryDisplayHdrPaperWhiteEPtPKNS0_7DisplayE", ov_vi_paper_white);
+HOST_OVERRIDE("_ZN2nn2vi30QueryDisplayCurrentRefreshRateEPNS0_11RefreshRateEPbPKNS0_7DisplayE", ov_vi_refresh_rate);
+HOST_OVERRIDE("_ZN2nn2vi24QueryDisplayVrrSupportedEPbPKNS0_7DisplayE", ov_vi_vrr_supported);
+HOST_OVERRIDE("_ZN2nn2vi52SetLayerNextHdrStandardContentLuminanceRangeMetadataEPNS0_5LayerEtt", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi52SetLayerNextHdrExtendedContentLuminanceRangeMetadataEPNS0_5LayerEtt", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi35SetLayerNextHdrContentGamutMetadataEPNS0_5LayerENS0_15HdrContentGamutE", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi39SetLayerNextHdrToSdrToneMappingMetadataEPNS0_5LayerENS0_14HdrToneMappingE", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi28SetLayerExtendedSwapIntervalEPNS0_5LayerEii", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi30ClearLayerExtendedSwapIntervalEPNS0_5LayerE", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi36SetDisplay120HzRefreshRateCapabilityEPNS0_7DisplayEb", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi23SetDisplayVrrCapabilityEPNS0_7DisplayEb", vi_ok);
+
 HOST_OVERRIDE("_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", ov_graphics_allocator);
 HOST_OVERRIDE("_ZN2nv18InitializeGraphicsEPvm", ov_initialize_graphics);
+// void nv::InitCheck(): the SDK's checks its own "graphics initialised" state, which the overridden
+// InitializeGraphics never sets, and aborts (subsdk0's movie::VideoDecoder::Initialize calls it). The host's
+// record answers instead.
+static void ov_nv_init_check(Cpu *c) {
+    (void)c;
+    if (!nv.initialized) rt_fatal("nv::InitCheck: graphics not initialised (nv::InitializeGraphics was not called)");
+}
+HOST_OVERRIDE("_ZN2nv9InitCheckEv", ov_nv_init_check);
 HOST_OVERRIDE("_ZN2nv28SetGraphicsDevtoolsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", ov_devtools_allocator);
 HOST_OVERRIDE("_ZN2nn2vi10InitializeEv", ov_vi_initialize);
 HOST_OVERRIDE("_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE", ov_open_display);

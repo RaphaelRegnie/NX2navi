@@ -111,7 +111,7 @@ static void get_info(Cpu *c, uint64_t pc) {
         return;
     }
     switch (id) {
-    case 0: v = 7; break;                       // core mask
+    case 0: v = 0x3f; break;                    // core mask: cores 0-5 (Switch 2 application cores; see kernel.c NCORE)
     case 1: v = 0x0ffffffff0000000ull; break;   // priority mask
     case 8: v = 0; break;                       // debugger attached
     case 10: v = 0; break;                      // idle tick count
@@ -121,6 +121,9 @@ static void get_info(Cpu *c, uint64_t pc) {
     case 18: v = PROGRAM_ID; break;
     case 20: v = user_exception_context(); break;   // the SDK keeps e.g. the dying message at +0x1C0
     case 23: v = 1; break;
+    case 29:                                    // region the SDK records at nnosInitialize (address, then
+    case 30: v = 0; break;
+    case 33: v = 0x1000; break;   // VAMM control region size: mapped at 0x300000000 and made into a unit heap
     default: {
         char why[64];
         snprintf(why, sizeof why, "GetInfo id %u (handle %#x, sub id %#llx)", id, (uint32_t)c->x[2],
@@ -196,6 +199,33 @@ static void svc_body(Cpu *c, uint32_t imm, uint64_t pc) {
         if (x[0] & 0x80000000ull) {
             x[0] = R_OK;
             return;
+        }
+        {   // the SDK keeps the abort text in the user exception context: show any readable run
+            const char *ctx = (const char *)(uintptr_t)user_exception_context();
+            char run[161];
+            int n = 0;
+            for (int i = 0; i < 0x400; i++) {
+                unsigned char ch = (unsigned char)ctx[i];
+                if (ch >= 0x20 && ch < 0x7f) {
+                    if (n < 160) run[n++] = (char)ch;
+                } else if (n >= 4) {
+                    run[n] = 0;
+                    rt_log("guest abort text at ctx+%#x: %s", i - n, run);
+                    n = 0;
+                } else {
+                    n = 0;
+                }
+            }
+        }
+        {   // the object the aborting code was working on: its first bytes carry the state machine's byte
+            uint64_t obj = c->x[19];
+            if (obj && readable(obj, 32)) {
+                const unsigned char *p = (const unsigned char *)(uintptr_t)obj;
+                rt_log("guest abort object %#llx: %02x %02x %02x %02x %02x %02x %02x %02x  "
+                       "%02x %02x %02x %02x %02x %02x %02x %02x", (unsigned long long)obj,
+                       p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+                       p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+            }
         }
         svc_fatal(c, imm, pc, "Break (the SDK aborted)");
     }

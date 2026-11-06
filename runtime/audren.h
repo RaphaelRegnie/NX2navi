@@ -187,3 +187,5 @@ int64_t audio_mixer_pace_ns(AudioRenderer *r, uint64_t now);
 uint64_t audio_voice_consumed(const AudioRenderer *r, ServerVoice *v, int frames);   // source samples over one frame; advances v->fraction
 int audio_buffer_empty(const AudrenWaveBuffer *b);   // no samples to decode: played as soon as it is reached
 void audio_device_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs);   // IAudioDevice
+void audio_dmg_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs);      // auddmg:u (Switch 2)
+void audio_sysmix_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs);   // audsmx:u (Switch 2)

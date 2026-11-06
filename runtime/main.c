@@ -1,4 +1,4 @@
-// nx2navi.exe entry: reserves the guest address space, parses the command line and runs one mode.
+﻿// nx2navi.exe entry: reserves the guest address space, parses the command line and runs one mode.
 //
 //   nx2navi.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
 //     --selftest        layout, dispatch table and host-function registry; needs no game files
@@ -163,7 +163,17 @@ void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) {
 }
 
 void rt_udf(Cpu *c, uint64_t pc) {
-    char at[128], lr[128];
+    char at[128], lr[128], d[128];
+    rt_logf("udf at %s (lr %s)\n", ldr_describe(pc, at, sizeof at), ldr_describe(c->x[30], lr, sizeof lr));
+    for (int i = 0; i < 31; i++) rt_logf("  x%-2d %016llx%s", i, (unsigned long long)c->x[i], i % 4 == 3 ? "\n" : "");
+    rt_logf("  sp  %016llx\n  pc  %016llx\n", (unsigned long long)c->sp, (unsigned long long)c->pc);
+    uint64_t fp = c->x[29];
+    for (int n = 0; n < 32 && fp && !(fp & 7) && plat_mem_readable(fp, 16); n++) {
+        uint64_t next = LD64(fp), link = LD64(fp + 8);
+        rt_logf("  guest frame %2d: %s\n", n, ldr_describe(link, d, sizeof d));
+        if (next <= fp || next - fp > (64u << 20)) break;
+        fp = next;
+    }
     rt_fatal("undefined instruction at %s (lr %s)", ldr_describe(pc, at, sizeof at),
              ldr_describe(c->x[30], lr, sizeof lr));
 }
@@ -244,7 +254,7 @@ static void crash_handler(const PlatCrash *x) {
         rt_logf("  sp  %016llx\n  pc  %016llx  lr %s\n", (unsigned long long)c->sp, (unsigned long long)c->pc,
                 ldr_describe(c->x[30], d, sizeof d));
         uint64_t fp = c->x[29];
-        for (int n = 0; n < 32 && fp && !(fp & 7) && readable(fp, 16); n++) {
+        for (int n = 0; n < 32 && fp && !(fp & 7) && plat_mem_readable(fp, 16); n++) {
             uint64_t next = LD64(fp), lr = LD64(fp + 8);
             rt_logf("  guest frame %2d: %s\n", n, ldr_describe(lr, d, sizeof d));
             if (next <= fp || next - fp > (64u << 20)) break;
