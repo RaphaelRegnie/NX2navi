@@ -116,9 +116,14 @@ void vk_caps_init(VkCtx *c) {
     // BotW and NX2navi on AMD). The translator biases gather coordinates by the host's sub-texel precision; NVIDIA rounds
     // as Maxwell does. NX2NAVI_GATHER_BIAS=<bits> forces it (0: off).
     uint32_t gather = env_u32("NX2NAVI_GATHER_BIAS", c->props.vendorID == 0x10de ? 0 : l->subTexelPrecisionBits);
-    // A register read before any write is an undefined load in SPIR-V, and Mesa folds undefined values freely, so on
-    // Mesa function-local variables start at 0 (docs/maxwell.md 3.12). NX2NAVI_ZERO_LOCALS=1 forces it, 0 turns it off.
-    uint32_t zero_locals = env_u32("NX2NAVI_ZERO_LOCALS", (uint32_t)vk_caps.mesa);
+    // A register read before any write is an undefined load in SPIR-V, so function-local variables start at 0
+    // (docs/maxwell.md 3.12). Mesa folds undefined values freely; NVIDIA's compiler gives such a read a value of another
+    // lane of the warp: Ocarina's clustered-light loop reads registers that only some paths write, and on an RTX 5090
+    // the Great Fairy Fountain floor took an extra light term in 4x8-pixel tiles (one 32-lane warp each) and Link went
+    // dark with green speckles. With DLAA on (vk_dlaa.c, which finds the game's FXAA by its SPIR-V hash) they stay
+    // undefined off Mesa, as before: zeroing moved that hash and the picture shook under DLAA (maxwell.md 3.12).
+    // NX2NAVI_ZERO_LOCALS=1 / 0 forces either.
+    uint32_t zero_locals = env_u32("NX2NAVI_ZERO_LOCALS", vk_caps.mesa || !cfg_bool("NX2NAVI_DLAA"));
     gfx_shader_set_host(vk_caps.float64, vk_caps.sbuf_align, told, gather, zero_locals != 0);
     if (gather) rt_log("vk caps: gather coordinates biased for %u sub-texel bits (NX2NAVI_GATHER_BIAS)", gather);
 

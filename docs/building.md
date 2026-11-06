@@ -257,6 +257,11 @@ Shaders: `.venv-py314\Scripts\python tools\shader_census.py --version <ver> --tr
 to `build\<ver>\shaders\` and runs it through the translator and `spirv-val`; failure groups go to `failures.txt`.
 `tools\xlate_smoke.py` checks the translator alone, without game files.
 
+A change to the SM86 tensor lowering (`tools/xlate/AmpereLowering.cs` Hmma, Ldsm, Movm, Half) passes
+`python tests\tensor_lowering_check.py`: it lowers GPU-captured vectors with `nx2navi_xlate --lower` and runs them on
+`tests\maxwell_warp_emu.py`, a model of what the Ryujinx translator makes of Maxwell code (the docstring names the
+vector file and what is checked). `tests\maxwell_warp_emu_selftest.py` checks the emulator itself. No game files.
+
 ## Reverse engineering (optional)
 
 - Ghidra 12.1.2 with Adubbz's Ghidra-Switch-Loader in `toolchain\ghidra\` (JDK 21) opens the game modules (NSO).

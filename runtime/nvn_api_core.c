@@ -622,6 +622,7 @@ NVN_API(nvnQueueFinish) {
 // lod_entered / lod_issued count submits that entered QueueSubmitCommands / reached the back end; lod_fence holds
 // the fence of the last LOD_RING. NX2NAVI_LOD_GUARD=0 turns the wait off.
 #define LOD_RING 64
+int nvn_submits_in_frame;   // nvnQueueSubmitCommands calls since the last nvnQueuePresentTexture (NX2NAVI_SUBMIT_FINISH)
 static uint64_t lod_entered, lod_issued, lod_fence[LOD_RING];
 
 // void nvnQueueSubmitCommands(NVNqueue *q, int n, const NVNcommandHandle *handles): replayed on this thread with its
@@ -655,6 +656,23 @@ NVN_API(nvnQueueSubmitCommands) {
     while (f > prev && !__atomic_compare_exchange_n(&last_fence, &prev, f, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
     __atomic_store_n(&lod_fence[no % LOD_RING], f, __ATOMIC_RELAXED);
     __atomic_store_n(&lod_issued, no, __ATOMIC_SEQ_CST);
+    // The first submission of a frame (since the last present) returns once the GPU has run it. NVN starts the GPU when
+    // the submit returns and it is through a frame's first submission (Ocarina's frame-start compute: light grid, probes)
+    // within a few milliseconds; here the replay records first and the GPU runs later. Ocarina rewrites data those
+    // passes and the frame's lit materials read once it has submitted its later work, with no fence: with the GPU late,
+    // part of a frame drew with the next frame's data, distant characters wrote NaN and bloom spread it (white dialogue
+    // frames, 3% of them in 100 s of dialogue; none with this wait, at the same 58-59 fps: the GPU is idle at that
+    // point). Copies of the data at submit made it worse, a mix of two frames' versions.
+    // NX2NAVI_SUBMIT_FINISH=<mask>: bit i waits after the i-th submission of a frame (default 0x1); a plain 1 waits
+    // after every submission, 0 never.
+    static long long finish_mask = -2;
+    if (finish_mask == -2) {
+        const char *e = cfg_get("NX2NAVI_SUBMIT_FINISH");
+        finish_mask = e && *e ? strtoll(e, NULL, 0) : 1;
+        if (e && *e && finish_mask == 1 && !(e[0] == '0' && (e[1] == 'x' || e[1] == 'X'))) finish_mask = -1;   // "1": all
+    }
+    int idx = nvn_submits_in_frame++;
+    if (finish_mask && f && (finish_mask == -1 || (idx < 63 && (finish_mask >> idx & 1)))) gfx_backend()->fence_wait(f, UINT64_MAX);
 }
 
 // The producer (1.2.1 main f_70008c6460) releases the read lock on obj+0x538 at lr 0x70008c70c8; when

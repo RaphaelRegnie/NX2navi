@@ -5,7 +5,8 @@
 // written in the frame are copied once each, slices side by side. Files in NX2NAVI_DUMP_DIR (default "dump"):
 //   pass_<seq>_t<i>_<w>x<h>_<vkformat>_<name>.png   colour target i (td: depth; img<slot>: storage image; lut<id>: 3D;
 //                                                    a BC target drawn through a block view: its blocks as that view)
-//   ..._tm.png                                       float formats: x/(1+x) of the same image (the plain one clamps)
+//   ..._tm.png                                       float formats: x/(1+x) of the same image (the plain one clamps);
+//                                                    in both, a pixel with a NaN channel is magenta
 //   passes.txt   per pass or dispatch: targets, draws, each distinct pipeline + texture set with its shaders' SPIR-V
 //                hashes (sh_<hash>.spv written once) and the bound textures with their samplers
 //   images.txt   per image: channel min/max, distinct texel values over the image and over its top quarter
@@ -35,6 +36,7 @@
 #include "vk.h"
 
 #include "vk_exec.h"
+#include "flight.h"
 uint64_t vk_exec_cs_storage_addr(const VkExec *ex, const GfxShaderRes *r);   // vk_exec_draw.c
 int vk_exec_raw_9e5(VkImage img, VkFormat f);                               // vk_exec_draw.c
 #include "platform/platform.h"
@@ -49,6 +51,10 @@ int vk_exec_raw_9e5(VkImage img, VkFormat f);                               // v
 int vk_dump_armed;
 static uint64_t dump_frame, log_from;   // log_from: NX2NAVI_DUMP_LOG, first frame logged to passes.txt without images
 static char dir[400];
+static char base_dir[400];             // NX2NAVI_DUMP_DIR; with NX2NAVI_DUMP_WHITE each attempt goes to base_dir/f<frame>
+static uint64_t white_last;            // NX2NAVI_DUMP_WHITE: the frame dumped last (0: none), checked 3 presents on
+static int white_tries, white_caught;
+static uint64_t dump_after;             // NX2NAVI_DUMP_AFTER
 static FILE *passes_f, *images_f;
 static int seq, finished, copied;      // copied: passes and dispatches of the dump frame whose images were copied
 static int skip_runs, dump_ubo;        // NX2NAVI_DUMP_SKIP_RUNS, NX2NAVI_DUMP_UBO (vec4 per block, 0 for none)
@@ -221,8 +227,8 @@ static void write_images(const Job *j) {
     uint32_t pw = j->w * j->d, ph = j->h;
     uint64_t n = (uint64_t)pw * ph;
     float *px = malloc(n * 16);
-    uint8_t *out = malloc(n * 4);
-    if (!px || !out) rt_fatal("vk_dump: out of memory for %s", j->name);
+    uint8_t *out = malloc(n * 4), *isnan_ = calloc(n, 1);   // isnan_: a pixel with a NaN channel, drawn magenta
+    if (!px || !out || !isnan_) rt_fatal("vk_dump: out of memory for %s", j->name);
     float mn[4] = {INFINITY, INFINITY, INFINITY, INFINITY}, mx[4] = {-INFINITY, -INFINITY, -INFINITY, -INFINITY};
     uint64_t nans = 0;
     for (uint32_t z = 0; z < j->d; z++)
@@ -231,7 +237,7 @@ static void write_images(const Job *j) {
                 float *o = px + 4 * ((uint64_t)y * pw + (uint64_t)z * j->w + x);
                 decode(j->f, j->map + (((uint64_t)z * j->h + y) * j->w + x) * j->f->bytes, o);
                 for (int c = 0; c < 4; c++) {
-                    if (isnan(o[c])) { nans++, o[c] = 0; continue; }
+                    if (isnan(o[c])) { nans++, o[c] = 0, isnan_[(uint64_t)y * pw + (uint64_t)z * j->w + x] = 1; continue; }
                     if (o[c] < mn[c]) mn[c] = o[c];
                     if (o[c] > mx[c]) mx[c] = o[c];
                 }
@@ -255,6 +261,7 @@ static void write_images(const Job *j) {
                 out[4 * i + c] = u8(x);
             }
             out[4 * i + 3] = 255;
+            if (isnan_[i]) out[4 * i] = 255, out[4 * i + 1] = 0, out[4 * i + 2] = 255;
         }
         char path[600];
         snprintf(path, sizeof path, "%s/%s%s.png", dir, j->name, pass ? "_tm" : "");
@@ -270,6 +277,7 @@ static void write_images(const Job *j) {
     }
     plat_mutex_unlock(&img_lock);
     free(out);
+    free(isnan_);
     free(px);
 }
 
@@ -527,9 +535,12 @@ static void flush_luts(VkExec *ex, int n) {
         VkFormat bf = block_format(l->format);
         snprintf(name, sizeof name, "pass_%04d_%s%d_%ux%ux%u_%d_%s%s", n, l->is2d ? "tex" : "lut", l->id, l->w, l->h, l->d,
                  (int)l->format, fmt_name(l->format, fn), bf ? "_blocks" : "");
+        // a sampled depth texture copies its depth aspect (the colour aspect of a depth image read as zeros)
+        VkImageAspectFlags asp = l->format >= VK_FORMAT_D16_UNORM && l->format <= VK_FORMAT_D32_SFLOAT_S8_UINT
+                                     ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
         const char *why = bf ? copy_region(ex, l->image, bf, VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 0,
                                            (VkExtent3D){l->w, l->h, l->d}, (l->w + 3) / 4, (l->h + 3) / 4, l->d, name)
-                             : copy_out(ex, l->image, l->format, VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, l->w, l->h, l->d, name);
+                             : copy_out(ex, l->image, l->format, asp, 0, 0, l->w, l->h, l->d, name);
         fprintf(passes_f, "  %s tex %d -> %s.png%s%s\n", l->is2d ? "2D" : "3D", l->id, name, why ? " skipped: " : "",
                 why ? why : "");
     }
@@ -572,8 +583,12 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
             }
             if (st == 5) sp(b, " -> %#llx", (unsigned long long)vk_exec_cs_storage_addr(ex, r));
             for (int k = 0; k < 16; k++)
-                if (ex->ssbo[st][k].addr)
-                    sp(b, " %d=%#llx+%#llx", k, (unsigned long long)ex->ssbo[st][k].addr, (unsigned long long)ex->ssbo[st][k].size);
+                if (ex->ssbo[st][k].addr) {
+                    VkDescriptorBufferInfo cb;   // "(copy)": a binding that only reads it uses the submit-time copy (vk_usnap.c)
+                    int copy = vk_usnap_find(ex->ssbo[st][k].addr, ex->ssbo[st][k].size, 1, &cb);
+                    sp(b, " %d=%#llx+%#llx%s", k, (unsigned long long)ex->ssbo[st][k].addr, (unsigned long long)ex->ssbo[st][k].size,
+                       copy ? "(copy)" : "");
+                }
             sp(b, "\n");
             // NX2NAVI_DUMP_UBO: also the small storage buffers' guest bytes (GPU results as of the last write-back); per-view
             // constants (exposure and such) live in such buffers.
@@ -624,10 +639,11 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
             const VkTexImage *t = vk_texture_by_id(NVN_HANDLE_TEX(h), &v, &hv);
             if (!t) { sp(b, "tex %d unresolved (dummy)\n", NVN_HANDLE_TEX(h)); continue; }
             static const char *vt[] = {"1D", "2D", "3D", "cube", "1DArray", "2DArray", "cubeArray"};
-            sp(b, "tex %d %s(%d) %ux%ux%u levels %u layers %u image %s", NVN_HANDLE_TEX(h), fmt_name(t->format, fn),
+            sp(b, "tex %d %s(%d) %ux%ux%u levels %u layers %u image %s vkimage %p", NVN_HANDLE_TEX(h), fmt_name(t->format, fn),
                (int)t->format, t->width, t->height, t->depth, t->levels, t->layers,
-               t->view_type <= 6 ? vt[t->view_type] : "?");
+               t->view_type <= 6 ? vt[t->view_type] : "?", (void *)t->image);
             if (hv && v.set_format) sp(b, " view-nvn-fmt %#x", v.format);
+            if (hv && v.set_target) sp(b, " view-target %u", v.target);
             if (hv && v.set_levels) sp(b, " view-levels %u+%u", v.base_level, v.nlevels);
             if (hv && v.set_layers) sp(b, " view-layers %u+%u", v.min_layer, v.nlayers);
             samp_par s;
@@ -730,9 +746,9 @@ static void target_line(VkExec *ex, const VkExecTarget *t, const char *tag, int 
                                               t->height, 1, name) :
                       t->is3d ? "3D slice (the volume is dumped as lut<id> where it is sampled)" :
                       copy_out(ex, t->image, t->format, t->aspect, t->level, t->base_layer, t->width, t->height, 1, name);
-    fprintf(passes_f, "  %s: nvn %#x %s(%d) %ux%u level %u layers %u+%u samples %u addr %#llx -> %s.png%s%s\n", tag,
-            t->nvn_format, fmt_name(t->format, fn), (int)t->format, t->width, t->height, t->level, t->base_layer,
-            t->layers, t->samples, (unsigned long long)(uintptr_t)t->tex->mem, name, why ? " skipped: " : "",
+    fprintf(passes_f, "  %s: nvn %#x %s(%d) %ux%u level %u layers %u+%u samples %u addr %#llx vkimage %p -> %s.png%s%s\n",
+            tag, t->nvn_format, fmt_name(t->format, fn), (int)t->format, t->width, t->height, t->level, t->base_layer,
+            t->layers, t->samples, (unsigned long long)(uintptr_t)t->tex->mem, (void *)t->image, name, why ? " skipped: " : "",
             why ? why : "");
 }
 
@@ -755,6 +771,11 @@ static void pass_decide(int same_targets) {
 
 void vk_dump_pass_end(VkExec *ex) {
     plat_mutex_lock(&rec_lock);
+    if (dump_after && dump_frame == UINT64_MAX && ex->depth.tex && (uint64_t)(uintptr_t)ex->depth.tex->mem == dump_after) {
+        dump_frame = frame_now();   // this pass and the rest of its frame
+        rt_log("vk_dump: a pass drew into %#llx in frame %llu: it and the rest of the frame go to %s",
+               (unsigned long long)dump_after, (unsigned long long)dump_frame, dir);
+    }
     if (!active()) goto out;
     int n = seq++;
     uint64_t sig = targets_sig(ex);
@@ -893,9 +914,34 @@ out:
 
 static void make_dirs(char *path) { plat_file_mkdir_p(path); }
 
+// NX2NAVI_DUMP_WHITE=1 (diagnosis): no frame is named; from frame 1800 each present looks at the thumbnail of the frame
+// three presents back (gfx_present.c vk_thumbs_*), and the first one whose picture left of the overlay and above the
+// dialogue box is blank white makes the dump take the next frame (white flashes come in runs of several frames).
+int vk_dump_white;   // vk_backend.c asks for a thumbnail of every present while it is set
+#define dump_white vk_dump_white
+
+// passes.txt and images.txt in dir (a new folder per NX2NAVI_DUMP_WHITE attempt)
+static void open_files(void) {
+    make_dirs(dir);
+    char path[600];
+    snprintf(path, sizeof path, "%s/passes.txt", dir);
+    passes_f = fopen(path, "w");
+    snprintf(path, sizeof path, "%s/images.txt", dir);
+    images_f = fopen(path, "w");
+    if (!passes_f || !images_f) rt_fatal("vk_dump: cannot write to %s", dir);
+}
+
 void vk_dump_init(void) {
     const char *e = cfg_get("NX2NAVI_DUMP");
-    if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
+    dump_white = rt_knob("DUMP_WHITE", "0");
+    // NX2NAVI_DUMP_AFTER=<address>: the first render pass whose depth target lives at that address and the rest of its frame
+    // (a target drawn once, at an area load)
+    const char *da = cfg_get("NX2NAVI_DUMP_AFTER");
+    dump_after = da && *da ? strtoull(da, NULL, 0) : 0;
+    if (dump_white || dump_after) {
+        dump_frame = UINT64_MAX;
+        vk_thumbs_enable(16);
+    } else if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
     const char *lf = cfg_get("NX2NAVI_DUMP_LOG");
     if (lf && *lf) log_from = strtoull(lf, NULL, 10);
     const char *sr = cfg_get("NX2NAVI_DUMP_SKIP_RUNS");
@@ -912,14 +958,10 @@ void vk_dump_init(void) {
         w[1] = *q == 'x' ? (uint32_t)strtoul(q + 1, &q, 10) : 0;
     }
     const char *d = cfg_get("NX2NAVI_DUMP_DIR");
-    snprintf(dir, sizeof dir, "%s", d && *d ? d : "dump");
-    make_dirs(dir);
+    snprintf(base_dir, sizeof base_dir, "%s", d && *d ? d : "dump");
+    snprintf(dir, sizeof dir, "%s", base_dir);
     char path[600];
-    snprintf(path, sizeof path, "%s/passes.txt", dir);
-    passes_f = fopen(path, "w");
-    snprintf(path, sizeof path, "%s/images.txt", dir);
-    images_f = fopen(path, "w");
-    if (!passes_f || !images_f) rt_fatal("vk_dump: cannot write to %s", dir);
+    if (!dump_white) open_files();
     const char *bf = cfg_get("NX2NAVI_DUMP_BUF");
     if (bf && *bf) {
         char *q;
@@ -937,7 +979,43 @@ void vk_dump_init(void) {
     rt_log("vk_dump: frame %llu goes to %s", (unsigned long long)dump_frame, dir);
 }
 
+// The thumbnail of frame f is blank white left of the overlay and above the dialogue box: -1 not available, 0 no, 1 yes.
+static int thumb_white(uint64_t f) {
+    static uint8_t px[FLIGHT_THUMB_W * FLIGHT_THUMB_H * 4];
+    if (!vk_thumbs_read(f, px)) return -1;
+    int n = 0, bright = 0;
+    for (int y = 0; y < 105; y++)
+        for (int x = 0; x < 250; x++, n++) {
+            const uint8_t *q = px + 4 * (y * FLIGHT_THUMB_W + x);
+            bright += (q[0] * 30 + q[1] * 59 + q[2] * 11) / 100 > 245;
+        }
+    return bright * 100 > n * 97;
+}
+
+static void white_check(uint64_t frame) {
+    static int run;   // consecutive white thumbnails: white runs are mostly 1-2 frames, too short for a dump 4 frames on
+    if (frame < 1800) return;
+    int w = thumb_white(frame - 3);
+    if (w < 0) return;
+    run = w ? run + 1 : 0;
+    if (run >= 3) {   // frames frame-5..frame-3 white: the run is likely still on 4 frames later
+        run = 0;
+        dump_frame = frame + 1;
+        snprintf(dir, sizeof dir, "%s/f%llu", base_dir, (unsigned long long)dump_frame);
+        open_files();
+        rt_log("vk_dump: frames %llu-%llu were white; frame %llu goes to %s", (unsigned long long)(frame - 5),
+               (unsigned long long)(frame - 3), (unsigned long long)dump_frame, dir);
+    }
+}
+
 void vk_dump_present(uint64_t frame) {
+    if (dump_white && white_last && frame == white_last + 3) {   // was the dumped frame itself white?
+        int w = thumb_white(white_last);
+        rt_log("vk_dump: dumped frame %llu was %s", (unsigned long long)white_last, w > 0 ? "white: done" : "not white: trying again");
+        if (w > 0 || ++white_tries >= 8) white_caught = 1;
+        white_last = 0;
+    }
+    if (dump_white && !white_caught && !white_last && dump_frame == UINT64_MAX) white_check(frame);
     if (frame != dump_frame) return;
     plat_mutex_lock(&rec_lock);
     finished = 1;
@@ -952,4 +1030,13 @@ void vk_dump_present(uint64_t frame) {
     passes_f = NULL;
     rt_log("vk_dump: frame %llu: %d passes and dispatches, about %llu MB of PNGs in %s", (unsigned long long)frame, seq,
            (unsigned long long)(png_bytes >> 20), dir);
+    if (dump_white) {   // ready for another attempt (vk_dump_present checks this one's thumbnail 3 presents on)
+        white_last = frame;
+        plat_mutex_lock(&rec_lock);
+        seq = copied = 0, last_targets = 0, pass_skip = NULL, png_bytes = 0;
+        nluts = nluts_done = nents = ents_over = pass_draws = 0;
+        dump_frame = UINT64_MAX;
+        finished = 0;
+        plat_mutex_unlock(&rec_lock);
+    }
 }

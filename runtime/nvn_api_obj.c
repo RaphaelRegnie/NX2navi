@@ -756,6 +756,19 @@ static void sleep_until(uint64_t deadline) {
     }
 }
 
+// The submit fence of each window image's newest present (win_t has no room: a side table for the first windows).
+static struct { const win_t *w; uint64_t fence[4]; } img_fence[4];
+static uint64_t last_present_fence;   // the submit fence at the newest present of any window
+
+static uint64_t *img_fence_of(const win_t *o, int idx) {
+    if (idx < 0 || idx >= 4) return NULL;
+    for (int i = 0; i < 4; i++) {
+        if (img_fence[i].w == o) return &img_fence[i].fence[idx];
+        if (!img_fence[i].w) return img_fence[i].w = o, &img_fence[i].fence[idx];
+    }
+    return NULL;
+}
+
 // NVNwindowAcquireTextureResult nvnWindowAcquireTexture(NVNwindow *w, NVNsync *s, int *index): blocks here, not in the
 // present, until the image's previous present plus one period has passed (the game often presents with a lock held).
 // That is the time the next frame goes to the display, so the image is free as soon as that time is reached.
@@ -771,6 +784,24 @@ NVN_API(nvnWindowAcquireTexture) {
         uint64_t p0 = perf_begin();
         sleep_until(at);
         perf_end(PERF_PACE, p0);
+    }
+    // On the Switch the image comes back only after the display has shown it, which needs the GPU to have finished the
+    // frame drawn into it, so the CPU never runs more than the swapchain's depth ahead of the GPU. Here the pacer frees
+    // images by the clock alone, so the acquire also waits for the GPU to finish the image's newest present. With the
+    // GPU slowed (frame dump logging), this alone cut Ocarina's NaN frames from 56 to 23 of 61; the wait after a frame's
+    // first submission (nvn_api_core.c nvnQueueSubmitCommands) removes the rest. NX2NAVI_ACQUIRE_WAIT=0 leaves it to the
+    // clock; =2 waits for the newest present of any image (one frame in flight at most).
+    static int acq_wait = -1;
+    if (acq_wait < 0) acq_wait = rt_knob("ACQUIRE_WAIT", "1");
+    uint64_t *fe = img_fence_of(o, idx), want = fe ? *fe : 0;
+    if (acq_wait == 2) want = last_present_fence;
+    if (acq_wait && want) {
+        const GfxBackend *b = gfx_backend();
+        if (b->fence_done() < want) {
+            uint64_t p0 = perf_begin();
+            b->fence_wait(want, UINT64_MAX);
+            perf_end(PERF_PACE, p0);
+        }
     }
     // The sync means "the display no longer reads this image". Presents are copies queued in submit order, so it is
     // already satisfied: fenced = 3 with fence 0.
@@ -794,12 +825,16 @@ NVN_API(nvnQueuePresentTexture) {
     if (o->magic != NVN_WIN_MAGIC || idx < 0 || idx >= o->ntex || idx >= 4 || !o->tex[idx])
         rt_fatal("nvn: QueuePresentTexture of image %d on window %p", idx, (void *)o);
     o->presents++;
+    nvn_submits_in_frame = 0;
     const tex_t *t = (const tex_t *)o->tex[idx];
     uint64_t period = present_period(o), now = kern_now_ns();
     uint64_t slot = now + pace(&o->pace, now, period);
     gfx_backend()->present(t, o->crop, slot);
     o->ticket[idx] = o->presents;
     o->avail[idx] = slot + period;
+    uint64_t *fe = img_fence_of(o, idx);
+    if (fe) *fe = nvn_fence_last();   // the frame drawn into it (nvnWindowAcquireTexture waits for it)
+    last_present_fence = nvn_fence_last();
     frame_step_present(slot, o->interval);   // frame_rate.c: the real-time step follows the display times
     rt_frame_presented(t, o->presents);
 }

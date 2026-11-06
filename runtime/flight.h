@@ -6,7 +6,8 @@
 #define FLIGHT_THUMB_W 320
 #define FLIGHT_THUMB_H 180
 
-extern int flight_on;   // NX2NAVI_FLIGHT=1, set once by flight_init before the first present
+extern int flight_on;
+extern int vk_dump_white;   // vk_dump.c, NX2NAVI_DUMP_WHITE   // NX2NAVI_FLIGHT=1, set once by flight_init before the first present
 
 void flight_init(void);   // prof_start calls it
 // perf_present, once per present on the render thread: the interval since the previous present, the render thread's

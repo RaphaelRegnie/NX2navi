@@ -63,6 +63,7 @@ void vk_exec_frame_written(const tex_t *t) {
 }
 
 void vk_exec_frame_log(const tex_t *p, uint64_t frame) {
+    vk_exec_cond_frame_end(frame);   // a frame boundary in replay order (present_image runs on the replay thread)
     if (!(rt_trace & RT_TRACE_GFX)) return;
     VkExecFrame *f = &vk_exec_frame;
     int hit = 0;
@@ -743,6 +744,13 @@ static void clear_attachment(VkExec *ex, const VkClearAttachment *a) {
 static void clear_cond_log(const VkExec *ex, const char *what, int index) {
     static int on = -1, n;
     if (on < 0) on = rt_knob("LOG_RCOND", "0");
+    if (on == 2 && index < 0 && ex->has_render_cond && ex->depth.width >= 1600) {   // full-size depth clears, all of them
+        char why[256];
+        vk_exec_cond_why(&ex->render_cond, why, sizeof why);
+        rt_log("SEQ depth clear %#llx %s; %s", ex->depth.img ? (unsigned long long)ex->depth.img->addr : 0ull,
+               ex->render_disabled ? "skipped" : "RUN", why);
+        return;
+    }
     if (!on || !ex->has_render_cond || n >= 400) return;
     n++;
     const VkExecTarget *t = index < 0 ? &ex->depth : index < (int)ex->pass_ncolor ? &ex->color[index] : NULL;
@@ -754,6 +762,7 @@ static void clear_cond_log(const VkExec *ex, const char *what, int index) {
 static void clear_color(VkExec *ex, const p_clear_color *c) {
     vk_exec_frame.clears++;
     clear_cond_log(ex, "colour", c->index);
+    if (ex->has_render_cond) ex->render_disabled ? vk_cond_clears_skip++ : vk_cond_clears_run++;
     if (ex->render_disabled) return;
     resolve_rt(ex);
     int i = c->index;
@@ -785,6 +794,7 @@ static void clear_color(VkExec *ex, const p_clear_color *c) {
 
 static void clear_ds(VkExec *ex, const p_clear_ds *c) {
     clear_cond_log(ex, "depth", -1);
+    if (ex->has_render_cond) ex->render_disabled ? vk_cond_clears_skip++ : (vk_cond_clears_run++, vk_cond_depth_run++);
     if (ex->render_disabled) return;
     resolve_rt(ex);
     const VkExecTarget *t = &ex->depth;

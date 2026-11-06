@@ -130,6 +130,7 @@ static class AmpereLowering
             int highest = HighestGpr(code);
             if (spillAt < 0 && highest >= UrLimit) throw new RegisterPressureException($"guest registers up to R{highest}");
             UrBase = spillAt >= 0 ? SpillFrom : (highest + 2) & ~1;
+            LastUrBase = UrBase;
         }
 
         // Spill mode: the temporary that holds guest register r for this instruction, loading its group on first use.
@@ -168,13 +169,14 @@ static class AmpereLowering
                 if (b is >= 0x140 and <= 0x15f) continue;   // branches, calls, exits, barriers: no register fields
                 see(i.Bits(16, 8)); see(i.Bits(24, 8));
                 // Register ranges the base fields do not show: LDSM writes Rd..Rd+count-1; TXD reads Ra..Ra+2 and Rb..Rb+3
-                // and writes the second destination pair; HMMA reads A, B and C fragments and writes the D pair.
+                // and writes the second destination pair; HMMA reads A (K/4 registers), B (K/8) and C and writes D, where
+                // C and D are a pair (.F16) or four registers (.F32, bit 76).
                 if (op == 0x83b && i.Bits(16, 8) != RZ) see(i.Bits(16, 8) + (1u << (int)i.Bits(72, 2)) - 1);
                 if (op == 0xb6c) { see(i.Bits(16, 8) + 1); see(i.Bits(24, 8) + 2); see(i.Bits(32, 8) + 3); see(i.Bits(64, 8) + 1); }
                 if (op == 0x23c)
                 {
-                    uint k16 = i.Bits(75, 1);
-                    see(i.Bits(16, 8) + 1); see(i.Bits(24, 8) + 1 + 2 * k16); see(i.Bits(32, 8) + k16); see(i.Bits(64, 8) + 1);
+                    uint k16 = i.Bits(75, 1), cd = i.Bit(76) ? 3u : 1u;
+                    see(i.Bits(16, 8) + cd); see(i.Bits(24, 8) + 1 + 2 * k16); see(i.Bits(32, 8) + k16); see(i.Bits(64, 8) + cd);
                 }
                 if (b < 0x080 || b is >= 0x160 and <= 0x16f) see(i.Bits(64, 8));   // C of ALU forms, TEX second destinations
                 if (i.Bits(9, 3) == 1) see(i.Bits(32, 8));
@@ -1507,10 +1509,13 @@ static class AmpereLowering
         }
 
         // HADD2 / HMUL2 / HFMA2 with packed-half results: saturate 77, FTZ 80, bit 76 the FMZ precision of HMUL2/HFMA2.
-        // HFMA2.RELU (79) clamps each lane at zero where the predicate in bits 87-90 holds; only PT is lowered: the sum
-        // goes to TexOut, PRMT replicates each lane's sign bit over that lane (selector 0xbb99) and LOP.AND with the
-        // inverted mask clears the negative lanes (negative NaN becomes 0 too). F32 results (78), the H0_NH1 source (86)
-        // and absolute values where Maxwell has none are not lowered. HADD2's second operand is B, or C for forms 2/3.
+        // HFMA2.RELU (79) clamps each lane at zero where the predicate in bits 87-90 holds; only PT is lowered. Measured
+        // on an NVIDIA GPU (tests/tensor_lowering_check.py): a negative result or -0 becomes +0, +inf stays, -inf
+        // becomes 0, a NaN result stays NaN (0x7fff). The sum goes to TexOut and integer operations build the mask of
+        // the half lanes to clear. Maxwell PRMT would be the obvious tool, but the translator emits nothing for it
+        // (Ryujinx 1.3.2, Instructions/InstEmit.cs, PrmtR only logs "not implemented").
+        // F32 results (78), the H0_NH1 source (86) and absolute values where Maxwell has none are not lowered. HADD2's
+        // second operand is B, or C for forms 2/3.
         void Half(ulong maxwell)
         {
             uint op = _i.Bits(0, 12) & 0x1ff;
@@ -1548,11 +1553,20 @@ static class AmpereLowering
                      | ((ulong)c.reg << 39);
             }
             if (!relu) { EmitG(w); return; }
-            Emit(Unguarded(w));
-            Mov32i(TexOut + 1, 0xbb99);   // PRMT selector: bytes 0-1 the sign of byte 1, bytes 2-3 the sign of byte 3
-            Emit(Unguarded(0x5bc0000000000000UL | ((ulong)RZ << 39) | ((ulong)(TexOut + 1) << 20) | ((ulong)TexOut << 8) | (uint)(TexOut + 2)));
-            // LOP.AND Rd, sum, ~mask (InvB bit 40), no predicate output (PT at 48)
-            EmitG(0x5c40000000000000UL | (7UL << 48) | (1UL << 40) | ((ulong)(TexOut + 2) << 20) | ((ulong)TexOut << 8) | (uint)Gpr((uint)Dst));
+            // RELU on both half lanes of the sum x at once: each half h becomes |h| (its sign bit cleared), or 0 when h is
+            // a negative number (sign set, not NaN). |h| > 0x7c00 means NaN, so |h| + 0x3ff carries into bit 15 of its
+            // half exactly for a NaN, and never into the other half (|h| + 0x3ff < 0x10000). A NaN keeps the payload the
+            // host computed, with the sign cleared (the hardware's is 0x7fff). Scratch writes unguarded, Rd guarded.
+            const int x = TexOut, y = TexOut + 1, t = TexOut + 2;
+            Emit(Unguarded(w));                                                                         // HFMA2 x
+            Lop32i(y, x, 0x7fff7fff, 0);                                                                // y = |h| per half
+            Emit(Unguarded(0x1c00000000000000UL | (0x03ff03ffUL << 20) | ((ulong)y << 8) | t));          // IADD32I t = y + 0x03ff03ff
+            Emit(Unguarded(0x5c40000000000000UL | (7UL << 48) | (1UL << 40) | ((ulong)t << 20) | ((ulong)x << 8) | t));   // LOP.AND t = x & ~t
+            Emit(Unguarded(0x3828000000000000UL | (15UL << 20) | ((ulong)t << 8) | t));                 // SHR t >>= 15
+            Lop32i(t, t, 0x00010001, 0);                                                                // bit 0 / 16: clear that half
+            Emit(Unguarded(0x5c18000000000000UL | (16UL << 39) | (1UL << 48) | ((ulong)t << 20) | ((ulong)t << 8) | t));   // ISCADD t = (t << 16) - t
+            // LOP.AND Rd = y & ~t (InvB bit 40), no predicate output (PT at 48)
+            EmitG(0x5c40000000000000UL | (7UL << 48) | (1UL << 40) | ((ulong)t << 20) | ((ulong)y << 8) | (uint)Gpr((uint)Dst));
         }
 
         // MOVM.16.MT88 Rd, Ra (0x23a): an 8x8 matrix of 16-bit elements spread over the warp (lane t holds row t/4,
@@ -1973,33 +1987,39 @@ static class AmpereLowering
             }
         }
 
-        // HMMA.1688.F16 / HMMA.16816.F16 Rd, Ra, Rb, Rc: a warp-wide matrix multiply-accumulate D(16x8) = A(16xK) *
-        // B(Kx8) + C(16x8) on F16 elements, K = 8, or 16 when bit 75 is set. Fields: D 16-23 (a register pair), A 24-31
-        // (K/4 registers), B 32-39 (K/8 registers), C 64-71 (a pair; RZ means a zero accumulator). With g = lane / 4 and
-        // q = lane % 4, each lane holds (the lower-numbered column or k in the low half of every register):
+        // HMMA.1688 / HMMA.16816 Rd, Ra, Rb, Rc with F16 inputs: a warp-wide matrix multiply-accumulate D(16x8) =
+        // A(16xK) * B(Kx8) + C(16x8), K = 8, or 16 when bit 75 is set. Bit 76 selects F32 accumulators and results
+        // (.F32: C and D are four registers each) instead of F16 ones (.F16: a register pair). Fields: D 16-23, A 24-31
+        // (K/4 registers), B 32-39 (K/8 registers), C 64-71 (RZ means a zero accumulator). With g = lane / 4 and
+        // q = lane % 4, each lane holds (the lower-numbered column or k in the low half of every packed register):
         //   A register 2j + r: row g + 8r, k 8j + 2q and 8j + 2q + 1   (j is 0 only when K = 8)
         //   B register j:      k 8j + 2q and 8j + 2q + 1, column g
-        //   C / D register r:  row g + 8r, columns 2q and 2q + 1
+        //   C / D, .F16:       register r holds row g + 8r, columns 2q and 2q + 1
+        //   C / D, .F32:       register 2r + c holds row g + 8r, column 2q + c
         // Maxwell has no tensor instructions, so the product is expanded per lane. For each k pair (2p, 2p + 1) the lane
         // fetches the A word of its own rows from lane 4g + p % 4 and, for each of its two columns n = 2q + c, the B word
-        // from lane 4n + p % 4 (SHFL.IDX), widens the halves to F32 (F2F.F32.F16, exact) and accumulates with FFMA (an
-        // F16 x F16 product is exact in F32). The accumulators are rounded to F16 after every eight k (one 1688 step of
-        // the hardware) and widened again when more follow; the final F16 values are packed as F2fp in this file does
-        // (F2F.F16 writes the low half and zeroes the high half, ISCADD merges the column pair).
-        // The work runs unguarded because every lane must supply its fragments to the shuffles; only the two result
-        // writes take the instruction's guard. Scratch R239-R252 (this file's scratch range, see the header); the guest
-        // operands are never there (guest and uniform registers end below R237, spill temporaries are R204-R235).
+        // from lane 4n + p % 4 (SHFL.IDX), widens the halves to F32 (F2F.F32.F16, exact) and accumulates with FFMA in
+        // F32 (an F16 x F16 product is exact in F32, so the step rounds once whether or not the host fuses it).
+        // The .F16 form rounds to F16 once, after all K products, as the hardware does: it does not round between the
+        // two eight-k halves of HMMA.16816. Measured on an NVIDIA GPU (tests/tensor_lowering_check.py compares this
+        // lowering with those results): a first-half sum of 65536 that the second half cancels gives 0, which an F16
+        // rounding after the first half turns into +inf, and 1 + 2^-11 + 2^-11 split over the halves gives 1 + 2^-10,
+        // which that rounding turns into 1. The F16 results are then packed as F2fp in this file does (F2F.F16 writes
+        // the low half and zeroes the high half, ISCADD merges the column pair).
+        // The work runs unguarded because every lane must supply its fragments to the shuffles; only the result writes
+        // take the instruction's guard. Scratch R239-R252 (this file's scratch range, see the header); the guest operands
+        // are never there (guest and uniform registers end below R237, spill temporaries are R188-R235).
         void Hmma()
         {
-            bool k16 = _i.Bit(75);
+            bool k16 = _i.Bit(75), f32 = _i.Bit(76);
             uint d = (uint)Dst, a = _i.Bits(24, 8), b = _i.Bits(32, 8), c = _i.Bits(64, 8);
-            int aRegs = k16 ? 4 : 2, bRegs = k16 ? 2 : 1;
+            int aRegs = k16 ? 4 : 2, bRegs = k16 ? 2 : 1, cdRegs = f32 ? 4 : 2;
             // A fragment base aligned to its size and the whole fragment below RZ (RZ itself reads as zeros).
             bool fits(uint reg, int n) => reg == RZ || (reg % (uint)n == 0 && reg + (uint)n <= RZ);
-            // Word 1 above B, word 2 other than C and the shape bit, and word 3 bits 96-104 / 126-127 select modes
-            // (F32 accumulators and others) that are not lowered.
-            if ((_i.W1 & ~0xffu) != 0 || (_i.W2 & ~0x8ffu) != 0 || ((uint)(_i.Hi >> 32) & 0xc00001ffu) != 0
-                || !fits(d, 2) || !fits(a, aRegs) || !fits(b, bRegs) || !fits(c, 2))
+            // Word 1 above B, word 2 other than C, the shape (75) and the accumulator type (76), and word 3 bits 96-104 /
+            // 126-127 select modes (bit 74 another shape, HMMA.1684; other input types) that are not lowered.
+            if ((_i.W1 & ~0xffu) != 0 || (_i.W2 & ~0x18ffu) != 0 || ((uint)(_i.Hi >> 32) & 0xc00001ffu) != 0
+                || !fits(d, cdRegs) || !fits(a, aRegs) || !fits(b, bRegs) || !fits(c, cdRegs))
                 throw Fail("HMMA mode");
             if (d == RZ) return;   // no result and no other effect
 
@@ -2027,13 +2047,14 @@ static class AmpereLowering
                 return lane;
             }
 
-            // Accumulators from C (both halves of each row register), or zero.
-            for (int r = 0; r < 2; r++)
-                for (int col = 0; col < 2; col++)
-                {
-                    if (c == RZ) Mov32i(acc + 2 * r + col, 0);
-                    else widen(acc + 2 * r + col, part(c, r), col == 1);
-                }
+            // Accumulators from C, or zero: accumulator 2r + col is register 2r + col of an .F32 C, half col of register
+            // r of an .F16 C.
+            for (int k = 0; k < 4; k++)
+            {
+                if (c == RZ) Mov32i(acc + k, 0);
+                else if (f32) Mov(acc + k, part(c, k), false);
+                else widen(acc + k, part(c, k >> 1), (k & 1) == 1);
+            }
 
             // Lane bases: 8q first (it needs the raw lane id), then 4g.
             Put(0xf0c8000000000000UL | laneA, false);                                                // S2R SR_LANEID
@@ -2065,15 +2086,17 @@ static class AmpereLowering
                             Emit(Unguarded(0x5980000000000000UL | ((ulong)t << 39) | ((ulong)(bw + h) << 20) | ((ulong)(aw + 2 * r + h) << 8) | (uint)t));
                         }
                 }
-                if ((p & 3) == 3)   // end of an eight-k step: round to F16, widen again if another step follows
-                    for (int t = acc; t < acc + 4; t++)
-                    {
-                        narrow(t);
-                        if (p + 1 < pairs) widen(t, t, false);
-                    }
             }
 
-            // D register r = column 2q + 1 in the high half, column 2q in the low half (ISCADD hi << 16 + lo).
+            // .F32: D register 2r + col is accumulator 2r + col.
+            if (f32)
+            {
+                for (int k = 0; k < 4; k++) Mov(part(d, k), acc + k);
+                return;
+            }
+            // .F16: one rounding of each sum to F16, then D register r = column 2q + 1 in the high half, column 2q in the
+            // low half (ISCADD hi << 16 + lo).
+            for (int t = acc; t < acc + 4; t++) narrow(t);
             for (int r = 0; r < 2; r++)
                 EmitG(0x5c18000000000000UL | (16UL << 39) | ((ulong)(acc + 2 * r) << 20) | ((ulong)(acc + 2 * r + 1) << 8) | (uint)part(d, r));
         }
@@ -2327,6 +2350,10 @@ static class AmpereLowering
 
     // c1: the program's c1 constants (BRX jump tables); set before Lower by the caller.
     [ThreadStatic] public static byte[] C1Bytes;
+
+    // Diagnostics only (Program.cs LowerFile, the --lower mode): the register UR0 was mapped to by the last Lowerer
+    // built on this thread (Lowerer.UrBase; SpillFrom in spill mode). Lowering never reads it.
+    [ThreadStatic] public static int LastUrBase;
 
     // localBytes: the local memory size the lowered program needs when that changed (spill mode), else 0. Graphics
     // programs carry it in their header already; compute and task/mesh programs need it from the translator's host

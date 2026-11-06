@@ -1526,13 +1526,33 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
 // rewrites the entries whose slot changed (vk_texture_slot_token) and fills the kinds a new pipeline asked for; with
 // update-after-bind (descriptorIndexing) a write never invalidates a command buffer being recorded. Each submit's first
 // sync also looks every registered slot up once, the freshness check a bound texture gets (vk_texture_by_id_locked).
-// The entries are not double-buffered: a slot registered again while a frame using it is in flight is read new by that
-// frame, as on the Switch, where the pool is memory the GPU reads as it goes.
+// The set is one of a ring of POOL_SETS, one per submission: on the Switch the GPU reads the pool as it goes, but it
+// runs a submission right after nvnQueueSubmitCommands, so what it reads is the pool as of about the submit. Here the
+// GPU runs a submission several milliseconds later, and Ocarina registers slots for its next submission right after
+// submitting: with one set, an in-flight submission sampled a texture registered for the next one, the lit materials
+// of distant characters read the wrong texture as their light or probe data, wrote NaN and bloom spread it (white
+// dialogue frames, a fifth of them; none once each submission waited for its GPU work, NX2NAVI_SUBMIT_FINISH). A
+// submission's first pool_sync takes the next set (pool_take_set), waits for the GPU only if that set's last
+// submission is still running, and brings it up to date from the change log (every entry written since the set was
+// last current; the whole set when the log has wrapped). Writes within a submission go to its own set at once, as
+// before.
 volatile uint32_t vk_pool_kinds_used;
+#define POOL_SETS 4
+#define POOL_LOG (1u << 20)   // entries of the change log: binding * VK_POOL_TEX + id, one per write
 static struct {
     VkDescriptorSetLayout layout, empty;
     VkDescriptorPool dpool;
-    VkDescriptorSet set;
+    VkDescriptorSet set;               // the current submission's (sets[cur])
+    VkDescriptorSet sets[POOL_SETS];
+    uint64_t set_fence[POOL_SETS];     // the timeline value of the last submission that bound it
+    uint64_t set_synced[POOL_SETS];    // the change-log position up to which it holds every write
+    int nsets, cur, all;               // all: the first fill, written to every set
+    uint64_t cur_fence;                // the submission sets[cur] serves
+    uint32_t *log;                     // POOL_LOG entries
+    uint64_t logn;                     // writes so far
+    uint64_t *last;                    // per entry: the log position of its newest write (catch-up writes it once, there)
+    uint64_t switches, waits, catchup, written, rewrites, catch_ns, sync_ns, n_slots, n_refill, n_fresh;
+    uint64_t dirty_pos;                // vk_texture_dirty_slots_locked position (0: the next sync walks every slot)
     int ready, uab;
     uint32_t kinds, gen, epoch, sgen;
     int retry;                         // the last sync left slots to the creation budget
@@ -1567,19 +1587,33 @@ static VkDescriptorSetLayout pool_layout_make(void) {
     if (vkCreateDescriptorSetLayout(c->device, &li, NULL, &l) != VK_SUCCESS) rt_fatal("vk: the texture pool layout failed");
     VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_POOL_KINDS * VK_POOL_TEX},
                                   {VK_DESCRIPTOR_TYPE_SAMPLER, VK_POOL_SAMP}};
-    VkDescriptorPoolCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                                     .flags = PL.uab ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT : 0,
-                                     .maxSets = 1, .poolSizeCount = 2, .pPoolSizes = ps};
-    if (vkCreateDescriptorPool(c->device, &pi, NULL, &PL.dpool) != VK_SUCCESS) rt_fatal("vk: the texture pool descriptor pool failed");
-    VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = PL.dpool,
-                                      .descriptorSetCount = 1, .pSetLayouts = &l};
-    if (vkAllocateDescriptorSets(c->device, &ai, &PL.set) != VK_SUCCESS) rt_fatal("vk: the texture pool set failed");
+    // POOL_SETS sets, fewer where the device has no room for them (one at the least, as before)
+    for (int n = POOL_SETS; n >= 1 && !PL.nsets; n--) {
+        VkDescriptorPoolSize psn[2] = {{ps[0].type, ps[0].descriptorCount * (uint32_t)n},
+                                       {ps[1].type, ps[1].descriptorCount * (uint32_t)n}};
+        VkDescriptorPoolCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                                         .flags = PL.uab ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT : 0,
+                                         .maxSets = (uint32_t)n, .poolSizeCount = 2, .pPoolSizes = psn};
+        if (vkCreateDescriptorPool(c->device, &pi, NULL, &PL.dpool) != VK_SUCCESS) continue;
+        VkDescriptorSetLayout ls[POOL_SETS];
+        for (int i = 0; i < n; i++) ls[i] = l;
+        VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = PL.dpool,
+                                          .descriptorSetCount = (uint32_t)n, .pSetLayouts = ls};
+        if (vkAllocateDescriptorSets(c->device, &ai, PL.sets) == VK_SUCCESS) PL.nsets = n;
+        else vkDestroyDescriptorPool(c->device, PL.dpool, NULL), PL.dpool = VK_NULL_HANDLE;
+    }
+    if (!PL.nsets) rt_fatal("vk: the texture pool set failed");
+    PL.set = PL.sets[0];
+    PL.log = malloc(sizeof *PL.log * POOL_LOG);
+    PL.last = calloc((size_t)VK_POOL_KINDS * VK_POOL_TEX + VK_POOL_SAMP, sizeof *PL.last);
+    if (!PL.log || !PL.last) rt_fatal("vk: out of memory");
     PL.tok = calloc(VK_POOL_TEX, sizeof *PL.tok);
     PL.view = calloc((size_t)VK_POOL_KINDS * VK_POOL_TEX, sizeof *PL.view);
     PL.samp = calloc(VK_POOL_SAMP, sizeof *PL.samp);
     if (!PL.tok || !PL.view || !PL.samp) rt_fatal("vk: out of memory");
-    rt_log("vk: bindless texture pools: %d kinds x %d textures, %d samplers, %s", VK_POOL_KINDS, VK_POOL_TEX, VK_POOL_SAMP,
-           PL.uab ? "update after bind" : "no update-after-bind on this GPU (entries written while bound are undefined)");
+    rt_log("vk: bindless texture pools: %d kinds x %d textures, %d samplers, %s, %d sets (one per submission in turn)",
+           VK_POOL_KINDS, VK_POOL_TEX, VK_POOL_SAMP,
+           PL.uab ? "update after bind" : "no update-after-bind on this GPU (entries written while bound are undefined)", PL.nsets);
     return l;
 }
 
@@ -1620,14 +1654,81 @@ static void pool_flush(void) {
     pool_nw = 0;
 }
 
-static void pool_write(uint32_t binding, uint32_t id, VkImageView view, VkSampler samp) {
+static void pool_write_to(VkDescriptorSet set, uint32_t binding, uint32_t id, VkImageView view, VkSampler samp) {
     if (pool_nw == POOL_WBATCH) pool_flush();
     pool_ii[pool_nw] = (VkDescriptorImageInfo){samp, view, VK_IMAGE_LAYOUT_GENERAL};
-    pool_w[pool_nw] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = PL.set,
+    pool_w[pool_nw] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set,
                                              .dstBinding = binding, .dstArrayElement = id, .descriptorCount = 1,
                                              .descriptorType = view ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLER,
                                              .pImageInfo = &pool_ii[pool_nw]};
     pool_nw++;
+}
+
+// An entry whose wanted value PL.view / PL.samp already hold: into the current set, and into the log for the others
+// (the first fill goes into every set).
+static void pool_write(uint32_t binding, uint32_t id, VkImageView view, VkSampler samp) {
+    if (PL.all) {
+        for (int i = 0; i < PL.nsets; i++) pool_write_to(PL.sets[i], binding, id, view, samp);
+        return;
+    }
+    pool_write_to(PL.set, binding, id, view, samp);
+    uint32_t e = binding * VK_POOL_TEX + id;
+    PL.last[e] = PL.logn;
+    PL.log[PL.logn++ % POOL_LOG] = e;
+}
+
+// Writes entry e (binding * VK_POOL_TEX + id) of set as PL.view / PL.samp hold it now.
+static void pool_entry_to(VkDescriptorSet set, uint32_t e) {
+    uint32_t binding = e / VK_POOL_TEX, id = e % VK_POOL_TEX;
+    if (binding < VK_POOL_KINDS) {
+        VkImageView v = PL.view[(size_t)binding * VK_POOL_TEX + id];
+        if (v) pool_write_to(set, binding, id, v, VK_NULL_HANDLE);
+    } else if (id < VK_POOL_SAMP && PL.samp[id]) {
+        pool_write_to(set, binding, id, VK_NULL_HANDLE, PL.samp[id]);
+    }
+}
+
+// A submission's first pool use: the next set of the ring, once the GPU is done with it. 1 when it switched; *from is
+// the log position the set holds writes up to (pool_catch_up brings it level once pool_sync has refreshed the entries:
+// a view written into a set must be alive, and the refresh is what replaces the views of destroyed textures).
+static int pool_take_set(VkExec *ex, uint64_t *from) {
+    if (PL.cur_fence == ex->fence) return 0;
+    int i = (PL.cur + 1) % PL.nsets;
+    if (PL.nsets > 1) {
+        const GfxBackend *b = gfx_backend();
+        if (b->fence_done() < PL.set_fence[i]) PL.waits++, b->fence_wait(PL.set_fence[i], UINT64_MAX);
+    }
+    *from = PL.set_synced[i];
+    PL.cur = i, PL.set = PL.sets[i], PL.cur_fence = ex->fence, PL.set_fence[i] = ex->fence;
+    return PL.nsets > 1;
+}
+
+// The current set gets the entries written into other sets in [from, to) of the log, as PL.view / PL.samp hold them now.
+static void pool_catch_up(uint64_t from, uint64_t to) {
+    VkDescriptorSet set = PL.set;
+    if (to - from > POOL_LOG) {   // the log has wrapped since: every entry
+        PL.rewrites++;
+        for (uint32_t e = 0; e < VK_POOL_KINDS * VK_POOL_TEX + VK_POOL_SAMP; e++) pool_entry_to(set, e);
+    } else {
+        // each entry once, at its newest write: an entry written again later (also by this submission's own sync,
+        // which wrote it into this set already) is skipped at the older positions
+        PL.catchup += to - from;
+        for (uint64_t q = from; q < to; q++) {
+            uint32_t e = PL.log[q % POOL_LOG];
+            if (PL.last[e] == q) pool_entry_to(set, e), PL.written++;
+        }
+    }
+    pool_flush();
+    PL.switches++;
+    if (PL.switches % 3600 == 0)
+        rt_log("vk: texture pool sets: %llu switches, %llu waited for the GPU, %.1f log entries and %.1f writes per "
+               "catch-up, %llu whole rewrites; %.3f ms catch-up and %.3f ms entry refresh per switch (%.0f slots, %.0f "
+               "refilled, %.0f checked)",
+               (unsigned long long)PL.switches, (unsigned long long)PL.waits, (double)PL.catchup / (double)PL.switches,
+               (double)PL.written / (double)PL.switches, (unsigned long long)PL.rewrites,
+               PL.catch_ns / 1e6 / (double)PL.switches, PL.sync_ns / 1e6 / (double)PL.switches,
+               (double)PL.n_slots / (double)PL.switches, (double)PL.n_refill / (double)PL.switches,
+               (double)PL.n_fresh / (double)PL.switches);
 }
 
 // Entry id of every kind in mask: the slot's view of that kind or the kind's stand-in. Texture lock held. 0: the
@@ -1684,8 +1785,38 @@ static int pool_fill(VkExec *ex, uint32_t id, uint32_t mask, uint64_t tok) {
     return !vk_texture_create_deferred_locked();
 }
 
+static void pool_sync_entries(VkExec *ex);
+
 static void pool_sync(VkExec *ex) {
     if (!PL.layout) vk_pool_set_layout();
+    uint64_t from = 0, pre = PL.logn;
+    int switched = pool_take_set(ex, &from);   // every submission its own set, before the shortcut
+    uint64_t t0 = kern_now_ns();
+    pool_sync_entries(ex);
+    uint64_t t1 = kern_now_ns();
+    PL.sync_ns += t1 - t0;
+    if (switched) {
+        vk_texture_lock();
+        pool_catch_up(from, pre);   // what the other sets got since; this sync's own writes went into it already
+        vk_texture_unlock();
+        PL.catch_ns += kern_now_ns() - t1;
+    }
+    PL.set_synced[PL.cur] = PL.logn;
+}
+
+typedef struct { VkExec *ex; uint32_t used; int n, retry; } PoolDirty;
+
+static void pool_dirty_slot(int id, void *arg) {   // vk_texture_dirty_slots_locked: a slot whose token may have changed
+    PoolDirty *d = arg;
+    if (id >= d->n) return;
+    uint64_t t = vk_texture_slot_token(id);
+    if (t == PL.tok[id]) return;
+    PL.n_refill++;
+    if (pool_fill(d->ex, (uint32_t)id, d->used, t)) PL.tok[id] = t;
+    else d->retry = 1;
+}
+
+static void pool_sync_entries(VkExec *ex) {
     uint32_t used = __atomic_load_n(&vk_pool_kinds_used, __ATOMIC_RELAXED);
     uint32_t gen = vk_texture_slots_gen(), ep = vk_texture_epoch(), sg = vk_sampler_gen();
     if (PL.ready && !PL.retry && used == PL.kinds && gen == PL.gen && ep == PL.epoch && sg == PL.sgen) return;
@@ -1694,24 +1825,37 @@ static void pool_sync(VkExec *ex) {
     int n = vk_texture_slot_count_locked();
     if (n > VK_POOL_TEX) n = VK_POOL_TEX;
     if (!PL.ready) {   // every entry a stand-in first: partially bound arrays are still read out of range by guests
+        PL.all = 1;
         for (uint32_t id = 0; id < VK_POOL_TEX; id++) pool_fill(ex, id, 0xffffu, 0);
         for (uint32_t id = 0; id < VK_POOL_SAMP; id++) PL.samp[id] = Z.samp, pool_write(VK_POOL_KINDS, id, VK_NULL_HANDLE, Z.samp);
+        pool_flush();
+        PL.all = 0;
         PL.ready = 1, PL.sgen = 0;
     }
     int retry = 0;   // slots whose texture the creation budget left: filled again by the next sync
     if (fresh || gen != PL.gen || ep != PL.epoch || PL.retry) {
         vk_texture_create_budget_locked(POOL_CREATE_BUDGET);
-        for (int id = 0; id < n; id++) {   // slots past n were never registered: stand-ins since the first sync
+        // Only a slot change since the last sync (no new kinds, no new submission, nothing left over): the slots that
+        // changed (vk_texture_dirty_slots_locked), not the whole table
+        PoolDirty pd = {ex, used, n, 0};
+        int walked = !fresh && ep == PL.epoch && !PL.retry && PL.dirty_pos &&
+                     vk_texture_dirty_slots_locked(&PL.dirty_pos, pool_dirty_slot, &pd);
+        retry = pd.retry;
+        if (!walked) PL.dirty_pos = vk_texture_dirty_pos_locked();
+        for (int id = 0; id < n && !walked; id++) {   // slots past n were never registered: stand-ins since the first sync
             uint64_t t = vk_texture_slot_token(id);
             if (t != PL.tok[id]) {
+                PL.n_refill++;
                 if (pool_fill(ex, (uint32_t)id, used, t)) PL.tok[id] = t;
                 else retry = 1;
             } else if (t && fresh) {
                 pool_fill(ex, (uint32_t)id, fresh, t);
             } else if (t && ep != PL.epoch) {
+                PL.n_fresh++;
                 vk_texture_by_id_locked(id, NULL, NULL);   // the submit's freshness check
             }
         }
+        if (!walked) PL.n_slots += (uint64_t)n;
         vk_texture_create_budget_locked(-1);
     }
     PL.retry = retry;
@@ -2620,7 +2764,7 @@ static int draw_skipped(const VkExec *ex, int mesh, int why) {
 // mesh: a mesh draw (op_draw_mesh): the program's mesh and task stages stand in for the vertex stage, and nothing
 // vertex-related (vertex buffers, motion vector bookkeeping of vertex shaders) is bound or noted.
 static int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int mesh) {
-    if (ex->render_disabled) return draw_skipped(ex, mesh, SK_DISABLED);
+    if (ex->render_disabled) return vk_cond_draws_skip += ex->has_render_cond, draw_skipped(ex, mesh, SK_DISABLED);
     cb_res(ex);
     dummies_init();
     if (ex->pass_noatt) {   // no attachment: the pass covers this draw's viewport or scissor, reopened when it needs more

@@ -124,9 +124,29 @@ static void counter_cb(void *arg) {
 // report counts as pending until then, not until its fence passes: the callback runs after the fence, and in between
 // the record still held what the CPU wrote (Ocarina re-arms its condition records with 1 for the next frame), so a
 // condition read 1 where the GPU had written 0, a depth clear ran after the depth copy and frames showed only sky.
-typedef struct { uint64_t addr, seq; volatile uint64_t written; int unknown, type; } Pending;
+// frame: the present count (vk_exec_cond_frame_end, in replay order) when the report was replayed. The game arms its
+// condition records from the CPU between frames, so within a frame a timestamp report decides the record's value even
+// after it reached memory: Ocarina's CPU, running a frame ahead, had re-armed a record with 1 by the time a later depth
+// clear of the frame read it, the clear ran after the depth copy and the frame showed only sky (white flashes).
+typedef struct { uint64_t addr, seq, frame; volatile uint64_t written; int unknown, type; } Pending;
 static Pending pending[PENDING];
 static uint64_t report_seq;
+static uint64_t cond_frame;
+
+// Per-frame counts of conditional work (NX2NAVI_LOG_RCOND=1, vk_exec_cond_frame_end logs them): clears and
+// draws issued under a render condition, run or skipped.
+unsigned vk_cond_clears_run, vk_cond_clears_skip, vk_cond_draws_skip, vk_cond_depth_run;
+
+void vk_exec_cond_frame_end(uint64_t frame) {
+    static int on = -1;
+    if (on < 0) on = rt_knob("LOG_RCOND", "0");
+    if (on && (vk_cond_clears_run || vk_cond_clears_skip || vk_cond_draws_skip))
+        rt_log("vk: frame %llu conditions: clears run %u skipped %u, draws skipped %u, depth clears run %u",
+               (unsigned long long)frame, vk_cond_clears_run, vk_cond_clears_skip, vk_cond_draws_skip, vk_cond_depth_run);
+    vk_cond_clears_run = vk_cond_clears_skip = vk_cond_draws_skip = vk_cond_depth_run = 0;
+    if (on == 2) rt_log("SEQ present %llu", (unsigned long long)frame);
+    cond_frame++;
+}
 
 static Pending *pending_slot(uint64_t addr, int insert);
 
@@ -149,11 +169,12 @@ static Pending *pending_slot(uint64_t addr, int insert) {
         if (a == addr) return e;
         if (!insert) continue;
         if (!a) { if (!free_) free_ = e; continue; }
-        if (__atomic_load_n(&e->written, __ATOMIC_ACQUIRE) >= e->seq && (!victim || e->seq < victim->seq)) victim = e;
+        if (__atomic_load_n(&e->written, __ATOMIC_ACQUIRE) >= e->seq && e->frame != cond_frame && (!victim || e->seq < victim->seq))
+            victim = e;   // done, and not from this frame (whose reports still decide their records)
     }
     Pending *e = free_ ? free_ : victim;
     if (!e) return NULL;   // every probed entry still has a report in flight
-    e->seq = 0, e->unknown = 0, e->type = -1;
+    e->seq = 0, e->frame = 0, e->unknown = 0, e->type = -1;
     __atomic_store_n(&e->written, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&e->addr, addr, __ATOMIC_RELEASE);
     return e;
@@ -342,7 +363,7 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
         vk_completion_add(ex->fence, counter_cb, a);
     }
     Pending *e = pending_slot(p->addr, 1);
-    if (e) e->seq = report_seq, e->unknown = samples, e->type = (int)p->type;
+    if (e) e->seq = report_seq, e->frame = cond_frame, e->unknown = samples, e->type = (int)p->type;
     else LOG_ONCE("vk: a counter report's table neighbourhood is all in flight: conditions on %#llx read memory",
                   (unsigned long long)p->addr);
 }
@@ -352,6 +373,7 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
 // 1: *v read, 0: not readable, 2: a samples-passed report not in memory yet (unknown)
 static int counter_word(uint64_t addr, uint64_t *v) {
     const Pending *e = pending_slot(addr, 0);   // the last report to addr decides
+    if (e && !e->unknown && e->frame == cond_frame) return *v = 0, 1;   // a timestamp/statistics report of this frame
     if (e && __atomic_load_n(&e->written, __ATOMIC_ACQUIRE) < e->seq) return *v = 0, e->unknown ? 2 : 1;
     VkMemSpan m;
     if (nvn_gpu_only(addr) || !vk_mem_resolve(addr, sizeof *v, &m)) return 0;
@@ -364,6 +386,21 @@ static int counter_word(uint64_t addr, uint64_t *v) {
 static int last_type(uint64_t addr) {
     const Pending *e = pending_slot(addr, 0);
     return e ? e->type : -1;
+}
+
+// NX2NAVI_LOG_RCOND=ab (diagnosis): the words a condition compares and where each came from: "f" a report replayed
+// this frame (0), "p" a pending report (0 or unknown), "m" memory, with the newest report's type and frame.
+void vk_exec_cond_why(const p_render_cond *c, char *buf, size_t cap) {
+    int o = snprintf(buf, cap, "%#llx mode %d:", (unsigned long long)c->addr, c->mode);
+    for (int k = 0; k < 2 && o < (int)cap; k++) {
+        uint64_t a = c->addr + 16 * (uint64_t)k;
+        const Pending *e = pending_slot(a, 0);
+        const char *src = !e ? "m" : !e->unknown && e->frame == cond_frame ? "f"
+                        : __atomic_load_n(&e->written, __ATOMIC_ACQUIRE) < e->seq ? "p" : "m";
+        o += snprintf(buf + o, cap - (size_t)o, " %llu %s(type %d, frame %lld of %llu)",
+                      (unsigned long long)*(const uint64_t *)(uintptr_t)a, src, e ? e->type : -1,
+                      e ? (long long)e->frame : -1LL, (unsigned long long)cond_frame);
+    }
 }
 
 static int cond_enabled(const p_render_cond *c) {
@@ -546,6 +583,10 @@ static void copy_t2t(VkExec *ex, const p_copy_t2t *p) {
     }
     ex->recorded++;
     vk_texture_gpu_written(p->dst);
+    static int lg = -1;
+    if (lg < 0) lg = rt_knob("LOG_RCOND", "0");
+    if (lg == 2 && (d.img->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) && d.w >= 1600)
+        rt_log("SEQ depth copy %#llx -> %#llx", (unsigned long long)s.img->addr, (unsigned long long)d.img->addr);
 }
 
 // ---- buffer to buffer

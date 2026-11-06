@@ -58,7 +58,7 @@ static void present_main(void *arg) {
         busy = 1;
         plat_cond_broadcast(&pcv);
         plat_mutex_unlock(&pl);
-        if (flight_on) vk_thumbs_frame(j.frame);
+        if (flight_on || vk_dump_white) vk_thumbs_frame(j.frame);   // NX2NAVI_DUMP_WHITE reads them too
         vk_present_blit(j.image, VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
         uint64_t f = vk_sync_submit(NULL, 0);   // a timeline value after the blit: deferred destruction waits for the blit too
         if (j.value && f != j.value)

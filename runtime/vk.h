@@ -425,6 +425,11 @@ VkImage vk_tonemap_record(VkCommandBuffer cb, VkImage src, VkFormat sf, uint32_t
 // its storage address is created, dropped, released or taken back into use. Unlocked; read it before the lookup it
 // guards (a lookup may create an entry). 0 when the slot was never registered: nothing is kept under 0.
 uint64_t vk_texture_slot_token(int id);
+// Slots whose token may have changed since *pos (0 at first; then the value these calls leave): fn is called for each
+// (some more than once) and *pos advanced. 0 when too many changes came since: the caller looks at every slot. *pos
+// from vk_texture_dirty_pos_locked after such a walk. Texture lock held.
+int vk_texture_dirty_slots_locked(uint64_t *pos, void (*fn)(int id, void *arg), void *arg);
+uint64_t vk_texture_dirty_pos_locked(void);
 void vk_sampler_dlss_bias(float bias);           // texture LOD bias added for DLSS upscaling (material samplers)
 uint32_t vk_sampler_gen(void);                      // changes whenever a sampler slot is registered
 void vk_texture_gpu_written(const tex_t *t);        // rendered or copied into by the GPU: no re-upload from storage

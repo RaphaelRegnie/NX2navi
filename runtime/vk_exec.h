@@ -38,6 +38,10 @@ typedef struct {
     uint8_t scale;                       // VkTexImage.scale
 } VkExecTarget;
 
+void vk_exec_cond_frame_end(uint64_t frame);   // vk_exec_xfer.c: a present, in replay order (NX2NAVI_LOG_RCOND)
+extern unsigned vk_cond_clears_run, vk_cond_clears_skip, vk_cond_draws_skip, vk_cond_depth_run;
+void vk_exec_cond_why(const p_render_cond *c, char *buf, size_t cap);   // NX2NAVI_LOG_RCOND=ab
+
 // The replay state. One instance lives for the run: NVN state is queue state and carries over from one submission to
 // the next, as in MacNativeGames' and LAS Recomp's replays. The "per command buffer" fields are reset by vk_exec_record.
 typedef struct VkExec {

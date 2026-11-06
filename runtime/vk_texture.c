@@ -126,11 +126,59 @@ static uint32_t reg_serial;
 
 static uint32_t agen_idx(uint64_t addr) { return (uint32_t)(addr * 0x9E3779B97F4A7C15ull >> 52); }
 
+// Slots that may resolve differently since a position, for the texture pool descriptors (vk_exec_draw.c
+// pool_sync_entries), which otherwise looked at every registered slot after each change: Ocarina registers slots all
+// through a submission, and the refresh walked the whole table about twenty times per submission (3.5 ms). A ring of
+// changes, each a slot id (registered) or an address bucket (an entry at that agen index changed: every slot registered
+// over it, kept in per-bucket lists). Lock held for all of it.
+#define DIRTY_N (1u << 16)
+#define DIRTY_BUCKET 0x80000000u
+static uint32_t dirty[DIRTY_N];
+static uint64_t ndirty;
+static int32_t bucket_head[AGEN_N];
+static int32_t *slot_next, *slot_prev;   // per slot id: its bucket list links (slot_prev -2: in no list)
+static uint16_t *slot_bucket;
+
+static void dirty_push(uint32_t x) { dirty[ndirty++ % DIRTY_N] = x; }
+
 static void tex_gen_bump(uint64_t addr) {
     if (!++tex_gen) tex_gen = 1;
     slots_gen++;
-    uint32_t *g = &agen[agen_idx(addr)];
+    uint32_t b = agen_idx(addr);
+    uint32_t *g = &agen[b];
     __atomic_store_n(g, *g + 1, __ATOMIC_RELEASE);
+    dirty_push(DIRTY_BUCKET | b);
+}
+
+// Moves slot id into bucket b's list (the lists exist once a slot was registered: vk_texture_register).
+static void slot_rebucket(int id, uint32_t b) {
+    if (slot_prev[id] != -2) {   // out of its old list
+        if (slot_prev[id] >= 0) slot_next[slot_prev[id]] = slot_next[id];
+        else bucket_head[slot_bucket[id]] = slot_next[id];
+        if (slot_next[id] >= 0) slot_prev[slot_next[id]] = slot_prev[id];
+    }
+    slot_bucket[id] = (uint16_t)b;
+    slot_prev[id] = -1;
+    slot_next[id] = bucket_head[b];
+    if (bucket_head[b] >= 0) slot_prev[bucket_head[b]] = id;
+    bucket_head[b] = id;
+}
+
+uint64_t vk_texture_dirty_pos_locked(void) { return ndirty; }
+
+int vk_texture_dirty_slots_locked(uint64_t *pos, void (*fn)(int id, void *arg), void *arg) {
+    if (!slot_next || ndirty - *pos > DIRTY_N) {
+        *pos = ndirty;
+        return 0;
+    }
+    for (uint64_t q = *pos; q < ndirty; q++) {
+        uint32_t x = dirty[q % DIRTY_N];
+        if (x & DIRTY_BUCKET)
+            for (int32_t id = bucket_head[x & ~DIRTY_BUCKET]; id >= 0; id = slot_next[id]) fn(id, arg);
+        else fn((int)x, arg);
+    }
+    *pos = ndirty;
+    return 1;
 }
 
 static volatile int32_t tex_ready;
@@ -1109,7 +1157,11 @@ void vk_texture_register(int id, const tex_t *t, const view_t *v) {
     }
     if (!sinfo) {
         uint64_t *p = calloc(1 << 20, sizeof *p);
-        if (!p) rt_fatal("vk: out of memory for texture slot tokens");
+        slot_next = malloc(sizeof *slot_next << 20), slot_prev = malloc(sizeof *slot_prev << 20);
+        slot_bucket = calloc(1 << 20, sizeof *slot_bucket);
+        if (!p || !slot_next || !slot_prev || !slot_bucket) rt_fatal("vk: out of memory for texture slot tokens");
+        for (int i = 0; i < (1 << 20); i++) slot_prev[i] = -2, slot_next[i] = -1;
+        for (int i = 0; i < AGEN_N; i++) bucket_head[i] = -1;
         __atomic_store_n(&sinfo, p, __ATOMIC_RELEASE);
     }
     TexSlot *s = &tslots[id];
@@ -1119,6 +1171,8 @@ void vk_texture_register(int id, const tex_t *t, const view_t *v) {
     slots_gen++;
     if (!++reg_serial) reg_serial = 1;
     __atomic_store_n(&sinfo[id], (uint64_t)reg_serial << 16 | agen_idx((uintptr_t)t->mem), __ATOMIC_RELEASE);
+    slot_rebucket(id, agen_idx((uintptr_t)t->mem));
+    dirty_push((uint32_t)id);
     s->has_view = v != NULL;
     if (v) s->v = *v;
     else memset(&s->v, 0, sizeof s->v);
@@ -1149,6 +1203,11 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
         e = NULL;
         for (Tex *p = nvn_hm_get(&by_addr, &k.addr); p; p = p->next_at) {
             if (p->released) continue;
+            // Only an entry of the slot's target: Ocarina's volumetric fog registers a 3D two-channel volume (32x24x64)
+            // over the storage of the bloom pass's 480x270 2D target; followed, the fog computes and the fog pass got
+            // that 2D image, no 3D view can be made of it (vk_exec_draw.c get_view) and they read and wrote stand-ins.
+            // With the target kept they get the volume itself.
+            if (p->key.d.target != k.d.target) continue;
             if (!any) any = p;
             if (same_but_swizzle(&p->key, &k)) { e = p; break; }
         }

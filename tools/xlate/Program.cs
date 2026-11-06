@@ -6,6 +6,7 @@
 //   nx2navi_xlate --serve              one request per stdin line: {"job": {...}, "out": "<dir>"}; one reply line per request:
 //                                   "ok <key>" or "fail <key> <message>"; a malformed line gets "fail ? <message>" and the loop continues.
 //   nx2navi_xlate <jobs.json> <outdir> batch mode: a JSON array of jobs, prints a summary, exit 1 if any failed.
+//   nx2navi_xlate --lower <file>       lowers SM86 instructions given as hex words and prints the Maxwell words (LowerFile).
 //   job: { "key", "stage": "vs|ps|cs", "code": path (graphics = 0x50-byte SPH + instructions, compute = instructions), "c1": hex,
 //          "sm86": bool + "size": bytes (an NVN2 program, lowered by AmpereLowering.cs), "nvn2_table": [start, textures,
 //          images] (NVN2 compute binding table), "lowered_out": path, "mesh": {"stage": 6|7, "threads", "maxv", "maxp",
@@ -231,8 +232,56 @@ static class SwshXlate
             catch (Exception e) { if (Environment.GetEnvironmentVariable("DMSH_STACK") != null) Console.Error.WriteLine(e.StackTrace); return $"{e.GetType().Name}: {e.Message.Split('\n')[0]}"; }
     }
 
+    // --lower <file>: runs AmpereLowering on a few SM86 instructions, for executing single instructions on the CPU
+    // (tests/maxwell_warp_emu.py). Each line of the file is one instruction as four hex 32-bit words "w0 w1 w2 w3"
+    // (w0 = bits 0-31, optional 0x prefix; blank lines and '#' comments skipped). They are lowered as a compute program
+    // (AmpereLowering.Lower with graphics false), with an SM86 EXIT appended unless the last instruction is an
+    // unpredicated EXIT. Prints the lowered Maxwell instruction words in program order, one 16-digit hex word per line:
+    // the scheduling words Lower puts first in every 32 bytes are left out, the closing EXIT Lower appends is kept. Then
+    // "urbase N" (the register UR0 maps to, AmpereLowering.LastUrBase) and, in spill mode only, "local N" (the local
+    // memory bytes the program needs). Errors go to stderr with exit code 1.
+    static int LowerFile(string path)
+    {
+        try
+        {
+            var bytes = new List<byte>();
+            uint[] last = null;
+            foreach (string raw in File.ReadAllLines(path))
+            {
+                string line = raw.Split('#')[0].Trim();
+                if (line.Length == 0) continue;
+                string[] f = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length != 4) throw new FormatException($"expected four hex words: \"{line}\"");
+                last = f.Select(s => Convert.ToUInt32(s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s, 16)).ToArray();
+                foreach (uint w in last) bytes.AddRange(BitConverter.GetBytes(w));
+            }
+            // SM86 EXIT: opcode 0x94d under PT (bits 12-15 = 7), second condition PT (bits 87-90 = 7); AmpereLowering Exit.
+            bool exits = last != null && (last[0] & 0xffff) == 0x794d && ((last[2] >> 23) & 15) == 7 && ((last[2] >> 20) & 3) == 0;
+            if (!exits) foreach (uint w in new uint[] { 0x0000794d, 0, 0x03800000, 0x000fea00 }) bytes.AddRange(BitConverter.GetBytes(w));
+            byte[] code = bytes.ToArray();
+            byte[] lowered = AmpereLowering.Lower(code, code.Length, false, out int local);
+            // Compute layout (AmpereLowering.Lower): a scheduling word at every 32-byte boundary, instructions in the other
+            // slots, zero padding after the closing EXIT. Instruction words are never 0, so the last nonzero one ends it.
+            var words = new List<ulong>();
+            int end = 0;
+            for (int a = 0; a + 8 <= lowered.Length; a += 8)
+            {
+                if ((a & 0x1f) == 0) continue;
+                ulong w = BitConverter.ToUInt64(lowered, a);
+                words.Add(w);
+                if (w != 0) end = words.Count;
+            }
+            foreach (ulong w in words.Take(end)) Console.WriteLine(w.ToString("x16"));
+            Console.WriteLine($"urbase {AmpereLowering.LastUrBase}");
+            if (local != 0) Console.WriteLine($"local {local}");
+            return 0;
+        }
+        catch (Exception e) { Console.Error.WriteLine($"{e.GetType().Name}: {e.Message}"); return 1; }
+    }
+
     static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--lower") return LowerFile(args[1]);
         if (args.Length == 1 && args[0] == "--serve")
         {
             // One request per line: {"job": {...}, "out": "<dir>"}; one reply line "ok <key>" / "fail <key> <message>".
