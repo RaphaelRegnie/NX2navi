@@ -1868,13 +1868,13 @@ void gfx_shader_local_size(const GfxShader *s, uint32_t local[3]) { memcpy(local
 // census) does not match the keys play asks for. Every (program, answers) that a gfx_shader_get* call resolves is
 // recorded next to pipeline-keys.bin, so the first-start preparation (Task 2.6, here the NX2NAVI_TEST_PREPARE_SHADERS hook)
 // translates exactly the variants play needs, from these files alone:
-//   shader-answers.bin  "NX2NAVISANS", version, record size; records: stage (u32), code hash, input id, pack_answers bytes
+//   shader-answers.bin  "NX2NSANS", version, record size; records: stage (u32), code hash, input id, pack_answers bytes
 //                       of the full answers, zero padding. One record per input id: answers outside the shader's use
 //                       mask do not change its SPIR-V, are out of its input id and cache key (mask_answers) and so do
 //                       not make records of their own (a fight run meets 4126 full pairs, 1238 input ids). The full
 //                       answers are kept so a translator with a wider mask still gets them. Under a new translator
 //                       the masks, hence the input ids, are new, and play appends records for them.
-//   shader-programs.bin "NX2NAVISPRG", version, 0; records: stage, length, c1 length (u32 each), code hash, control section,
+//   shader-programs.bin "NX2NSPRG", version, 0; records: stage, length, c1 length (u32 each), code hash, control section,
 //                       code[length], c1. One per code hash; written before the answers that name it. Game content:
 //                       it stays in the ignored pipeline cache directory.
 // A file with another header is rewritten; a torn tail (killed process) is cut off at open.
@@ -2002,12 +2002,12 @@ void gfx_shader_record_at(const char *keys_path) {
     snprintf(RC.prg_path, sizeof RC.prg_path, "%.*sshader-programs.bin", dir, keys_path);
     uint8_t *b;
     size_t n;
-    if (rec_read(RC.ans_path, "NX2NAVISANS", ANS_VERSION, ANS_REC, &b, &n)) {
+    if (rec_read(RC.ans_path, "NX2NSANS", ANS_VERSION, ANS_REC, &b, &n)) {
         for (size_t o = 0; o + ANS_REC <= n; o += ANS_REC) set_add(&RC.pairs, hash8(b + o + 36));
         if (n % ANS_REC) truncate_to(RC.ans_path, sizeof(RecHeader) + n / ANS_REC * ANS_REC);
     }
     free(b);
-    if (rec_read(RC.prg_path, "NX2NAVISPRG", PRG_VERSION, 0, &b, &n)) {
+    if (rec_read(RC.prg_path, "NX2NSPRG", PRG_VERSION, 0, &b, &n)) {
         size_t whole = prg_walk(b, n, prg_seen, &RC.progs);
         if (whole != n) truncate_to(RC.prg_path, sizeof(RecHeader) + whole);
     }
@@ -2069,8 +2069,8 @@ void gfx_shader_record_flush(int force) {
     RC.ans = (Bytes){0}, RC.prg = (Bytes){0};
     uint64_t total = RC.pairs.n, added = RC.pairs_new;
     plat_mutex_unlock(&RC.lock);
-    if (prg.n && !rec_append(RC.prg_path, "NX2NAVISPRG", PRG_VERSION, 0, &prg)) rt_log("gfx_shader: cannot write %s", RC.prg_path);
-    if (ans.n && !rec_append(RC.ans_path, "NX2NAVISANS", ANS_VERSION, ANS_REC, &ans)) rt_log("gfx_shader: cannot write %s", RC.ans_path);
+    if (prg.n && !rec_append(RC.prg_path, "NX2NSPRG", PRG_VERSION, 0, &prg)) rt_log("gfx_shader: cannot write %s", RC.prg_path);
+    if (ans.n && !rec_append(RC.ans_path, "NX2NSANS", ANS_VERSION, ANS_REC, &ans)) rt_log("gfx_shader: cannot write %s", RC.ans_path);
     plat_mutex_unlock(&rec_io);
     if (ans.n) rt_log("gfx_shader: answers: %zu new records appended (%llu new this run, %llu recorded)", ans.n / ANS_REC,
                       (unsigned long long)added, (unsigned long long)total);
@@ -2132,8 +2132,8 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
     double t0 = (double)plat_now_ms();
     uint8_t *ab = NULL, *pb = NULL;
     size_t an = 0, pn = 0;
-    if (!rec_read(ans_path, "NX2NAVISANS", ANS_VERSION, ANS_REC, &ab, &an) ||
-        !rec_read(prg_path, "NX2NAVISPRG", PRG_VERSION, 0, &pb, &pn)) {
+    if (!rec_read(ans_path, "NX2NSANS", ANS_VERSION, ANS_REC, &ab, &an) ||
+        !rec_read(prg_path, "NX2NSPRG", PRG_VERSION, 0, &pb, &pn)) {
         rt_log("gfx_shader: prepare: no %s (%s)", what, ans_path);
         free(ab), free(pb);
         return -1;
@@ -2175,7 +2175,7 @@ void gfx_shader_prepare_recorded(int threads, int procs) {
 }
 
 // ---- prepared variants (shader-prepared.bin next to pipeline-keys.bin)
-// "NX2NAVISPRP", version, record size; records: stage, priority, 2 zero bytes, input id. gfx_shader_prepare_seed writes
+// "NX2NSPRP", version, record size; records: stage, priority, 2 zero bytes, input id. gfx_shader_prepare_seed writes
 // them in priority order, one per input id; gfx_shader_warm_list reads them at boot.
 #define PRP_VERSION 1
 #define PRP_REC 36
@@ -2203,7 +2203,7 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
         by[r[1]]++, stages[r[0]]++, u++;
     }
     free(seen.v);
-    RecHeader h = {{'T', 'O', 'T', 'K', 'S', 'P', 'R', 'P'}, PRP_VERSION, PRP_REC};
+    RecHeader h = {{'N', 'X', '2', 'N', 'S', 'P', 'R', 'P'}, PRP_VERSION, PRP_REC};
     uint8_t *file = recs ? malloc(sizeof h + u * PRP_REC + 1) : NULL;
     int ok = file != NULL;
     if (ok) {
@@ -2233,9 +2233,9 @@ size_t gfx_shader_warm_list(GfxWarmEnt **out) {
     uint8_t *ab = NULL, *pb = NULL;
     size_t an = 0, pn = 0;
     plat_mutex_lock(&rec_io);                      // no append meanwhile
-    rec_read(RC.ans_path, "NX2NAVISANS", ANS_VERSION, ANS_REC, &ab, &an);
+    rec_read(RC.ans_path, "NX2NSANS", ANS_VERSION, ANS_REC, &ab, &an);
     plat_mutex_unlock(&rec_io);
-    rec_read(prp, "NX2NAVISPRP", PRP_VERSION, PRP_REC, &pb, &pn);
+    rec_read(prp, "NX2NSPRP", PRP_VERSION, PRP_REC, &pb, &pn);
     size_t na = an / ANS_REC, np = pn / PRP_REC, n = 0;
     GfxWarmEnt *e = calloc(na + np + 1, sizeof *e);
     Set64 seen = {0};

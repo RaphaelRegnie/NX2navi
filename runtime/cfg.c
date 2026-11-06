@@ -16,7 +16,7 @@
 #include "platform/platform.h"
 
 #define PREFIX "NX2NAVI_"
-#define PREFIX_LEN 5
+#define PREFIX_LEN (sizeof PREFIX - 1)
 #define CFG_MAX_KEYS 512
 
 typedef struct { char *key, *value; int dirty, removed; } CfgEntry;   // key upper-case, without the prefix; value NULL after cfg_reset

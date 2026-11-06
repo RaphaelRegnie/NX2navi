@@ -433,7 +433,7 @@ exec "$HERE/python/bin/python3" -m installer.gui "$@"
 
 DESKTOP = '''[Desktop Entry]
 Type=Application
-Name=NX2navi Recomp Setup
+Name=NX2navi Setup
 Comment=Builds Ocarina of Time for this PC from your own game files
 Exec=AppRun
 Icon=nx2navi-setup

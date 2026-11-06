@@ -6,7 +6,7 @@ MacNativeGames contributors).
 Input: <romfs>/index.json ({status, romfs_size, romfs_sha256, files: [{path, offset, size}]}) as tools/extract.py
 writes it, and <romfs>/romfs.bin, whose size must match. Output, both in the build directory (never in the repo):
 
-    romfs-index.bin   NX2NAVIRFS1 layout: header <8sQQ (magic, count, strings offset), count 24-byte rows <QQII (offset,
+    romfs-index.bin   NX2NRFS1 layout: header <8sQQ (magic, count, strings offset), count 24-byte rows <QQII (offset,
                       size, name offset, name length including the NUL), then the NUL-terminated names; rows sorted by
                       the UTF-8 bytes of the path, which is the order strcmp sees
     romfs_config.h    ROMFS_IMAGE_SIZE, ROMFS_IMAGE_SHA256, ROMFS_INDEX_SHA256, ROMFS_FILE_COUNT
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from check_content import GENERATED_MARKER
 
-MAGIC = b'NX2NAVIRFS1'
+MAGIC = b'NX2NRFS1'
 HEADER = struct.Struct('<8sQQ')
 ROW = struct.Struct('<QQII')
 

@@ -2066,7 +2066,7 @@ static void keys_flush(void) {
         FILE *f = fopen(K.path, K.header_ok ? "ab" : "wb");
         int ok = f != NULL;
         if (ok && !K.header_ok) {
-            KeysHeader h = {{'T', 'O', 'T', 'K', 'P', 'K', 'E', 'Y'}, KEYS_VERSION, sizeof(KeyRec)};
+            KeysHeader h = {{'N', 'X', '2', 'N', 'P', 'K', 'E', 'Y'}, KEYS_VERSION, sizeof(KeyRec)};
             ok = fwrite(&h, sizeof h, 1, f) == 1;
         }
         if (ok) ok = fwrite(r, sizeof *r, n, f) == n;
@@ -2093,7 +2093,7 @@ static void keys_open(void) {
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "NX2NAVIPKEY", 8) &&
+    if (len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "NX2NPKEY", 8) &&
         h.version == KEYS_VERSION && h.rec_size == sizeof(KeyRec)) {
         K.header_ok = 1;
         size_t n = ((size_t)len - sizeof h) / sizeof(KeyRec);

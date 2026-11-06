@@ -1,4 +1,4 @@
-# Tester guide: running NX2navi Recomp on your GPU
+# Tester guide: running NX2navi on your GPU
 
 This guide is for testing the build on a GPU other than the developer's (AMD RX 9070). You build it from source with
 your own copy of the game and your own console keys. Nothing from the game is in this repository, and nothing you build

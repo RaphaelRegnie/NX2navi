@@ -946,7 +946,7 @@ static void load_index(void) {
     if (strcmp(hex, ROMFS_INDEX_SHA256))
         rt_fatal("RomFS index %s has SHA-256 %s, this build expects %s (rebuild with tools/build_game.py)", path, hex,
                  ROMFS_INDEX_SHA256);
-    need(!memcmp(index_bytes, "NX2NAVIRFS1", 8), "index format");
+    need(!memcmp(index_bytes, "NX2NRFS1", 8), "index format");
     memcpy(&file_count, index_bytes + 8, 8);
     memcpy(&strings_offset, index_bytes + 16, 8);
     need(file_count == ROMFS_FILE_COUNT && file_count < 1000000 && strings_offset == 24 + file_count * 24 &&

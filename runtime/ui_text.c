@@ -45,7 +45,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_ON] = "On", [UI_MENU_OFF] = "Off", [UI_MENU_AUTO] = "Automatic", [UI_MENU_DEFAULT_MARK] = "default",
     [UI_MENU_AFTER_RESTART] = "after restart", [UI_MENU_SET_BY_ENV] = "set by environment variable",
     [UI_MENU_SAVE_FAILED] = "could not save settings",
-    [UI_MENU_VERSION] = "NX2navi Recomp %s, game %s",
+    [UI_MENU_VERSION] = "NX2navi %s, game %s",
 
     [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 toggles it.",
     [UI_MENU_WINDOW_SIZE] = "Window size", [UI_MENU_WINDOW_SIZE_DESC] = "Size of the game window when not fullscreen.",
@@ -363,7 +363,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_MENU_LANG] = "Menu language", [UI_MENU_MENU_LANG_DESC] = "Language of this menu and the overlay.",
     [UI_MENU_MENU_LANG_AUTO] = "Automatic (from Windows)",
     [UI_MENU_DISCORD_RPC] = "Discord Rich Presence",
-    [UI_MENU_DISCORD_RPC_DESC] = "Shows \"Playing NX2navi Recomp\" with the play time in your Discord status while the "
+    [UI_MENU_DISCORD_RPC_DESC] = "Shows \"Playing NX2navi\" with the play time in your Discord status while the "
                                  "game runs. discord_app_id and discord_image in nx2navi.ini choose the application.",
 
     [UI_MENU_ADV_WARNING] = "These settings are for testing and troubleshooting. Change them only when you know why.",
@@ -507,7 +507,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_DEFAULT_MARK] = "по умолчанию",
     [UI_MENU_AFTER_RESTART] = "после перезапуска", [UI_MENU_SET_BY_ENV] = "задано переменной окружения",
     [UI_MENU_SAVE_FAILED] = "не удалось сохранить настройки",
-    [UI_MENU_VERSION] = "NX2navi Recomp %s, игра %s",
+    [UI_MENU_VERSION] = "NX2navi %s, игра %s",
 
     [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 переключает режим.",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
@@ -828,7 +828,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_MENU_LANG] = "Язык меню", [UI_MENU_MENU_LANG_DESC] = "Язык этого меню и индикатора.",
     [UI_MENU_MENU_LANG_AUTO] = "Автоматически (из Windows)",
     [UI_MENU_DISCORD_RPC] = "Discord Rich Presence",
-    [UI_MENU_DISCORD_RPC_DESC] = "Пока игра запущена, показывает «Играю в NX2navi Recomp» со временем игры в статусе "
+    [UI_MENU_DISCORD_RPC_DESC] = "Пока игра запущена, показывает «Играю в NX2navi» со временем игры в статусе "
                                  "Discord. Приложение выбирают discord_app_id и discord_image в nx2navi.ini.",
 
     [UI_MENU_ADV_WARNING] = "Эти настройки нужны для тестов и поиска неполадок. Меняйте их, только если знаете зачем.",
@@ -1004,7 +1004,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_DEFAULT_MARK] = "padrão",
     [UI_MENU_AFTER_RESTART] = "após reiniciar", [UI_MENU_SET_BY_ENV] = "definido por variável de ambiente",
     [UI_MENU_SAVE_FAILED] = "não foi possível salvar as configurações",
-    [UI_MENU_VERSION] = "NX2navi Recomp %s, jogo %s",
+    [UI_MENU_VERSION] = "NX2navi %s, jogo %s",
 
     [UI_MENU_FULLSCREEN] = "Tela cheia", [UI_MENU_FULLSCREEN_DESC] = "O jogo ocupa a tela inteira; F11 alterna.",
     [UI_MENU_WINDOW_SIZE] = "Tamanho da janela",
@@ -1184,7 +1184,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_MENU_LANG] = "Idioma do menu", [UI_MENU_MENU_LANG_DESC] = "Idioma deste menu e do indicador.",
     [UI_MENU_MENU_LANG_AUTO] = "Automático (do Windows)",
     [UI_MENU_DISCORD_RPC] = "Discord Rich Presence",
-    [UI_MENU_DISCORD_RPC_DESC] = "Mostra \"Jogando NX2navi Recomp\" com o tempo de jogo no seu status do Discord "
+    [UI_MENU_DISCORD_RPC_DESC] = "Mostra \"Jogando NX2navi\" com o tempo de jogo no seu status do Discord "
                                  "enquanto o jogo roda. discord_app_id e discord_image no nx2navi.ini escolhem a "
                                  "aplicação.",
 
@@ -1503,7 +1503,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_AFTER_RESTART] = "重启后生效",
     [UI_MENU_SET_BY_ENV] = "由环境变量设定",
     [UI_MENU_SAVE_FAILED] = "无法保存设置",
-    [UI_MENU_VERSION] = "NX2navi Recomp %s，游戏 %s",
+    [UI_MENU_VERSION] = "NX2navi %s，游戏 %s",
     [UI_MENU_FULLSCREEN] = "全屏",
     [UI_MENU_FULLSCREEN_DESC] = "游戏铺满屏幕；按 F11 切换。",
     [UI_MENU_WINDOW_SIZE] = "窗口大小",
@@ -1774,7 +1774,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_MENU_LANG_DESC] = "本菜单和性能浮层的语言。",
     [UI_MENU_MENU_LANG_AUTO] = "自动（跟随 Windows）",
     [UI_MENU_DISCORD_RPC] = "Discord Rich Presence",
-    [UI_MENU_DISCORD_RPC_DESC] = "游戏运行时在 Discord 状态中显示“正在玩 NX2navi Recomp”及游戏时长。nx2navi.ini 中的 "
+    [UI_MENU_DISCORD_RPC_DESC] = "游戏运行时在 Discord 状态中显示“正在玩 NX2navi”及游戏时长。nx2navi.ini 中的 "
                                  "discord_app_id 和 discord_image 选择应用。",
     [UI_MENU_ADV_WARNING] = "这些设置用于测试和排查问题，请在了解原因后再修改。",
     [UI_MENU_GROUP_SCHED] = "调度",

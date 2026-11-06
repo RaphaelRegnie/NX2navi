@@ -1,6 +1,6 @@
-# NX2navi Recomp
+# NX2navi
 
-**NX2navi Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* (Nintendo Switch, 2023) into a native x86-64 application for Windows and Linux ([docs/architecture.md](docs/architecture.md)).
+**NX2navi** is a static recompilation of *The Legend of Zelda: Ocarina of Time* (Nintendo Switch, 2023) into a native x86-64 application for Windows and Linux ([docs/architecture.md](docs/architecture.md)).
 
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Ocarina of Time*, dumped from your own console: the base game and the 1.1.0, 1.2.1 or 1.4.3 update. Instructions for obtaining those files will not be provided.
@@ -26,7 +26,7 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - 16:10 (Steam Deck, handhelds), 3:2 (Surface, Framework), 21:9 and 32:9 (ultrawide) game resolutions, with the camera and the interface in that shape
 - Anisotropic texture filtering up to 16x, for sharp ground into the distance
 - In-game settings menu (F1) and performance overlay (F10)
-- Discord Rich Presence ("Playing NX2navi Recomp" with the play time), off by default, own application id supported
+- Discord Rich Presence ("Playing NX2navi" with the play time), off by default, own application id supported
 - Setup and in-game menu in English, Russian, Brazilian Portuguese and Simplified Chinese
 - Keyboard, mouse and gamepad with remapping, rumble and gyro
 - Stereo or 5.1 surround sound output
@@ -67,7 +67,7 @@ To update, run a newer setup on the same folder; saves and settings are kept. Se
 
 ## Credits
 
-NX2navi Recomp builds on the projects below. What was taken from each, with its license, is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+NX2navi builds on the projects below. What was taken from each, with its license, is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 - [LAS Recomp](https://github.com/peiikai/LASRecomp)
 - [MacNativeGames](https://github.com/ly05010419/MacNativeGames)
@@ -83,7 +83,7 @@ NX2navi Recomp builds on the projects below. What was taken from each, with its 
 
 The project's own code is under the [MIT License](LICENSE); third-party code keeps its own license ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The license grants nothing for Nintendo's game.
 
-NX2navi Recomp is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *The Legend of Zelda*, *Ocarina of Time* and *Nintendo Switch* are trademarks of Nintendo.
+NX2navi is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *The Legend of Zelda*, *Ocarina of Time* and *Nintendo Switch* are trademarks of Nintendo.
 
 ## Building from source
 

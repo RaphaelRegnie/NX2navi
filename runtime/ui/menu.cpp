@@ -437,7 +437,7 @@ static void test_parse(void) {
                 TestSet &t = g_test.sets[g_test.n_sets++];
                 t.frame = f;
                 int kn = (int)(eq - s), vn = (int)(s + n - eq - 1);
-                snprintf(t.key, sizeof t.key, "%s%.*s", strncmp(s, "NX2NAVI_", 5) ? "NX2NAVI_" : "", kn, s);
+                snprintf(t.key, sizeof t.key, "%s%.*s", strncmp(s, "NX2NAVI_", strlen("NX2NAVI_")) ? "NX2NAVI_" : "", kn, s);
                 snprintf(t.value, sizeof t.value, "%.*s", vn, eq + 1);
             }
             s += n;

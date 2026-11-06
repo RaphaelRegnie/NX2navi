@@ -196,7 +196,7 @@ static void handle(const SDL_Event *e) {
 static void window_main(void *arg) {
     (void)arg;
     g_window_tid = plat_thread_id();
-    SDL_SetHint(SDL_HINT_APP_ID, "nx2navi-recomp");   // Wayland's app id: the desktop file and the taskbar match it
+    SDL_SetHint(SDL_HINT_APP_ID, "nx2navi");   // Wayland's app id: the desktop file and the taskbar match it
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
     g_video_ok = SDL_Init(SDL_INIT_VIDEO);
     if (!g_video_ok) rt_log("gfx: SDL video init failed (%s)", SDL_GetError());
@@ -255,7 +255,7 @@ static void open_window(void *arg) {
     (void)arg;
     int w, h;
     gfx_cfg_window_size(&w, &h);
-    g_win = SDL_CreateWindow("NX2navi Recomp", w, h, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    g_win = SDL_CreateWindow("NX2navi", w, h, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!g_win) {
         rt_log("gfx: SDL_CreateWindow failed (%s)", SDL_GetError());
         return;

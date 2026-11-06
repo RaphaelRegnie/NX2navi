@@ -9,8 +9,8 @@ default variant (every texture slot a 2D texture, float vertex inputs and colour
 translates every shader for its default bind state: prepare_shader_seed.py all_default), and writes them next to the
 build's nx2navi.exe in the record layouts of runtime/gfx_shader.c ("answers met in play"):
 
-    seed-programs.bin  "NX2NAVISPRG": stage, length, c1 length, runtime code hash, control section, code, c1
-    seed-answers.bin   "NX2NAVISANS": stage, code hash, input id (zero: the runtime computes it), answers, priority
+    seed-programs.bin  "NX2NSPRG": stage, length, c1 length, runtime code hash, control section, code, c1
+    seed-answers.bin   "NX2NSANS": stage, code hash, input id (zero: the runtime computes it), answers, priority
 
 Priority (the pad byte): 0 shaders the list's warm rows flag as title/menu (t), 1 other warm rows (S, C, R), 2 the
 rest; a default variant takes its shader's priority. Then it runs `nx2navi.exe --prepare-shaders`, which translates every record into the build's shader cache, writes
@@ -192,11 +192,11 @@ def main():
     recs.sort(key=lambda r: r[0])   # stable: list order within a priority
     out = a.build.resolve()
     with open(out / 'seed-programs.bin', 'wb') as f:
-        f.write(b'NX2NAVISPRG' + struct.pack('<II', 1, 0))
+        f.write(b'NX2NSPRG' + struct.pack('<II', 1, 0))
         for _, body in progs.values():
             f.write(body)
     with open(out / 'seed-answers.bin', 'wb') as f:
-        f.write(b'NX2NAVISANS' + struct.pack('<II', 1, ANS_REC))
+        f.write(b'NX2NSANS' + struct.pack('<II', 1, ANS_REC))
         for _, rec in recs:
             f.write(rec)
     by = [sum(1 for p, _ in recs if p == i) for i in range(3)]

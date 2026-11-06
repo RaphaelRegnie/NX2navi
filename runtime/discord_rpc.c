@@ -1,8 +1,8 @@
-// Discord Rich Presence: "Playing NX2navi Recomp" with the elapsed play time in the player's Discord status, through
+// Discord Rich Presence: "Playing NX2navi" with the elapsed play time in the player's Discord status, through
 // the local IPC of a running Discord client (platform.h's plat_ipc_*). Nothing leaves the machine but the activity
 // itself, and nothing is sent while NX2NAVI_DISCORD_RPC is off (the default: the status is information about the
 // player's session). NX2NAVI_DISCORD_APP_ID names the application whose name and artwork Discord shows — the default
-// is the project's own application, registered as "NX2navi Recomp"; a player who wants their own name or
+// is the project's own application, registered as "NX2navi"; a player who wants their own name or
 // art registers an application at discord.com/developers and puts its id in nx2navi.ini — and NX2NAVI_DISCORD_IMAGE the
 // key of its uploaded art asset.
 //
@@ -170,7 +170,7 @@ static int send_activity(PlatIpc *p, const char *image) {
     snprintf(json, sizeof json,
              "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"%u\",\"args\":{\"pid\":%lu,\"activity\":{\"details\":\"Game "
              "%d.%d.%d \\u00b7 Recomp %.*s\",\"timestamps\":{\"start\":%llu},\"assets\":{\"large_image\":\"%s\","
-             "\"large_text\":\"NX2navi Recomp %s\"}}}}",
+             "\"large_text\":\"NX2navi %s\"}}}}",
              next_nonce(), (unsigned long)plat_process_id(), v / 100, v / 10 % 10, v % 10, port_len, rt_port_version,
              (unsigned long long)start, image, rt_port_version);
     if (!write_frame(p, OP_FRAME, json)) return 0;

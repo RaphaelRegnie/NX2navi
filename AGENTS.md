@@ -1,4 +1,4 @@
-# NX2navi Recomp
+# NX2navi
 
 Static recompilation of *Ocarina of Time* (Switch, ARM64) into a native Windows x86-64 exe with a Vulkan renderer. Design: [docs/architecture.md](docs/architecture.md). Toolchain, build commands and tests: [docs/building.md](docs/building.md).
 

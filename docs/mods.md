@@ -1,6 +1,6 @@
 # Mods
 
-NX2navi Recomp loads the mods players make for the Switch emulators (Ryujinx, the hardware and its forks): texture and model
+NX2navi loads the mods players make for the Switch emulators (Ryujinx, the hardware and its forks): texture and model
 packs, gameplay and text changes from GameBanana and similar sites, a mod manager's merged output, code patches (`.ips`,
 `.pchtxt`) and Atmosphère cheat files. No mod or cheat file ships with the port.
 
@@ -43,7 +43,7 @@ The menu saves the order and the switches in `nx2navi.ini`, under `[mods]`, by f
 ### Mods that change the same files
 
 Two mods that edit the same game file do not combine: the higher one wins the whole file. Merge such mods with
-a mod manager and set its export location to an empty folder inside
+[a mod manager](https://github.com/a mod manager-Team/mod manager) (NX2navi Mod Manager) and set its export location to an empty folder inside
 `mods`, for example `mods\merged`. The exported folder then counts as one mod here. Mods packaged for a mod manager only
 (`.tkcl` files) go the same way.
 
