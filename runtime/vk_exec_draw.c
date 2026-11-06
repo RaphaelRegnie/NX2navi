@@ -28,7 +28,7 @@
 #include "vk.h"
 
 #ifndef NX2NAVI_TONEMAP_STANDIN
-#define NX2NAVI_TONEMAP_STANDIN 0   // vk_tonemap.c, see untranslated_dispatch_fallback
+#define NX2NAVI_TONEMAP_STANDIN 1   // vk_tonemap.c, see untranslated_dispatch_fallback
 #endif
 #include "vk_exec.h"
 #include "platform/platform.h"
@@ -4057,8 +4057,8 @@ static void untranslated_dispatch_fallback(VkExec *ex) {
         si = e5;
     }
 #if NX2NAVI_TONEMAP_STANDIN
-    // Off: every build with this call lost the device right after the first gameplay load, even with the call never
-    // reached at run time (NX2NAVI_TM_DISPATCH=2/3), while the build without it ran clean; not understood yet (round 24).
+    // The square decode of the stored picture (vk_tonemap.c). Builds of round 24 lost the device with it: its descriptor
+    // push did not go through the recorder (vk_rec.h rec_push; PORT-HANDOFF 7.12 item 11), which it now does.
     VkImage tm = e5 && dst_view ? vk_tonemap_record(ex->cb, e5, VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, dw, dh) : VK_NULL_HANDLE;
     if (tm) {   // the tonemapped picture, already at the target's size, then the same blit as below
         B.pipe[1] = VK_NULL_HANDLE;   // the replay must bind its compute pipeline again
@@ -4069,11 +4069,12 @@ static void untranslated_dispatch_fallback(VkExec *ex) {
     VkImage tm = VK_NULL_HANDLE;
     (void)dst_view;
 #endif
-    // The scene upscaler's input is the post pass's picture already sRGB-encoded (prog 102 packs encode(composite)
-    // into RGB9E5), and its output is linear: the HUD is drawn over it and the frame's last pass encodes to sRGB. A
-    // plain blit carried the encoded values into the linear target, so the picture was encoded twice (washed out).
-    // The stand-in decodes: scale into an RGBA8 UNORM scratch (the encoded values), copy those bits into an RGBA8 sRGB
-    // scratch, and blit that into the target, which reads the sRGB image as linear.
+    // The scene upscaler's input is the post pass's picture stored as the square root of each linear value (prog 102
+    // packs sqrt(composite) into RGB9E5), and its output is linear: the HUD is drawn over it and the frame's last pass
+    // encodes to sRGB. A plain blit carried the stored values into the linear target, so the picture was washed out.
+    // The pass above squares them. Without it, this approximation decodes with the sRGB curve instead: scale into an
+    // RGBA8 UNORM scratch (the stored values), copy those bits into an RGBA8 sRGB scratch, and blit that into the
+    // target, which reads the sRGB image as linear (mid-tones a little dark, the darkest values a little lifted).
     int filter_nearest = tm || (e5 && e5_blit == 1);
     VkImage g8 = VK_NULL_HANDLE, g8s = VK_NULL_HANDLE;
     if (e5 && !tm && !scratch && !fmt_rgba8(df)) {

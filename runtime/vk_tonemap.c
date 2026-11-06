@@ -1,4 +1,4 @@
-// Tonemap pass standing in for the scene upscaler (vk.h vk_tonemap_record; used by vk_exec_draw.c
+// Decode-and-scale pass standing in for the scene upscaler (vk.h vk_tonemap_record; used by vk_exec_draw.c
 // untranslated_dispatch_fallback).
 #include "vk.h"
 
@@ -9,11 +9,13 @@
 #include "fallback_tonemap_spv.h"
 #include "host.h"
 
-// The game's upscaler (tensor-core, untranslatable) also tonemaps: its input is the HDR scene in RGB9E5 (values up to a
-// few hundred), its output the display picture the HUD is drawn over, and the present after it only converts to sRGB.
-// A plain blit left the picture white. This pass (shaders/fallback_tonemap.spvasm) scales with linear filtering and
-// maps the colour, times NX2NAVI_FALLBACK_EXPOSURE (default 0.04), through Narkowicz's ACES fit. Not the game's own curve
-// or auto exposure: those live in the shader we cannot run.
+// The game's upscaler (tensor-core, untranslatable) reads the post pass's picture, whose channels hold the square root of
+// their linear value packed as RGB9E5 (prog 102), and writes the linear picture the HUD is drawn over; the frame's last
+// pass encodes to sRGB. This pass (shaders/fallback_tonemap.spvasm) scales with linear filtering in the stored values
+// and squares them into an RGBA16F image of the target's size, which the caller blits in 1:1. The game composites
+// and tonemaps before the post pass, so nothing here changes exposure. (It was a tonemap once, when the input was
+// taken for the raw HDR scene; the blit's sRGB decode that stood in since darkened mid-tones and lifted the darkest
+// values.)
 static struct {
     int tried, ok;
     PFN_vkCmdPushDescriptorSetKHR push;
@@ -95,7 +97,7 @@ static int tm_init(void) {
         ok = vkCreateComputePipelines(c->device, VK_NULL_HANDLE, 1, &ci, NULL, &TM.pipe) == VK_SUCCESS;
     }
     if (m) vkDestroyShaderModule(c->device, m, NULL);
-    rt_log("vk_exec: upscaler stand-in: %s", ok ? "tonemap pass (NX2NAVI_FALLBACK_EXPOSURE)" : "blit (the tonemap pass could not be created)");
+    rt_log("vk_exec: upscaler stand-in: %s", ok ? "scale and square-decode pass" : "blit (its pass could not be created)");
     return TM.ok = ok;
 }
 
@@ -120,11 +122,6 @@ VkImage vk_tonemap_record(VkCommandBuffer cb, VkImage src, VkFormat sf, uint32_t
     if (disp == 2 || !tm_init() || !tm_out(cb, dw, dh)) return VK_NULL_HANDLE;
     VkImageView sv = tm_view(src, sf), dv = TM.out_view;
     if (!sv) return VK_NULL_HANDLE;
-    static float exposure = -1;
-    if (exposure < 0) {
-        const char *e = cfg_get("NX2NAVI_FALLBACK_EXPOSURE");
-        exposure = e && *e ? (float)atof(e) : 0.04f;
-    }
     VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                            .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT};
@@ -138,8 +135,8 @@ VkImage vk_tonemap_record(VkCommandBuffer cb, VkImage src, VkFormat sf, uint32_t
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 1, .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &ii[1]}};
     rec_push(TM.push, cb, VK_PIPELINE_BIND_POINT_COMPUTE, TM.layout, 0, 2, w);   // through the recorder (vk_rec.h), in order
-    struct { float inv[2], exposure, pad; int32_t size[2]; } pc = {{1.0f / (float)dw, 1.0f / (float)dh}, exposure, 0,
-                                                                  {(int32_t)dw, (int32_t)dh}};
+    struct { float inv[2], unused, pad; int32_t size[2]; } pc = {{1.0f / (float)dw, 1.0f / (float)dh}, 0, 0,
+                                                                {(int32_t)dw, (int32_t)dh}};
     vkCmdPushConstants(cb, TM.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
     if (disp) vkCmdDispatch(cb, (dw + 7) / 8, (dh + 7) / 8, 1);
     VkMemoryBarrier2 after = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

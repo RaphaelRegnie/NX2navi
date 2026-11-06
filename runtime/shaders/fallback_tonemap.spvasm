@@ -1,18 +1,20 @@
-; Tonemap and scale for the untranslatable upscaler (runtime/vk_exec_draw.c untranslated_dispatch_fallback).
+; Scale and decode for the untranslatable scene upscaler (runtime/vk_exec_draw.c untranslated_dispatch_fallback).
+; Its input is the post pass's picture with each channel stored as the square root of its linear value (prog 102 packs
+; sqrt(composite) into RGB9E5), and its output is linear (the HUD is drawn over it, the frame's last pass encodes to
+; sRGB). So: filter in the stored (sqrt) values, as the game's upscaler does, then square. The pass replaced a
+; decode with the sRGB curve, which darkened mid-tones and lifted the darkest values.
 ; Written in SPIR-V assembly (spirv-as; no GLSL compiler in the build). As GLSL:
 ;   layout(local_size_x = 8, local_size_y = 8) in;
-;   layout(binding = 0) uniform sampler2D src;              // the HDR scene (linear filtering)
+;   layout(binding = 0) uniform sampler2D src;              // the stored picture (linear filtering)
 ;   layout(binding = 1, rgba16f) uniform writeonly image2D dst;   // the pass output (vk_tonemap.c), blitted into the target
-;   layout(push_constant) uniform P { vec2 inv; float exposure; float pad; ivec2 size; } pc;
+;   layout(push_constant) uniform P { vec2 inv; float unused; float pad; ivec2 size; } pc;
 ;   void main() {
 ;       ivec2 p = ivec2(gl_GlobalInvocationID.xy);
 ;       if (p.x >= pc.size.x || p.y >= pc.size.y) return;
-;       vec3 c = textureLod(src, (vec2(p) + 0.5) * pc.inv, 0.0).rgb * pc.exposure;
-;       c = clamp(c * (2.51 * c + 0.03) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);   // Narkowicz's ACES fit
-;       imageStore(dst, p, vec4(c, 1.0));
+;       vec3 s = textureLod(src, (vec2(p) + 0.5) * pc.inv, 0.0).rgb;
+;       imageStore(dst, p, vec4(s * s, 1.0));
 ;   }
                OpCapability Shader
-          %1 = OpExtInstImport "GLSL.std.450"
                OpMemoryModel Logical GLSL450
                OpEntryPoint GLCompute %main "main" %gid %src %dst %pc
                OpExecutionMode %main LocalSize 8 8 1
@@ -52,27 +54,13 @@
      %ptr_pc_P = OpTypePointer PushConstant %P
          %pc = OpVariable %ptr_pc_P PushConstant
      %ptr_pc_v2float = OpTypePointer PushConstant %v2float
-     %ptr_pc_float = OpTypePointer PushConstant %float
      %ptr_pc_v2int = OpTypePointer PushConstant %v2int
       %int_0 = OpConstant %int 0
-      %int_1 = OpConstant %int 1
       %int_3 = OpConstant %int 3
     %float_0 = OpConstant %float 0
     %float_1 = OpConstant %float 1
   %float_half = OpConstant %float 0.5
-  %float_2_51 = OpConstant %float 2.51
-  %float_0_03 = OpConstant %float 0.03
-  %float_2_43 = OpConstant %float 2.43
-  %float_0_59 = OpConstant %float 0.59
-  %float_0_14 = OpConstant %float 0.14
      %v2half = OpConstantComposite %v2float %float_half %float_half
-       %v3_0 = OpConstantComposite %v3float %float_0 %float_0 %float_0
-       %v3_1 = OpConstantComposite %v3float %float_1 %float_1 %float_1
-    %v3_2_51 = OpConstantComposite %v3float %float_2_51 %float_2_51 %float_2_51
-    %v3_0_03 = OpConstantComposite %v3float %float_0_03 %float_0_03 %float_0_03
-    %v3_2_43 = OpConstantComposite %v3float %float_2_43 %float_2_43 %float_2_43
-    %v3_0_59 = OpConstantComposite %v3float %float_0_59 %float_0_59 %float_0_59
-    %v3_0_14 = OpConstantComposite %v3float %float_0_14 %float_0_14 %float_0_14
      %v2bool = OpTypeVector %bool 2
        %main = OpFunction %void None %fnvoid
       %entry = OpLabel
@@ -96,18 +84,7 @@
          %si = OpLoad %simg2d %src
          %s4 = OpImageSampleExplicitLod %v4float %si %uv Lod %float_0
          %s3 = OpVectorShuffle %v3float %s4 %s4 0 1 2
-       %pexp = OpAccessChain %ptr_pc_float %pc %int_1
-        %exp = OpLoad %float %pexp
-          %c = OpVectorTimesScalar %v3float %s3 %exp
-         %a1 = OpFMul %v3float %c %v3_2_51
-         %a2 = OpFAdd %v3float %a1 %v3_0_03
-        %num = OpFMul %v3float %c %a2
-         %b1 = OpFMul %v3float %c %v3_2_43
-         %b2 = OpFAdd %v3float %b1 %v3_0_59
-         %b3 = OpFMul %v3float %c %b2
-        %den = OpFAdd %v3float %b3 %v3_0_14
-          %t = OpFDiv %v3float %num %den
-         %tc = OpExtInst %v3float %1 FClamp %t %v3_0 %v3_1
+         %tc = OpFMul %v3float %s3 %s3
          %o4 = OpCompositeConstruct %v4float %tc %float_1
          %di = OpLoad %stimg %dst
                OpImageWrite %di %p %o4

@@ -1307,13 +1307,16 @@ static class AmpereLowering
         }
 
         // SURED.D.op U32 (bound descriptor): data 32-39, coordinates 24-31, operation 87-89 (ADD MIN MAX INC DEC AND OR
-        // XOR, as Maxwell's), dimension 61-63 (1D buffer or 2D), descriptor offset 40-53 in bank 54-58.
+        // XOR, as Maxwell's), dimension 61-63 (1D buffer or 2D), descriptor offset 40-53 in bank 54-58. Maxwell's SURED
+        // is 1110101101011 in the top bits (0xeb58, Ryujinx InstTable Sured); 0xeb48 matched no instruction, so the
+        // translator skipped every SURED: Ocarina's edge AA (the blend-weight pass ORs its weights into an image) never
+        // wrote anything.
         void Sured()
         {
             uint dim = _i.Bits(61, 3), handle = Handle(true), bank = _i.Bits(54, 5);
             if ((_i.W2 & ~(7u << 23)) != 0x0010e000 || dim is not 1 and not 3 || _i.Bits(59, 2) != 0 || handle > 0x1fff || !TexBank(bank))
                 throw Fail("SURED mode");
-            EmitG(0xeb48000000000000UL | (uint)Gpr(_i.Bits(32, 8)) | ((ulong)Gpr(_i.Bits(24, 8)) << 8) | ((ulong)_i.Bits(87, 3) << 24)
+            EmitG(0xeb58000000000000UL | (uint)Gpr(_i.Bits(32, 8)) | ((ulong)Gpr(_i.Bits(24, 8)) << 8) | ((ulong)_i.Bits(87, 3) << 24)
                   | ((ulong)dim << 33) | ((ulong)handle << 36));
         }
 

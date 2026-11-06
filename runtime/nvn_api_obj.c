@@ -447,8 +447,9 @@ static int prog_set_shaders(prog_t *o, int n, const NVNshaderData *sd) {
 static void shader_dump(const prog_t *o, int n, const NVNshaderData *sd);
 NVN_API(nvnProgramSetShaders) {
     NVN_BLOCKING();
-    shader_dump(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2));
-    ret_x(c, prog_set_shaders(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2)));
+    int ok = prog_set_shaders(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2));
+    shader_dump(arg_p(c, 0), (int)arg_x(c, 1), arg_p(c, 2));   // after: the files carry the program's serial
+    ret_x(c, ok);
 }
 // NVNboolean nvnProgramSetShadersExt(NVNprogram *p, int n, const NVNshaderDataExt *sd): no prototype in nvn.h; the
 // entries are {data, control, reserved} (0x18 bytes, reserved observed 0)
@@ -470,15 +471,17 @@ NVN_API(nvnProgramSetShadersExt) {
             rt_fatal("nvn: ProgramSetShadersExt: unknown non-zero field %#llx in stage %d", (unsigned long long)sd[i].reserved, i);
         plain[i] = (NVNshaderData){sd[i].data, sd[i].control};
     }
+    int ok = prog_set_shaders(o, n, plain);
     shader_dump(o, n, plain);
-    ret_x(c, prog_set_shaders(o, n, plain));
+    ret_x(c, ok);
 }
 
 // ---------- NVN2 program builder (Switch 2): SetDefaults / SetDevice / SetShaders on a builder, then
 // nvnProgramInitializeFromBuilder(program, builder). No driver reference is available (the NVN2 driver is not in the
 // title's modules), so the signatures are taken to mirror nvnProgramSetShaders: SetShaders(builder, n, shader data).
 // The builder keeps the caller's array pointer, as NVN builders reference their inputs until the object is made.
-// NX2NAVI_SHADER_DUMP=<dir> writes each stage's control section and code there for studying the NVN2 layout.
+// NX2NAVI_SHADER_DUMP=<dir> writes each stage's control section and code there for studying the NVN2 layout, named by the
+// program's serial (p<serial>_s<stage>), the number frame dumps print as "prog N" (vk_dump.c).
 typedef struct { uint32_t magic; int32_t n; NVNdevice *dev; const NVNshaderData *sd; } prog_builder_t;
 #define NVN_PROG_BUILDER_MAGIC 0x50524742u   // "BGRP"
 
@@ -507,13 +510,13 @@ static void shader_dump(const prog_t *o, int n, const NVNshaderData *sd) {
     }
     for (int i = 0; i < n; i++) {
         char path[1100];
-        snprintf(path, sizeof path, "%s/p%04d_s%d.ctl", dir, k, i);
+        snprintf(path, sizeof path, "%s/p%04llu_s%d.ctl", dir, (unsigned long long)o->serial, i);
         if (sd[i].control) plat_file_write(path, sd[i].control, 0x880);
         const pool_t *p = nvn_pool_find(sd[i].data, 1);
         if (p && p->mem && !nvn_gpu_only(sd[i].data)) {
             uint64_t end = (uint64_t)(uintptr_t)p->mem + p->size, len = end - sd[i].data;
             if (len > 0x40000) len = 0x40000;
-            snprintf(path, sizeof path, "%s/p%04d_s%d.code", dir, k, i);
+            snprintf(path, sizeof path, "%s/p%04llu_s%d.code", dir, (unsigned long long)o->serial, i);
             plat_file_write(path, (const void *)(uintptr_t)sd[i].data, (size_t)len);
         }
     }
@@ -548,8 +551,9 @@ NVN_API(nvnProgramInitializeFromBuilder) {
     }
     memset(o, 0, sizeof *o);
     o->magic = NVN_PROG_MAGIC;
+    int ok = prog_set_shaders(o, b->n, b->sd);
     shader_dump(o, b->n, b->sd);
-    ret_x(c, prog_set_shaders(o, b->n, b->sd));
+    ret_x(c, ok);
 }
 
 // ---------- State objects: packed in place (nvn_obj.h)
