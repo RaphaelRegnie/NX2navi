@@ -1485,10 +1485,14 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
     build_request(req, hex, r->stage_name, code_path, r->c1, r->c1_len, a, control);
     int ok = svc_request(req, reply, sizeof reply);
     // NX2NAVI_XLATE_KEEP=1: a last-frame variant's job stays as <key>.job (one request line) with its code, to run the
-    // translator on by hand (nx2navi_xlate --serve < <key>.job)
+    // translator on by hand (nx2navi_xlate --serve < <key>.job); 2 keeps every job translated in this run (delete a
+    // key's .res.json and .spv from the cache to have it translated, and kept, again)
     static int keep = -1;
-    if (keep < 0) keep = rt_knob("XLATE_KEEP", "0");
-    int kept = keep && a && a->mvprev;
+    if (keep < 0) {
+        const char *k = cfg_get("NX2NAVI_XLATE_KEEP");
+        keep = k && *k ? atoi(k) : 0;
+    }
+    int kept = keep >= 2 || (keep && a && a->mvprev);
     if (kept) {
         char job_path[PATH_CAP + 80];
         snprintf(job_path, sizeof job_path, "%s/%s.job", cache_dir, hex);
