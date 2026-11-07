@@ -82,13 +82,28 @@ class Source:
                 self.n = nup.Nup(a.nup)
             except (OSError, nup.NupError) as e:
                 fail(f'cannot read {a.nup}: {e}')
-            pkgs = [p for p in self.n.packages if p['title_id'] == TITLE_ID]
+            # The base title and its update (title id + 0x800), the update first and the newest of each kind first.
+            # A module comes from the first of them that holds it whole: an update's ExeFS may leave a module out or
+            # hold something else under its name.
+            pkgs = [p for p in self.n.packages if p['title_id'] in (TITLE_ID, TITLE_ID | 0x800)]
             if not pkgs:
                 ids = ', '.join(f"{p['title_id']:016X}" for p in self.n.packages)
                 fail(f'this .nup holds {ids}, not Ocarina of Time (0400486024DEC000)')
-            p = pkgs[-1]
-            self.exefs = dict(self.n.tree(p['exefs']))
-            self.romfs = list(self.n.tree(p['romfs']))
+            pkgs.sort(key=lambda p: (p['kind'] != 1, -p['version']))
+            self.exefs = {}
+            for name in EXEFS_FILES:
+                for p in pkgs:
+                    fi = dict(self.n.tree(p['exefs'])).get(name) if p['exefs'] < self.n.ndir else None
+                    magic = b'META' if name.endswith('.npdm') else b'NSO0'
+                    if fi is not None and self.n.size(fi) >= 0x100 and next(self.n.chunks(fi))[:4] == magic:
+                        self.exefs[name] = fi
+                        break
+            self.romfs = []
+            for p in pkgs:
+                if p['romfs'] < self.n.ndir:
+                    self.romfs = list(self.n.tree(p['romfs']))
+                if self.romfs:
+                    break
             st = os.stat(a.nup)
             self.identity = f'nup {os.path.abspath(a.nup)} {st.st_size} {int(st.st_mtime)}'
         else:
@@ -101,7 +116,7 @@ class Source:
             self.identity = f'folders {self.exefs_dir.resolve()} {self.romfs_dir.resolve()} {len(self.romfs)}'
         missing = [x for x in EXEFS_FILES if x not in self.exefs]
         if missing:
-            fail(f'the ExeFS lacks {", ".join(missing)}')
+            fail(f'the ExeFS lacks {", ".join(missing)} (or holds something else under that name)')
         if not self.romfs:
             fail('the RomFS is empty')
 
@@ -382,6 +397,19 @@ def step_compile(out, cache, msys, jobs):
 
 # ---------------------------------------------------------------- main
 
+def keep_awake():
+    """Hold off sleep for this process's life (Windows): the build runs for many minutes with no input, and a PC that
+    sleeps in the middle stops the compiles. The hold ends with the process."""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    except (OSError, AttributeError):
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--nup', help='the game as one .nup file')
@@ -417,6 +445,7 @@ def main():
     state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.is_file() else {}
     if state.get('input') != src.identity or state.get('version') != STATE_VERSION or state.get('kit') != kit_version():
         state = {'input': src.identity, 'version': STATE_VERSION, 'kit': kit_version(), 'done': []}
+    keep_awake()
     t0 = time.time()
     for name, run in (('exefs', lambda: step_exefs(src, out)), ('romfs', lambda: step_romfs(src, out, min(a.jobs, 8))),
                       ('lift', lambda: step_lift(out, cache)), ('compile', lambda: step_compile(out, cache, msys, a.jobs))):
