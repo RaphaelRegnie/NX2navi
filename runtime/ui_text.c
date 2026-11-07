@@ -502,6 +502,11 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_CHEAT_UNSUPPORTED_DESC] = "This cheat cannot be used with this version of the game:",
     [UI_BOOT_TITLE] = "Preparing shaders", [UI_BOOT_HINT] = "This happens once after an update or a graphics driver change.",
     [UI_BOOT_STARTING] = "Starting", [UI_BOOT_SHADERS] = "Shaders: %lld of %lld", [UI_BOOT_PIPELINES] = "Pipelines: %lld of %lld",
+    [UI_MENU_DLAA_GAME_DESC] = "NVIDIA DLSS anti-aliasing for the 3D scene at the game's own resolution (NVIDIA RTX GPUs; "
+                               DLSS_FILE " next to the game's .exe). The HUD is not touched. Early version: it works on "
+                               "each frame on its own for now, without the motion history that makes DLSS sharpest. "
+                               "Takes effect after a restart.",
+    [UI_MENU_DLSS_PRESET_NEEDS_DLAA] = "only with DLSS on",
     [UI_MENU_CHEATS_REBUILD] = "Rebuild the game now",
     [UI_MENU_CHEATS_REBUILD_DESC] = "Some cheats change the game's code and are not built into it: they are new or "
                                     "edited, or their last rebuild failed or was cancelled. Closes the game; the setup "

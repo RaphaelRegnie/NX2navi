@@ -343,8 +343,11 @@ def step_compile(out, cache, msys, jobs):
     def cc(job):
         src, dst = job
         cpp = src.suffix in ('.cpp', '.cxx')
-        cmd = [str(clangxx if cpp else clang), '-c', '-std=gnu++17' if cpp else '-std=gnu11', '-O1', '-w', *inc,
-               '-o', str(dst), str(src)]
+        # the lifted code at -O1 (its size makes -O2 slow to build), the runtime at -O2; neither may assume strict aliasing:
+        # the lifted code reaches guest memory through casts of one address to several types (tools/build_game.py's flags)
+        guest = dst.name.startswith(('main_', 'sdk_', 'subsdk0_'))
+        cmd = [str(clangxx if cpp else clang), '-c', '-std=gnu++17' if cpp else '-std=gnu11', '-O1' if guest else '-O2',
+               '-fno-strict-aliasing', '-w', *inc, '-o', str(dst), str(src)]
         p = subprocess.run(cmd, capture_output=True, text=True, env=env)
         return src, p.returncode, p.stderr[-1500:]
 

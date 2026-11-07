@@ -748,6 +748,12 @@ static void tab_screen(float scale) {
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("NX2NAVI_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
+    // DLSS at the game's own resolution (vk_dlaa.c). This build cannot change the scene size (no scene patch set), so
+    // the quality modes would all render the same: there is no mode row, only the switch and the model.
+    opt_toggle("NX2NAVI_DLAA", UI_MENU_DLAA, UI_MENU_DLAA_GAME_DESC);
+    static const UiTextId preset[] = {UI_MENU_DLSS_PRESET_DEFAULT, UI_MENU_DLSS_PRESET_K, UI_MENU_DLSS_PRESET_J};
+    if (!cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_DLSS_PRESET_NEEDS_DLAA);
+    opt_choice("NX2NAVI_DLSS_PRESET", UI_MENU_DLSS_PRESET, preset, 3, UI_MENU_DLSS_PRESET_DESC);
     opt_end();
 }
 
