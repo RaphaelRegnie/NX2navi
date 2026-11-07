@@ -202,7 +202,9 @@ def build_native(work, cc, windres):
     (work / 'nx2navi.ico').write_bytes(art.triforce_ico())
     shutil.copy2(ROOT / 'launcher' / 'native' / 'app.manifest', work / 'app.manifest')
     res = work / 'res.o'
-    run([*windres, '-I', work, ROOT / 'launcher' / 'native' / 'res.rc', '-O', 'coff', '-o', res])
+    # windres preprocesses with the gcc it finds on PATH: the toolchain's own bin first (no MSYS2 shell sets it)
+    env = dict(os.environ, PATH=str(Path(windres[0]).parent) + os.pathsep + os.environ.get('PATH', ''))
+    run([*windres, '-I', work, ROOT / 'launcher' / 'native' / 'res.rc', '-O', 'coff', '-o', res], env=env)
     flags = ['-municode', '-mwindows', '-O2', '-Wall', '-static', '-s']
     stub = work / 'NX2navi.exe'
     setup = work / 'setup-stub.exe'

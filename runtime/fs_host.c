@@ -547,6 +547,7 @@ static uint32_t save_commit_locked(void) {
 static PlatMutex pend_lock = PLAT_MUTEX_INIT;
 static PlatCond pend_cv = PLAT_COND_INIT;
 static volatile int32_t commit_pending;
+static int exiting;   // under pend_lock: fs_save_flush ran, the process is ending
 
 static void save_wait_commit(void) {
     if (!plat_cas32(&commit_pending, 0, 0)) return;
@@ -555,7 +556,14 @@ static void save_wait_commit(void) {
     plat_mutex_unlock(&pend_lock);
 }
 
-void fs_save_flush(void) { save_wait_commit(); }
+// The window closed: a Commit already started finishes first, and none starts afterwards, as the process exit would
+// cut it off halfway (the startup recovery then keeps the previous one; here it is kept outright).
+void fs_save_flush(void) {
+    plat_mutex_lock(&pend_lock);
+    exiting = 1;
+    while (commit_pending) plat_cond_wait(&pend_cv, &pend_lock);
+    plat_mutex_unlock(&pend_lock);
+}
 
 static uint32_t commit_run(void) {
     plat_mutex_lock(&tx_lock);
@@ -582,8 +590,15 @@ static uint32_t save_commit(void) {
         if (!quiet++) rt_log("fs commit save: nothing changed (logged once)");
         return 0;
     }
+    plat_mutex_lock(&pend_lock);
+    if (exiting) {
+        plat_mutex_unlock(&pend_lock);
+        rt_log("fs commit save: the game is closing; the last finished commit stays");
+        return 0;
+    }
     plat_inc32(&save_writers);   // fs_save_busy until the thread is done
     plat_xchg32(&commit_pending, 1);
+    plat_mutex_unlock(&pend_lock);
     if (plat_thread_spawn(commit_main, NULL, "save commit", 0)) {
         return 0;
     }

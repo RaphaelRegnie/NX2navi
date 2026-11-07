@@ -762,13 +762,18 @@ static void upload(Tex *e) {
     const nvn_texdesc *d = &t->d;
     int bw, bh, bpb = nvn_fmt_bpb(d->format, &bw, &bh);
     if (!bpb || !t->mem) return;
-    if (!mem_readable(e->pub.addr, e->t.L.size)) {   // a stale slot (the bindless pools look every slot up): no upload;
-        static volatile int32_t n_unmapped;          // a later write to mapped storage uploads it (make_fresh_snap)
+    // A stale slot (the bindless pools look every slot up): no upload; a later write to mapped storage uploads it
+    // (make_fresh_snap).
+    if (!mem_readable(e->pub.addr, e->t.L.size)) {
+        static volatile int32_t n_unmapped;
         log_limited(&n_unmapped, "texture %#llx (%llu bytes): storage not mapped; not uploaded",
                     (unsigned long long)e->pub.addr, (unsigned long long)e->t.L.size);
         e->uploaded = 1;
         return;
     }
+    static __thread char ctx[160];   // what this thread copies, for a crash report
+    snprintf(ctx, sizeof ctx, "texture upload %#llx (%llu bytes, fmt %#x %ux%u)", (unsigned long long)e->pub.addr,
+             (unsigned long long)e->t.L.size, d->format, d->width, d->height);
     uint64_t p0 = perf_begin(), u0 = kern_now_ns();
     int linear = nvn_tex_is_linear(d), is3d = d->target == NVN_TEXTURE_TARGET_3D, one_d = e->pub.type == VK_IMAGE_TYPE_1D;
     uint32_t levels = linear ? 1 : e->pub.levels, layers = linear ? 1 : e->pub.layers;
@@ -803,6 +808,18 @@ static void upload(Tex *e) {
         VkCommandBuffer cb = vk_upload_begin();
         uint8_t *stg = vk_staging(size, &sb, NULL);
         if (acheck) rmap = vk_staging(decoded, &rbuf, &ralloc);
+        // The part's copies out of the storage, with it held mapped (mem_read_hold): the game releases a texture's
+        // memory on its own thread, and a decommit in the middle of a copy faulted (tex_bl_copy). Only the copies run
+        // held, so a waiting unmap and the guest's memory calls behind it never wait for the staging block or a decode.
+        // Storage released since the check above uploads as zeros, as the game no longer has that texture.
+        uint8_t **tmps = calloc(k1 - k0, sizeof *tmps);
+        int held = mem_read_hold(e->pub.addr, e->t.L.size);
+        if (held) plat_crash_context(ctx);
+        else {
+            static volatile int32_t n_gone;
+            log_limited(&n_gone, "texture %#llx (%llu bytes): storage released during the upload; uploaded as zeros",
+                        (unsigned long long)e->pub.addr, (unsigned long long)e->t.L.size);
+        }
         for (k = k0; k < k1; k++) {
             uint32_t lv = rg[k].imageSubresource.mipLevel, ly = rg[k].imageSubresource.baseArrayLayer;
             uint32_t w = rg[k].imageExtent.width, h = rg[k].imageExtent.height, sl = rg[k].imageExtent.depth;
@@ -810,11 +827,24 @@ static void upload(Tex *e) {
             size_t raw = (size_t)rb * rows * sl;
             rg[k].bufferOffset -= base;
             uint8_t *dst = stg + rg[k].bufferOffset, *tmp = (astc && !agpu) || rgb ? malloc(raw) : NULL;
-            if (nvn_deswizzle(d, lv, ly, t->mem, tmp ? tmp : dst, rb)) {
+            tmps[k - k0] = tmp;
+            if (!held) {
+                memset(tmp ? tmp : dst, 0, raw);
+            } else if (nvn_deswizzle(d, lv, ly, t->mem, tmp ? tmp : dst, rb)) {
                 log_limited(&n_bad, "texture %#llx fmt %#x target %d: level %u layer %u has no CPU layout; uploaded as zeros",
                             (unsigned long long)e->pub.addr, d->format, d->target, lv, ly);
                 memset(tmp ? tmp : dst, 0, raw);
             }
+        }
+        if (held) {
+            plat_crash_context(NULL);
+            mem_read_release();   // the part's reads of the storage are done
+        }
+        for (k = k0; k < k1; k++) {   // the decodes, from the copies
+            uint32_t lv = rg[k].imageSubresource.mipLevel, ly = rg[k].imageSubresource.baseArrayLayer;
+            uint32_t w = rg[k].imageExtent.width, h = rg[k].imageExtent.height, sl = rg[k].imageExtent.depth;
+            uint32_t rb = (w + bw - 1) / bw * (uint32_t)bpb, rows = (h + bh - 1) / bh;
+            uint8_t *dst = stg + rg[k].bufferOffset, *tmp = tmps[k - k0];
             if (agpu) {
                 ar[k] = (VkAstcRegion){.src = rg[k].bufferOffset, .w = w, .h = h, .slices = sl, .level = lv, .layer = ly};
             } else if (astc) {
@@ -832,6 +862,7 @@ static void upload(Tex *e) {
             }
             free(tmp);
         }
+        free(tmps);
         if (acheck) {
             raw_copy = malloc(size);
             memcpy(raw_copy, stg, size);

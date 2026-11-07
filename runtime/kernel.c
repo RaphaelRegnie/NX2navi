@@ -923,6 +923,10 @@ static void core_put(RtThread *t) {
     t->cur_core = -1;
     t->preempt = 0;
     g_core_owner[c] = NULL;
+    // Waiters that were to interrupt t (core_kick) forget it: t owns no core now, and once it exits and its handle
+    // closes (thr_free), a waiter's next ap_try would read and interrupt freed memory.
+    for (RtThread *w = g_core_wait; w; w = w->cnext)
+        if (w->target == t) w->target = NULL;
     core_grant(c);
 }
 

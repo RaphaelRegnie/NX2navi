@@ -144,6 +144,8 @@ uint32_t mem_map(uint64_t dst, uint64_t src, uint64_t n);                       
 uint32_t mem_unmap(uint64_t dst, uint64_t src, uint64_t n);                     // 0x05
 uint32_t mem_query(uint64_t a, RtMemoryInfo *out);                              // 0x06
 int mem_readable(uint64_t a, uint64_t n);                                        // every page readable
+int mem_read_hold(uint64_t a, uint64_t n);   // mem_readable that keeps the range mapped until mem_read_release
+void mem_read_release(void);
 uint32_t mem_map_physical(uint64_t a, uint64_t n);                              // 0x2C
 uint32_t mem_unmap_physical(uint64_t a, uint64_t n);                            // 0x2D
 int mem_info(uint32_t id, uint64_t *out);                  // GetInfo memory ids 2-7, 12-17, 21, 22, 28; 0 if not a memory id
@@ -268,6 +270,7 @@ void res_heapdef_served(void);                             // romfs.c serves the
 void wide_init(void);
 void wide_present(void);                                    // each present: DLSS's render scale (res_fixed)                                      // after rt_patches_init: widescreen.c, NX2NAVI_GAME_ASPECT
 int wide_available(void);                                  // the generated C has the widescreen sets
+uint64_t wide_heap_extra_kib(void);                        // the texture heap's growth for the widescreen picture
 void res_init(void);                                       // after rt_patches_init: the patch page and the sets
 float res_dlss_lod_bias(void);                             // NX2NAVI_DLSS upscaling: texture LOD bias (<= 0)
 int res_dlss_mode(const char *mode);                       // NX2NAVI_DLSS changed while running: new scene size

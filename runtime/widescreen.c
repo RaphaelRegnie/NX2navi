@@ -30,6 +30,7 @@
 #define GAME_W 2560   // the picture, main+0x1202ee0 and main+0x31f39f4
 #define GAME_H 1440
 #define SCENE_H 1080
+#define GAME_DTA_KIB 312320.0     // the texture heap made for that picture (wide_heap_extra_kib)
 
 // The window's size, or the monitor's in fullscreen; 0 when unknown.
 static int screen_size(int *w, int *h) {
@@ -107,6 +108,35 @@ void wide_present(void) {
     }
 }
 
+// The picture the settings ask for, *ow x *oh; 0 when it is the game's own 2560x1440 (every set stays off). Read at the
+// start, before the window exists: the monitor's size is known then.
+static int picture_size(unsigned *ow, unsigned *oh, int quiet) {
+    double r = wanted_ratio(), game = (double)GAME_W / GAME_H;
+    *oh = picture_height();
+    if (r <= 0 || r < game * 1.01) {
+        if (r > 0 && !quiet) rt_log("widescreen: a %.4f picture is not wider than 16:9; the game's 16:9", r);
+        r = game;
+    }
+    if (r == game && *oh == GAME_H) return 0;
+    if (r > 32.0 / 9.0) r = 32.0 / 9.0;
+    *ow = (unsigned)lround(*oh * r / 8) * 8;   // whole multiples of 8 pixels
+    return 1;
+}
+
+// The texture heap: the engine's render targets live in "DynamicTextureAllocatorMem" of the HeapDef table
+// (System/HeapSize/Product.Nin_Ounce_NVN2.HeapDef.byml.zs; 312320 KiB, carved from "Graphics"), made for the 2560x1440
+// picture. Larger pictures' targets did not fit: the render-target manager's search for a free block (main+0x3ed00)
+// fell to its out-of-memory path and read through a null block when the pause menu's blur needed one at 5120x2160.
+// The heap and its parent grow by the shipped size times the picture's pixels over 2560x1440 (its targets are the
+// picture's size or a share of it), in whole MiB; resolution.c rewrites the table (res_heapdef_build) and memory.c adds
+// the amount to the application pool, so no other heap shrinks. 0 without the widescreen sets or for the game's size.
+uint64_t wide_heap_extra_kib(void) {
+    unsigned ow, oh;
+    if (!wide_available() || !picture_size(&ow, &oh, 1)) return 0;
+    double grow = (double)ow * oh / ((double)GAME_W * GAME_H) - 1;
+    return grow > 0 ? (uint64_t)ceil(GAME_DTA_KIB * grow / 1024) * 1024 : 0;
+}
+
 void wide_init(void) {
     int so = rt_patch_set("wide_out"), ss = rt_patch_set("wide_scene"), sa = rt_patch_set("wide_aspect"),
         sh = rt_patch_set("wide_hud"), sm = rt_patch_set("wide_movie");
@@ -114,22 +144,16 @@ void wide_init(void) {
     // frame (3/4 of the picture at most), and writing other sizes into wide_scene's constant or the 1920x1080 render
     // sizes left the light target where the controller put it. DLSS's modes fix the share through res_fixed instead
     // (wide_present).
-    double r = wanted_ratio(), game = (double)GAME_W / GAME_H, f = 0.75;
-    unsigned oh = picture_height();
-    if (r <= 0 || r < game * 1.01) {
-        if (r > 0) rt_log("widescreen: a %.4f picture is not wider than 16:9; the game's 16:9", r);
-        r = game;
-    }
-    if (r == game && oh == GAME_H && f == 0.75) return;   // the game's own sizes: every set stays off
+    double game = (double)GAME_W / GAME_H, f = 0.75;
+    unsigned ow, oh;
+    if (!picture_size(&ow, &oh, 0)) return;   // the game's own sizes: every set stays off
     if (so < 0 || ss < 0 || sa < 0 || sh < 0 || sm < 0) {
         rt_log("widescreen: the generated C has no widescreen patch sets (gen.py --patches recomp/patches-v111.txt); "
                "the game's own 2560x1440 picture");
         return;
     }
-    if (r > 32.0 / 9.0) r = 32.0 / 9.0;
-    // Widths in whole multiples of 8 pixels, the scene's height even: the picture oh high and as wide as its shape, the
-    // scene 3/4 of both.
-    unsigned ow = (unsigned)lround(oh * r / 8) * 8, sw = (unsigned)lround(ow * f / 8) * 8;
+    // The scene 3/4 of both sides, its width in whole multiples of 8 pixels and its height even.
+    unsigned sw = (unsigned)lround(ow * f / 8) * 8;
     unsigned sch = (unsigned)lround(oh * f / 2) * 2;
     uint64_t out = (uint64_t)oh << 32 | ow, scene = (uint64_t)sch << 32 | sw;
     float match = 16.0f / 9.0f, ratio = (float)ow / oh, tolerance = 0.01f, squeeze = match / ratio;

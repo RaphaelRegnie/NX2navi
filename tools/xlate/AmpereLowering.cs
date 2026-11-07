@@ -18,7 +18,9 @@
 // SpillFrom up live in local memory after the program's own, and an instruction that names one works on a block of
 // four temporaries (R188-R203, one block per aligned group of four guest registers, so pairs and quads stay
 // contiguous) loaded before it and stored after it; uniform registers then take blocks of four from R204-R235 (eight
-// groups: an Ocarina mesh program used more than the four R220-R235 held).
+// groups: an Ocarina mesh program used more than the four R220-R235 held). A program with more than eight groups of
+// uniform registers is lowered once more in the wide spill layout: guest registers from R156 spilled, temporaries
+// R156-R171, uniform registers R172-R235 (sixteen groups, UR0-UR62). Programs that fit keep the first layout.
 using System;
 using System.Collections.Generic;
 
@@ -43,7 +45,21 @@ static class AmpereLowering
         public RegisterPressureException(string message) : base(message) { }
     }
 
-    const int SpillFrom = 188, TempBase = 188, UrPool = 204, UrPoolEnd = 236, SpillBytes = (256 - SpillFrom) * 4;
+    // The uniform registers do not fit the spill layout's pool: Lower retries in the wide spill layout.
+    sealed class UrPoolException : LoweringException
+    {
+        public UrPoolException(string message) : base(message) { }
+    }
+
+    // Spill layouts: guest registers from SpillFrom up in local memory, the temporaries from there, the uniform pool
+    // after them up to UrPoolEnd.
+    readonly record struct SpillLayout(int SpillFrom, int UrPool)
+    {
+        public int TempBase => SpillFrom;
+        public int SpillBytes => (256 - SpillFrom) * 4;
+    }
+    const int UrPoolEnd = 236;
+    static readonly SpillLayout Spill = new(188, 204), SpillWide = new(156, 172);
 
     // Task (NVN2 stage 6) and mesh (stage 7) programs. Both are lowered as compute programs: the stage buffer they
     // write with ISBEWR and read with ISBERD becomes shared memory, laid out by this record, and MeshSpirv.cs turns
@@ -120,12 +136,15 @@ static class AmpereLowering
         readonly MeshInfo _mesh;   // task or mesh program (lowered as compute), else null
         public byte[] C1;          // the program's c1 constants (NVN2: after the code; BRX jump tables), or null
         readonly int _spillAt = -1;   // spill mode: byte offset of guest register SpillFrom in local memory; -1 otherwise
+        readonly SpillLayout _sl;      // spill mode: the layout
+        int SpillFrom => _sl.SpillFrom;
         readonly Dictionary<int, int> _temps = new();   // spill mode: guest register group (r & ~3) -> its temporaries, this instruction
         readonly Dictionary<int, int> _urBlocks = new();   // spill mode: uniform register group (n & ~3) -> its registers
-        public Lowerer(Insn[] code, byte[] header, bool compute, int[] table, MeshInfo mesh, int spillAt = -1)
+        public Lowerer(Insn[] code, byte[] header, bool compute, int[] table, MeshInfo mesh, int spillAt = -1, SpillLayout layout = default)
         {
             _code = code; _header = header; _compute = compute; _table = table; _mesh = mesh; _firstOutput = new int[code.Length + 1];
             _spillAt = spillAt;
+            _sl = layout.SpillFrom != 0 ? layout : Spill;
             int highest = HighestGpr(code);
             if (spillAt < 0 && highest >= UrLimit) throw new RegisterPressureException($"guest registers up to R{highest}");
             UrBase = spillAt >= 0 ? SpillFrom : (highest + 2) & ~1;
@@ -139,7 +158,7 @@ static class AmpereLowering
             if (!_temps.TryGetValue(g, out int t))
             {
                 if (_temps.Count == 4) throw Fail("more than four spilled register groups in one instruction");
-                t = TempBase + 4 * _temps.Count;
+                t = _sl.TempBase + 4 * _temps.Count;
                 _temps[g] = t;
                 for (int k = 0; k < 4; k++)   // LDL.32 t+k, [RZ + slot]
                     Emit(Unguarded(0xef40000000000000UL | (uint)(t + k) | ((ulong)RZ << 8) | ((ulong)(uint)(_spillAt + 4 * (g - SpillFrom + k)) << 20) | (4UL << 48)));
@@ -223,8 +242,8 @@ static class AmpereLowering
                 int q = (int)reg & ~3;
                 if (!_urBlocks.TryGetValue(q, out int b))
                 {
-                    b = UrPool + 4 * _urBlocks.Count;
-                    if (b + 4 > UrPoolEnd) throw Fail("more uniform register groups than spill mode has room for");
+                    b = _sl.UrPool + 4 * _urBlocks.Count;
+                    if (b + 4 > UrPoolEnd) throw new UrPoolException(Fail("more uniform register groups than spill mode has room for").Message);
                     _urBlocks[q] = b;
                 }
                 return b + ((int)reg & 3);
@@ -471,7 +490,7 @@ static class AmpereLowering
                 case 0x23c: Hmma(); return;
                 case 0x23a: Movm(); return;
                 case 0x306: case 0xb06: case 0xd06: I2f(op); return;
-                case 0x387: case 0x983: LocalAccess(op == 0x387); return;
+                case 0x387: case 0x987: case 0x983: LocalAccess(op != 0x983); return;
                 case 0x526: IpaIndexed(); return;
                 case 0xabb: UldcIndexed(); return;
             }
@@ -2057,7 +2076,7 @@ static class AmpereLowering
         // the low half and zeroes the high half, ISCADD merges the column pair).
         // The work runs unguarded because every lane must supply its fragments to the shuffles; only the result writes
         // take the instruction's guard. Scratch R239-R252 (this file's scratch range, see the header); the guest operands
-        // are never there (guest and uniform registers end below R237, spill temporaries are R188-R235).
+        // are never there (guest and uniform registers end below R237, spill temporaries and uniform registers are R156-R235).
         void Hmma()
         {
             bool k16 = _i.Bit(75), f32 = _i.Bit(76);
@@ -2175,13 +2194,24 @@ static class AmpereLowering
         }
 
         // STL / LDL (local memory) at [Ra + offset 40-63], size 73-75 (U8 S8 U16 S16 32 64 128); 64 and 128 bits go as
-        // 32-bit words. STL data at 32-39. A uniform address (bit 91) is not lowered.
+        // 32-bit words. STL data at 32-39. With bit 91 the address adds a uniform register URb (STL 0x987, LDL 0x983 in
+        // that form): a store's at 64-69, a load's at 32-37 (its B field; Ocarina's mesh programs write that register just
+        // before the access). Ra + URb goes to a scratch register first, or URb's register is the address when Ra is RZ.
         void LocalAccess(bool store)
         {
             uint size = _i.Bits(73, 3), allowed = store ? 0xe00u : 0x200e00u;
-            if (size > 6 || (_i.W2 & ~allowed) != 0x00100000 || (!store && _i.Bits(32, 8) != 0) || (store && _i.Bits(16, 8) != 0))
+            bool uniform = _i.Bit(91);
+            uint w2 = uniform ? _i.W2 & ~(store ? 0x0800003fu : 0x08000000u) : _i.W2;
+            uint bField = _i.Bits(32, 8) & (uniform && !store ? 0xc0u : 0xffu);
+            if (size > 6 || (w2 & ~allowed) != 0x00100000 || (!store && bField != 0) || (store && _i.Bits(16, 8) != 0))
                 throw Fail("local memory mode");
             int addr = Gpr(_i.Bits(24, 8)), value = store ? Gpr(_i.Bits(32, 8)) : Gpr((uint)Dst);
+            if (uniform)
+            {
+                int ub = Ur(store ? _i.Bits(64, 6) : _i.Bits(32, 6));
+                if (ub != RZ && addr == RZ) addr = ub;
+                else if (ub != RZ) { Iadd3(SX, addr, ub, RZ, false); addr = SX; }
+            }
             uint off = _i.Bits(40, 24), words = size == 6 ? 4u : size == 5 ? 2u : 1u;
             if (!store && words > 1 && addr != RZ && addr >= value && addr < value + words) { Mov(SX, addr, false); addr = SX; }
             for (uint k = 0; k < words; k++)
@@ -2432,8 +2462,16 @@ static class AmpereLowering
             if (header != 0)
                 spillAt = ((int)(BitConverter.ToUInt32(code, 4) & 0xffffff) + (int)(BitConverter.ToUInt32(code, 8) & 0xffffff)
                            + (int)(BitConverter.ToUInt32(code, 12) & 0xffffff) / 32 + 15) & ~15;
-            lowered = new Lowerer(insns, sph, !graphics, table, mesh, spillAt) { C1 = C1Bytes }.Run(out branches, out first);
-            localBytes = spillAt + SpillBytes;
+            try
+            {
+                lowered = new Lowerer(insns, sph, !graphics, table, mesh, spillAt, Spill) { C1 = C1Bytes }.Run(out branches, out first);
+                localBytes = spillAt + Spill.SpillBytes;
+            }
+            catch (UrPoolException)
+            {
+                lowered = new Lowerer(insns, sph, !graphics, table, mesh, spillAt, SpillWide) { C1 = C1Bytes }.Run(out branches, out first);
+                localBytes = spillAt + SpillWide.SpillBytes;
+            }
         }
 
         int start = graphics ? 0x50 : 0;

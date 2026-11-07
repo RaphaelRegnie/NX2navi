@@ -174,7 +174,7 @@ static uint64_t shadow_kib(void) {
 }
 
 // The generated C carries the output and scene patch sets for the builds that have them. Without them (Ocarina) the game draws at its
-// own sizes whatever the settings say, so nothing grows for them: no larger pool or HeapDef, no grown sizes reported.
+// own sizes whatever these settings say; its heap grows for its widescreen picture instead (widescreen.c).
 int res_adjustable(void) { return rt_patch_set("output") >= 0 && rt_patch_set("scene") >= 0; }
 
 static int bigger(void) {
@@ -183,6 +183,7 @@ static int bigger(void) {
 }
 
 uint64_t res_heap_extra_kib(void) {
+    if (!res_adjustable()) return wide_heap_extra_kib();   // Ocarina: its widescreen picture (widescreen.c)
     if (!bigger()) return 0;
     double grow = fmax(0.0, (double)R.ow * R.oh / (BASE_W * BASE_H) - 1.0) +
                   fmax(0.0, (double)R.hw * R.hh / (SCENE_W * SCENE_H) - 1.0);

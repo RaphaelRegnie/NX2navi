@@ -145,6 +145,17 @@ extern "C" uint64_t vk_fg_presents(VkSwapchainKHR sc) {
     return vk_fg_active() && F.fn.pOutGetLastPresentCountFFXAPI && sc ? F.fn.pOutGetLastPresentCountFFXAPI(sc) : 0;
 }
 
+// The HDR10 metadata goes to AMD's swapchain through its own call (vk_hdr.c vk_hdr_metadata).
+extern "C" PFN_vkSetHdrMetadataEXT vk_fg_hdr_metadata_fn(void) {
+    return vk_fg_active() ? F.fn.pOutSetHdrMetadataEXT : nullptr;
+}
+
+// An HDR10 swapchain (10-bit PQ or 16-bit float): frame generation is told its inputs are HDR.
+static bool hdr_format(VkFormat f) {
+    return f == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || f == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ||
+           f == VK_FORMAT_R16G16B16A16_SFLOAT;
+}
+
 extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless,
                             VkImageView hudless_view) {
     (void)hudless_view;
@@ -152,7 +163,7 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
     vk_dlaa_hudless_wanted = 1;   // the upscaling pass keeps a copy of the picture before the HUD (vk_dlaa.c hudless)
     const VkCtx *c = vk_ctx();
     if (F.fg && (F.fg_ext.width != ext.width || F.fg_ext.height != ext.height || F.fg_fmt != fmt)) {
-        vkDeviceWaitIdle(c->device);   // a new window size: the context is made for its display size
+        vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();   // a new window size: the context is made for its display size
         vk_ffx_destroy(&F.fg);
         F.fg = nullptr;
     }
@@ -170,14 +181,14 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
         ffxCreateContextDescFrameGeneration d = {};
         d.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
         d.header.pNext = &hl.header;
-        d.flags = FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE;
+        d.flags = FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE | (hdr_format(fmt) ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0);
         d.displaySize = {ext.width, ext.height};
         d.maxRenderSize = {ext.width, ext.height};
         d.backBufferFormat = ffxApiGetSurfaceFormatVK(fmt);
         ffxReturnCode_t r = vk_ffx_create(&F.fg, &d.header);
         if (r != FFX_API_RETURN_OK) return F.fg = nullptr, fail("the frame generation context", r);
         F.fg_ext = ext, F.fg_fmt = fmt;
-        rt_log("fg: frame generation context for %ux%u", ext.width, ext.height);
+        rt_log("fg: frame generation context for %ux%u%s", ext.width, ext.height, hdr_format(fmt) ? " (HDR)" : "");
     }
     VkFfxImage depth, mv;
     float jx = 0, jy = 0;

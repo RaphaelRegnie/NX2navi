@@ -107,8 +107,10 @@ extern "C" NX2SL_API int nx2sl_init(const wchar_t *dir, Nx2SlLog log) {
     p.numPathsToPlugins = 1;
     p.pathToLogsAndData = dir;
     p.logMessageCallback = sl_log;
-    // the game tracks its own command buffer state; no plugin downloads at run time
-    p.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eUseManualHooking;
+    // the game tracks its own command buffer state; no plugin downloads at run time. The depth and motion vectors are
+    // tagged per frame (slSetTagForFrame, nx2sl_frame), which Streamline refuses without the frame-based flag.
+    p.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eUseManualHooking |
+              sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     p.featuresToLoad = features;
     p.numFeaturesToLoad = 3;
     p.applicationId = 231313132;   // the id NVIDIA's samples use for builds without an issued one (as vk_dlaa.c's NGX)

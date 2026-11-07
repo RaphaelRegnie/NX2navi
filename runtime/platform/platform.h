@@ -425,7 +425,8 @@ typedef struct PlatChild PlatChild;
 PlatChild *plat_child_start(const char *exe, const char *arg, uint32_t *err);
 void plat_child_stop(PlatChild *c);                       // kills the child and frees c
 int plat_child_write(PlatChild *c, const void *data, size_t n);   // 1 when all n bytes were written
-long plat_child_read(PlatChild *c, void *buf, size_t cap);        // bytes read (at least 1); 0 or negative: pipe broke
+#define PLAT_CHILD_READ_MS 120000   // plat_child_read gives up on a child that sends nothing for this long
+long plat_child_read(PlatChild *c, void *buf, size_t cap);        // bytes read (at least 1); 0 or negative: pipe broke or timed out
 
 // ---- local IPC: a stream connection to another program of this machine, one listen location per name (Discord's
 // Rich Presence, discord_rpc.c). On Windows the named pipe \\.\pipe\<name>; on Linux the Unix domain socket

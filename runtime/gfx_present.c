@@ -71,9 +71,10 @@ void gfx_window_focus_changed(int in) {
 void gfx_window_closed(void) {
     int restart = plat_cas32(&g_restart, 0, 0) != 0;
     rt_log("gfx: window closed; %s", restart ? "restarting" : "exiting");
-    fs_save_flush();
+    cfg_save();   // a menu change saves 400 ms later on the render thread (option_rows.cpp); closing sooner kept the old file
     vk_pipeline_save();
     prof_write();   // plat_exit runs no atexit handlers
+    fs_save_flush();   // last: the game's threads still run until plat_exit, and a Commit after this one is refused
     if (restart) {
         plat_setenv("NX2NAVI_REEXEC", NULL);   // the new process counts its own address-space retries (memory.c)
         if (!plat_restart()) rt_log("gfx: the restart could not start the game again");
@@ -308,23 +309,28 @@ static void free_capture(void) {
     g_cap_valid = 0;
 }
 
-// Returns 1 with a usable swapchain, 0 when the window has no area (minimised). Called with g_pl held.
+// Returns 1 with a usable swapchain, 0 when the window has no area (minimised) or the create failed, which leaves
+// g_dirty set so the next present tries again. Called with g_pl held. g_dirty is cleared before the window's size is
+// read: a resize that arrives while the swapchain is being made (AMD's frame generation swapchain takes tens of ms)
+// sets it again, where clearing it at the end lost that resize and kept a swapchain of the old size, whose acquires
+// then timed out frame after frame behind AMD's presenter (the picture stopped).
 static int create_swapchain(void) {
     flip_locked();   // the acquired image goes out before its swapchain is replaced
+    plat_xchg32(&g_dirty, 0);
     VkCtx *c = vk_ctx();
     VkSurfaceCapabilitiesKHR caps;
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(c->phys, g_surface, &caps) != VK_SUCCESS) return 0;
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(c->phys, g_surface, &caps) != VK_SUCCESS) return plat_xchg32(&g_dirty, 1), 0;
     int cw = 0, ch = 0;
     wsys_client_size(&cw, &ch);
     VkExtent2D ext = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent
                                                             : (VkExtent2D){(uint32_t)cw, (uint32_t)ch};
-    if (!ext.width || !ext.height) return 0;
+    if (!ext.width || !ext.height) return plat_xchg32(&g_dirty, 1), 0;
     uint32_t nf = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(c->phys, g_surface, &nf, NULL);
     VkSurfaceFormatKHR fmts[64];
     if (nf > 64) nf = 64;
     vkGetPhysicalDeviceSurfaceFormatsKHR(c->phys, g_surface, &nf, fmts);
-    if (!nf) return 0;
+    if (!nf) return plat_xchg32(&g_dirty, 1), 0;
     // UNORM: the blit writes the bytes the game wrote (no sRGB encode). NX2NAVI_HDR: HDR10 when the surface offers it.
     VkSurfaceFormatKHR sf = fmts[0];
     int hdr = vk_hdr_surface_format(fmts, nf, &sf), found = hdr;
@@ -356,6 +362,16 @@ static int create_swapchain(void) {
         ci.oldSwapchain = VK_NULL_HANDLE;
         old = g_sc = VK_NULL_HANDLE;
         r = vk_fg_create_swapchain(&ci, &g_sc);
+        // once AMD's swapchain context exists every swapchain call goes through it: a plain swapchain in its place would
+        // get AMD's acquire and present. Try again at the next present instead.
+        if (r != VK_SUCCESS && vk_fg_active()) {
+            static volatile int32_t n_fail;
+            if (plat_inc32(&n_fail) <= 5) rt_log("gfx: frame generation swapchain %ux%u failed (%d); trying again", ext.width, ext.height, (int)r);
+            g_sc = VK_NULL_HANDLE;
+            vk_queue_unlock();
+            plat_xchg32(&g_dirty, 1);
+            return 0;
+        }
     }
     if (r != VK_SUCCESS && vk_dlssg_active()) r = vk_dlssg_create_swapchain(c->device, &ci, &g_sc);   // Streamline's hook
     else if (r != VK_SUCCESS) r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
@@ -363,6 +379,7 @@ static int create_swapchain(void) {
         rt_log("gfx: vkCreateSwapchainKHR failed (%d)", (int)r);
         g_sc = old;
         vk_queue_unlock();
+        plat_xchg32(&g_dirty, 1);
         return 0;
     }
     for (uint32_t i = 0; i < g_sc_n; i++) {
@@ -375,7 +392,7 @@ static int create_swapchain(void) {
     g_sc_fmt = sf.format;
     g_sc_hdr = hdr;
     vk_hdr_set_active(hdr);
-    if (hdr && !vk_fg_active()) vk_hdr_metadata(g_sc, 1);
+    if (hdr) vk_hdr_metadata(g_sc, 1);
     g_sc_ext = ext;
     g_sc_n = MAX_IMAGES;
     if (vk_fg_active()) {   // AMD's swapchain: the count first (a larger capacity is not cut down to it)
@@ -384,7 +401,15 @@ static int create_swapchain(void) {
         g_sc_n = n < MAX_IMAGES ? n : MAX_IMAGES;
         memset(g_sc_img, 0, sizeof g_sc_img);
         vk_fg_get_images(g_sc, &g_sc_n, g_sc_img);
-    } else if (vk_dlssg_active()) vk_dlssg_get_images(c->device, g_sc, &g_sc_n, g_sc_img);
+    } else if (vk_dlssg_active()) {   // Streamline's swapchain too: the count first, then only that many images
+        uint32_t n = 0;
+        vk_dlssg_get_images(c->device, g_sc, &n, NULL);
+        g_sc_n = n < MAX_IMAGES ? n : MAX_IMAGES;
+        memset(g_sc_img, 0, sizeof g_sc_img);
+        if (vk_dlssg_get_images(c->device, g_sc, &g_sc_n, g_sc_img) < 0) g_sc_n = 0;
+        for (uint32_t i = 0; i < g_sc_n; i++)
+            if (!g_sc_img[i]) g_sc_n = i;   // never a view of a null image
+    }
     else vkGetSwapchainImagesKHR(c->device, g_sc, &g_sc_n, g_sc_img);
     VkSemaphoreCreateInfo semi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint32_t i = 0; i < g_sc_n; i++) {
@@ -396,7 +421,6 @@ static int create_swapchain(void) {
     }
     free_capture();
     vk_queue_unlock();
-    plat_xchg32(&g_dirty, 0);
     return 1;
 }
 
@@ -691,7 +715,7 @@ static int movie_overlay(VkCommandBuffer cb, int slot, VkImage dst) {
     plat_mutex_unlock(&g_mv_lock);
     if (g_mvi_w != w || g_mvi_h != h) {
         if (g_mvi) {
-            vkDeviceWaitIdle(c->device);
+            vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();
             vmaDestroyImage(c->vma, g_mvi, g_mvia);
             g_mvi = VK_NULL_HANDLE;
         }
@@ -791,10 +815,12 @@ static VkImage hudless_record(VkCommandBuffer cb, unsigned slot, int w, int h, c
     VkImage pic;
     VkImageView pv;
     uint32_t pw, ph;
-    if (!vk_fg_active() || !vk_dlaa_fg_hudless(&pic, &pv, &pw, &ph) || (int)pw != w || (int)ph != h) return VK_NULL_HANDLE;
+    VkFormat pf;
+    if (!vk_fg_active() || !vk_dlaa_fg_hudless(&pic, &pv, &pw, &ph, &pf) || (int)pw != w || (int)ph != h)
+        return VK_NULL_HANDLE;
     VkCtx *c = vk_ctx();
     if (g_hl && (g_hl_w != g_sc_ext.width || g_hl_h != g_sc_ext.height || g_hl_fmt != g_sc_fmt)) {
-        vkDeviceWaitIdle(c->device);
+        vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();
         vkDestroyImageView(c->device, g_hl_view, NULL);
         vmaDestroyImage(c->vma, g_hl, g_hl_mem);
         g_hl = VK_NULL_HANDLE;
@@ -826,7 +852,9 @@ static VkImage hudless_record(VkCommandBuffer cb, unsigned slot, int w, int h, c
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                      VK_ACCESS_2_TRANSFER_WRITE_BIT);
     }
-    put_picture(cb, slot, pic, VK_FORMAT_R8G8B8A8_UNORM, w, h, rect, g_hl, to, general);
+    // the steps' per-slot views of their source: a slot of its own (the presented picture's views stay valid for this
+    // command buffer); with HDR the PQ encode as for the presented float picture
+    put_picture(cb, slot + FRAMES, pic, pf, w, h, rect, g_hl, to, general);
     sync_barrier(cb, g_hl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                  VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                  VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -865,10 +893,22 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                               : vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
     }
     vk_device_fault_report(r);
-    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) goto out;     // lost, not ready: skip the frame
+    // lost, not ready: skip the frame. Acquires that keep timing out (1 s each) mean a swapchain nothing will free an
+    // image of again: three in a row rebuild it, where the picture used to stop for good.
+    static uint32_t n_timeouts;
+    if (r == VK_TIMEOUT || r == VK_NOT_READY) {
+        if (++n_timeouts >= 3) {
+            rt_log("gfx: no swapchain image for %u acquires (%d): the swapchain is made again", n_timeouts, (int)r);
+            n_timeouts = 0;
+            plat_xchg32(&g_dirty, 1);
+        }
+    } else {
+        n_timeouts = 0;
+    }
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) goto out;
     if (r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
     vkResetFences(c->device, 1, &g_fence[slot]);
-    if (g_sc_hdr && !vk_fg_active()) vk_hdr_metadata(g_sc, 0);   // a changed peak or white goes to the display
+    if (g_sc_hdr) vk_hdr_metadata(g_sc, 0);   // a changed peak or white goes to the display
     if (g_th_pending[slot]) {   // that fence has signalled: the thumbnail its submission wrote is complete
         g_th_tag[g_th_pending[slot] % (uint64_t)g_th_n] = g_th_pending[slot];
         g_th_pending[slot] = 0;
@@ -943,7 +983,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     // Frame generation without the HUD in its generated frames: the picture as it would be without the HUD (vk_dlaa.c,
     // DLSS's or FSR 3.1's output before the HUD was drawn over it) goes through the same steps into an image of the
     // swapchain's size, which frame generation compares with the presented one to find the HUD and leave it unwarped
-    VkImage hudless = src && !g_sc_hdr ? hudless_record(cb, slot, w, h, rect, to, general) : VK_NULL_HANDLE;
+    VkImage hudless = src ? hudless_record(cb, slot, w, h, rect, to, general) : VK_NULL_HANDLE;
     static int show_hl = -1;   // NX2NAVI_FG_HUDLESS_SHOW=1 (test): the HUD-less picture on screen instead
     if (show_hl < 0) show_hl = cfg_get("NX2NAVI_FG_HUDLESS_SHOW") && !strcmp(cfg_get("NX2NAVI_FG_HUDLESS_SHOW"), "1");
     if (hudless && show_hl) {
@@ -1071,7 +1111,7 @@ void gfx_window_release_vk(void) {
     plat_rmutex_lock(&g_pl);
     if (c && g_started) {
         vk_queue_lock();
-        vkDeviceWaitIdle(c->device);
+        vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();
         vk_queue_unlock();
         g_flip_on = 0;   // its blit is done (device idle); the swapchain goes away unpresented
         menu_vk_release();

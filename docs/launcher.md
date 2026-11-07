@@ -73,7 +73,9 @@ A path the Windows ANSI code page cannot hold breaks the MSYS2 tools, so the too
    PyPI's sha256, into `pydeps/`.
 2. **Inspect Your Game** to **Compile**: `tools/make_game.py --nup <dump> --out <game> --msys <toolchain> --events`,
    whose `@@` progress lines drive the rows (check, exefs, romfs, lift, compile).
-3. The game's Cetra Display is decoded for the window.
+3. **Prepare the Shaders**: make_game.py's last step translates every shader of the game into the game's shader
+   cache and the driver's own cache (`tools/prepare_shaders.py`), so play does not stop to compile them.
+4. The game's Cetra Display is decoded for the window.
 
 ## Updating
 
@@ -104,7 +106,8 @@ The stub swaps `python.next` in while no Python runs, then starts the new versio
    objects.json`, from clang's dependency files).
 6. **Swap In the New Build**: the link writes `ocarina.exe.new`, which replaces `ocarina.exe` only once it is
    complete. A failed rebuild leaves the old build playable; Rebuild the Game tries again.
-7. Every version but the current and the previous one is deleted.
+7. **Prepare the Shaders** again for the new build; shaders the translator already prepared come from the cache.
+8. Every version but the current and the previous one is deleted.
 
 When the new version fails to start (exit code 86 from `start.pyw`, or any error within six seconds), the stub sets
 `current.txt` back to `previous.txt`'s version and starts it with `--rolled-back`. The game is never rebuilt while it
@@ -127,11 +130,13 @@ Built Game" is On. The dump is never touched.
 ## Releases
 
 1. Bump `VERSION`; build the shader translator (`tools/build_xlate.py`).
-2. With Python 3.14 and uv:
+2. With Python 3.14, numpy (the icon is drawn with it, `launcher/ui/art.py`) and uv:
 
    ```powershell
-   .venv-py314\Scripts\python tools\make_launcher.py --xlate build\xlate --feed owner/name --notes notes.md
+   uv run --no-project --python 3.14 --with numpy tools\make_launcher.py --xlate build\xlate --ffx amd_fidelityfx_vk.dll --feed owner/name --notes notes.md
    ```
+
+   `--ffx` puts AMD's signed `amd_fidelityfx_vk.dll` (FidelityFX SDK 1.1.4) in the release for FSR 3.1.
 
    On Linux it cross-compiles the two programs with clang, lld and llvm-windres against the same MSYS2 packages and
    unpacks Tcl/Tk with msiextract (msitools). It writes into `build/launcher-release`: `NX2navi-Setup-<version>.exe`

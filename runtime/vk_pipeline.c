@@ -3062,6 +3062,9 @@ static void lb_compute(const GfxShader *cs) {
         return;
     }
     double t0 = now_ms();
+    // at normal priority: while it is in flight a dispatch of the same shader waits for it (vk_pipeline_compute), and an
+    // idle-priority compile under load held that frame for seconds
+    if (LB.idle) plat_thread_priority(PLAT_PRIO_NORMAL);
     VkPipeline pipe = compute_create(cs, l);
     double ms = now_ms() - t0;
     lb_lock();

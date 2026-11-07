@@ -1675,7 +1675,13 @@ void plat_child_stop(PlatChild *c) {
 // A child that died makes the write fail with EPIPE; SIGPIPE is ignored for the process (main.c), as Windows has none.
 int plat_child_write(PlatChild *c, const void *data, size_t n) { return write_all(c->in, data, n); }
 
+// See win32.c plat_child_read: a child that never answers fails the read after PLAT_CHILD_READ_MS.
 long plat_child_read(PlatChild *c, void *buf, size_t cap) {
+    struct pollfd pf = {.fd = c->out, .events = POLLIN};
+    int r;
+    do r = poll(&pf, 1, PLAT_CHILD_READ_MS);
+    while (r < 0 && errno == EINTR);
+    if (r <= 0) return -1;   // timed out or failed
     ssize_t k;
     do k = read(c->out, buf, cap);
     while (k < 0 && errno == EINTR);

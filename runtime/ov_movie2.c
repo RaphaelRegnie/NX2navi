@@ -346,6 +346,12 @@ static void decoder_thread(void *arg) {
         update_events(v);
         plat_mutex_unlock(&v->lock);
         plat_mutex_lock(&v->codec);
+        // a flush (ov_flush) between taking the sample and the codec: the sample belongs to the stream before it, and fed
+        // into the flushed decoder its picture would come out after the seek
+        plat_mutex_lock(&v->lock);
+        int stale = v->generation != gen;
+        plat_mutex_unlock(&v->lock);
+        if (stale) s.size = 0, s.eos = 0;
         if (v->dav1d && s.data && s.size) {
             Dav1dData d = {0};
             uint8_t *p = dav1d_data_create(&d, s.size);

@@ -767,8 +767,8 @@ static void row_hdr(void) {
     opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 4000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
     opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f nits");
     opt_slider("NX2NAVI_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f nits");
-    // the hue correction belongs to the runtime's own HDR tonemap; the native one has the game's
-    if (strcmp(cfg_value("NX2NAVI_HDR"), "native")) opt_slider("NX2NAVI_HDR_HUE", UI_MENU_HDR_HUE, 0, 100, UI_MENU_HDR_HUE_DESC, 5, "%.0f %%");
+    // no hue slider: the hue correction belonged to the runtime's replacement tonemap, and Enhanced now extends the
+    // game's own tonemap in place (vk_hdr.c aces_extend), so NX2NAVI_HDR_HUE changes nothing in this game
 }
 
 // Frame generation (vk_fg.cpp), after a restart; it needs a temporal upscaler's motion vectors
@@ -779,7 +779,8 @@ static void row_framegen(void) {
     const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), "AMD FSR 3.1", "NVIDIA DLSS"};
     const char *v = cfg_value("NX2NAVI_FRAMEGEN");
     int cur = !strcmp(v, "fsr3") ? 1 : !strcmp(v, "dlss") ? 2 : 0;
-    // NVIDIA DLSS (vk_dlssg.c) is listed only while it is set: Streamline still fails in its plugin start-up here
+    // NVIDIA DLSS (vk_dlssg.c) is listed only while it is set: Streamline now starts and takes the swapchain, but presents
+    // no generated frames yet (one presented per frame, status OK)
     int n = cur == 2 ? 3 : 2;
     int nv = opt_choice_index("NX2NAVI_FRAMEGEN", UI_MENU_FRAMEGEN, names, n, cur, 0, UI_MENU_FRAMEGEN_DESC,
                               menu_text(UI_MENU_FRAMEGEN_NOTE));
@@ -1049,7 +1050,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     // the port version and the game update, right-aligned on the title line: what a bug report needs first
     char game[16], version[96];
     snprintf(game, sizeof game, "%d.%d.%d", rt_game_version / 100, rt_game_version / 10 % 10, rt_game_version % 10);
-    snprintf(version, sizeof version, "Ocarina Recomp %s  -  game %s", rt_port_version, game);
+    snprintf(version, sizeof version, "NX2navi %s  -  game %s", rt_port_version, game);
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - ImGui::CalcTextSize(version).x);
     ImGui::TextDisabled("%s", version);
 

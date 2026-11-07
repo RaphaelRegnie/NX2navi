@@ -20,6 +20,7 @@
 #include <wchar.h>
 
 #include "cfg.h"
+#include "gfx.h"
 #include "host.h"
 #include "platform/platform.h"
 #include "vk.h"
@@ -361,18 +362,20 @@ static struct {
     float fg_jx, fg_jy;
     int fg_fresh, fg_reset;      // fresh: not handed out yet (vk_dlaa_fg_inputs)
     // the picture without the HUD for frame generation (vk_dlaa_fg_hudless): DLSS's output encoded to sRGB as the game's
-    // last pass encodes its picture, then copied bit for bit into an RGBA8 UNORM image, the format the present reads
+    // last pass encodes its picture, then copied bit for bit into an RGBA8 UNORM image, the format the present reads; with
+    // HDR on, DLSS's output as RGBA16F, as the game's float picture the present encodes (hl_srgb unused)
     VkImage hl_srgb, hl;
     VmaAllocation hl_srgb_mem, hl_mem;
     VkImageView hl_view;
     uint32_t hl_w, hl_h;
+    VkFormat hl_fmt;
     int hl_fresh;
 } D = {.mv_ok = -1, .cfg_seen = ~0u};
 
-int vk_dlaa_fg_hudless(VkImage *img, VkImageView *view, uint32_t *w, uint32_t *h) {
+int vk_dlaa_fg_hudless(VkImage *img, VkImageView *view, uint32_t *w, uint32_t *h, VkFormat *fmt) {
     if (!D.hl_fresh) return 0;
     D.hl_fresh = 0;
-    *img = D.hl, *view = D.hl_view, *w = D.hl_w, *h = D.hl_h;
+    *img = D.hl, *view = D.hl_view, *w = D.hl_w, *h = D.hl_h, *fmt = D.hl_fmt;
     return 1;
 }
 
@@ -421,7 +424,7 @@ static int image2d(uint32_t w, uint32_t h, VkFormat f, VkImageUsageFlags usage, 
 
 static void free_size(struct Size *e) {
     const VkCtx *c = vk_ctx();
-    vkDeviceWaitIdle(c->device);   // a third scene size: the evicted images may still be in flight
+    vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();   // a third scene size: the evicted images may still be in flight
     if (e->out_view) vkDestroyImageView(c->device, e->out_view, NULL);
     if (e->mv_view) vkDestroyImageView(c->device, e->mv_view, NULL);
     if (e->out) vmaDestroyImage(c->vma, e->out, e->out_mem);
@@ -887,7 +890,7 @@ fail:
 
 static void free_snap(struct Snap *s) {
     const VkCtx *c = vk_ctx();
-    vkDeviceWaitIdle(c->device);   // a fourth size: the evicted images may still be in flight
+    vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();   // a fourth size: the evicted images may still be in flight
     if (s->before_view) vkDestroyImageView(c->device, s->before_view, NULL);
     if (s->mask_view) vkDestroyImageView(c->device, s->mask_view, NULL);
     if (s->before) vmaDestroyImage(c->vma, s->before, s->before_mem);
@@ -1256,30 +1259,38 @@ evaluated:
 }
 
 // The HUD-less picture (vk_dlaa_fg_hudless): DLSS's output, which the HUD is then drawn over, through the encode the
-// game's last pass gives its picture (linear to sRGB), as RGBA8 UNORM bytes like the picture the present reads.
+// game's last pass gives its picture (linear to sRGB), as RGBA8 UNORM bytes like the picture the present reads. With
+// HDR (NX2NAVI_HDR = 1) the game's picture stays float and linear up to the present, which encodes it to PQ
+// (vk_hdr_encode): DLSS's output is kept as RGBA16F for the same encode. The game's own HDR (native) encodes inside the
+// game, which this cannot follow: no HUD-less picture there.
 int vk_dlaa_hudless_wanted;
 static void hudless(VkCommandBuffer cb, struct Size *e, uint32_t w, uint32_t h) {
     const VkCtx *c = vk_ctx();
-    if (D.hl && (D.hl_w != w || D.hl_h != h)) {
-        vkDeviceWaitIdle(c->device);
+    int hdr = vk_hdr_wanted() && !vk_hdr_native();
+    if (vk_hdr_native()) return;
+    VkFormat fmt = hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+    if (D.hl && (D.hl_w != w || D.hl_h != h || D.hl_fmt != fmt)) {
+        vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();
         vkDestroyImageView(c->device, D.hl_view, NULL);
-        vmaDestroyImage(c->vma, D.hl, D.hl_mem), vmaDestroyImage(c->vma, D.hl_srgb, D.hl_srgb_mem);
+        vmaDestroyImage(c->vma, D.hl, D.hl_mem);
+        if (D.hl_srgb) vmaDestroyImage(c->vma, D.hl_srgb, D.hl_srgb_mem);
         D.hl = D.hl_srgb = VK_NULL_HANDLE;
     }
     if (!D.hl) {
         VkImageView v2 = VK_NULL_HANDLE;
         VkImageUsageFlags u = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        if (!image2d(w, h, VK_FORMAT_R8G8B8A8_SRGB, u, &D.hl_srgb, &D.hl_srgb_mem, &v2) ||
-            !image2d(w, h, VK_FORMAT_R8G8B8A8_UNORM, u | VK_IMAGE_USAGE_STORAGE_BIT, &D.hl, &D.hl_mem, &D.hl_view)) {
+        if ((!hdr && !image2d(w, h, VK_FORMAT_R8G8B8A8_SRGB, u, &D.hl_srgb, &D.hl_srgb_mem, &v2)) ||
+            !image2d(w, h, fmt, u | VK_IMAGE_USAGE_STORAGE_BIT, &D.hl, &D.hl_mem, &D.hl_view)) {
             rt_log("dlaa: the HUD-less picture's images could not be made: frame generation sees the HUD");
             vk_dlaa_hudless_wanted = 0;
             return;
         }
         if (v2) vkDestroyImageView(c->device, v2, NULL);
-        D.hl_w = w, D.hl_h = h;
+        D.hl_w = w, D.hl_h = h, D.hl_fmt = fmt;
         VkImageMemoryBarrier2 ib[2];
-        VkImage im[2] = {D.hl_srgb, D.hl};
-        for (int i = 0; i < 2; i++)
+        VkImage im[2] = {D.hl, D.hl_srgb};
+        int nim = D.hl_srgb ? 2 : 1;
+        for (int i = 0; i < nim; i++)
             ib[i] = (VkImageMemoryBarrier2){.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                             .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                             .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -1288,14 +1299,19 @@ static void hudless(VkCommandBuffer cb, struct Size *e, uint32_t w, uint32_t h) 
                                             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = im[i],
                                             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
-        VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 2,
+        VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = (uint32_t)nim,
                                .pImageMemoryBarriers = ib};
         vkCmdPipelineBarrier2(cb, &di);
     }
     VkImageBlit b = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)w, (int32_t)h, 1}},
                      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {(int32_t)w, (int32_t)h, 1}}};
-    vkCmdBlitImage(cb, e->out, VK_IMAGE_LAYOUT_GENERAL, D.hl_srgb, VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_NEAREST);
+    vkCmdBlitImage(cb, e->out, VK_IMAGE_LAYOUT_GENERAL, hdr ? D.hl : D.hl_srgb, VK_IMAGE_LAYOUT_GENERAL, 1, &b,
+                   VK_FILTER_NEAREST);
     full_barrier(cb);
+    if (hdr) {
+        D.hl_fresh = 1;
+        return;
+    }
     VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                       .extent = {w, h, 1}};
     vkCmdCopyImage(cb, D.hl_srgb, VK_IMAGE_LAYOUT_GENERAL, D.hl, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);

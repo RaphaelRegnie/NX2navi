@@ -6,10 +6,12 @@
 // The game's picture (docs/architecture.md, "HDR"). The game tonemaps its scene into an r11g11b10f target, upscales it
 // and draws the HUD into a second one (float, nothing in these passes clamps), and one last draw copies that into the
 // 8-bit sRGB window texture it presents. So:
-// 1. vk_hdr_shader_swap: the tonemap's fragment shader becomes shaders/hdr_tonemap.frag, which keeps values above 1
-//    (relative to the HUD's white) and rolls off at the peak. It is recognised by its constants and resources, not by
-//    a hash, so another game version or translator still finds it; its SPIR-V is replaced in memory only. The game's
-//    FSR 1 upscale after it would clamp the picture to 1 again; fsr_unclamp drops that clamp in its SPIR-V.
+// 1. vk_hdr_shader_swap, on each fragment shader as it loads (in memory only; the cache keeps the translator's): 1.1.1's
+//    tonemap ends in the fitted ACES curve and a clamp to 0..1 per channel, and aces_extend changes those clamps so
+//    values above 1 (relative to the HUD's white) survive, rolled off at the peak. Recognised by the curve's
+//    constants, not by a hash, so another translator still finds it. A tonemap of the earlier shape (1 - e^-x and a
+//    saturation grade) becomes shaders/hdr_tonemap.frag instead. The game's FSR 1 upscale after it would clamp the
+//    picture to 1 again; fsr_unclamp drops that clamp in its SPIR-V.
 // 2. vk_hdr_draw / vk_hdr_present_source: a draw into a presented window texture that samples one float texture of
 //    its size is that copy; the present then reads the float texture instead of the window texture. Any other last
 //    draw into it leaves the window texture, decoded from sRGB: menus and movies stay SDR at the HUD's white.
@@ -18,10 +20,11 @@
 // 3. vk_hdr_encode: on the present, the crop rectangle goes to PQ code values in an RGBA16F image (shaders/hdr_encode.comp)
 //    that FSR 1 or the blit scale into the swapchain. vk_hdr_ui_*: the in-game menu draws into an RGBA8 image and
 //    shaders/hdr_ui.frag blends it onto the swapchain at the HUD's white.
-// The tonemap's approach: an "extended vanilla" curve (shaders/hdr_tonemap.frag).
+// The tonemap's approach: the game's curve up to near its white, then its tangent ("extended vanilla").
 #include "vk.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cfg.h"
@@ -33,6 +36,7 @@
 #include "host.h"
 #include "nvn_api.h"
 #include "vk_exec.h"
+#include "vk_fg.h"
 #include "platform/platform.h"
 
 #define SLOTS 8
@@ -161,8 +165,181 @@ static int fsr_unclamp(uint32_t *w, uint64_t *words) {
     return changed ? changed : -1;
 }
 
+// Ocarina 1.1.1's tonemap (one draw from the scene light target, R11G11B10F, into a target of the same size, before
+// anti-aliasing, DLSS and the HUD): the game's exposure, then per channel the fitted ACES filmic curve
+// x (2.51 x + 0.03) / (x (2.43 x + 0.59) + 0.14) and clamp(.., 0, 1), the value it stores. aces_extend changes each such
+// clamp in place, so the game's exposure and look stay its own:
+//   y = aces(x) up to the x where the curve reaches ACES_YP of the SDR white, its tangent above,
+//   a roll-off of y from half the peak to the peak (support +1440 .y: peak / picture white, at least 1),
+//   times the picture's white against the HUD's (+1440 .x).
+// The values are relative to the HUD's white, as the present's encode expects. The support buffer gets a member at
+// 1440 (vk_exec_draw.c support_fill writes it), which the translator's SupportBuffer ends before. Recognised by the
+// curve's 2.51 / 0.03 pair feeding a clamp to 0..1: any shader that ends with that curve keeps its highlights.
+// Returns the clamps changed (0: not that shader).
+enum { SPV_OP_TYPE_INT = 21, SPV_OP_TYPE_BOOL = 20, SPV_OP_TYPE_VECTOR = 23, SPV_OP_TYPE_STRUCT = 30,
+       SPV_OP_TYPE_POINTER = 32, SPV_OP_FUNCTION = 54, SPV_OP_LOAD = 61, SPV_OP_COMPOSITE_EXTRACT = 81,
+       SPV_OP_FNEGATE = 127, SPV_OP_FSUB = 131, SPV_OP_FMUL = 133, SPV_OP_FDIV = 136, SPV_OP_SELECT = 169,
+       SPV_OP_FORD_GREATER = 186, SPV_OP_MEMBER_DECORATE = 72, SPV_DEC_OFFSET = 35, SPV_SC_UNIFORM = 2, GLSL_EXP = 27,
+       GLSL_FMA = 50 };
+#define ACES_YP 0.8f
+
+static double aces(double x) { return x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14); }
+
+static int aces_extend(uint32_t **spirv, uint64_t *words) {
+    uint32_t *w = *spirv;
+    uint64_t n = *words;
+    uint32_t bound = w[3], glsl = 0, ft = 0, bt = 0, it = 0, v4 = 0, c0 = 0, c1 = 0, c251 = 0, c003 = 0, sb = 0, sb_ptr = 0,
+             st = 0, st_len = 0, ptr_v4 = 0;
+    const float f251 = 2.51f, f003 = 0.03f, fone = 1.0f;
+    uint32_t b251, b003, bone;
+    memcpy(&b251, &f251, 4), memcpy(&b003, &f003, 4), memcpy(&bone, &fone, 4);
+    uint32_t last_offset = 0;
+    uint32_t *def = calloc(bound ? bound : 1, sizeof *def);   // result id -> word index of its instruction
+    if (!def) return 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (!len || i + len > n) { free(def); return 0; }
+        const uint32_t *a = w + i + 1;
+        if (op == SPV_OP_EXT_INST_IMPORT && len >= 3 && name_is(a, len, "GLSL.std.450")) glsl = a[0];
+        else if (op == SPV_OP_TYPE_FLOAT && len == 3 && a[1] == 32) ft = a[0];
+        else if (op == SPV_OP_TYPE_BOOL && len == 2) bt = a[0];
+        else if (op == SPV_OP_TYPE_INT && len == 4 && a[1] == 32 && a[2] == 1) it = a[0];
+        else if (op == SPV_OP_TYPE_VECTOR && len == 4 && a[1] == ft && ft && a[2] == 4) v4 = a[0];
+        else if (op == SPV_OP_CONSTANT && len == 4 && a[0] == ft && ft) {
+            if (a[2] == 0) c0 = a[1];
+            else if (a[2] == bone) c1 = a[1];
+            else if (a[2] == b251) c251 = a[1];
+            else if (a[2] == b003) c003 = a[1];
+        } else if (op == SPV_OP_NAME && len >= 3 && name_is(a, len, "support_buffer")) sb = a[0];
+        else if (op == SPV_OP_TYPE_POINTER && len == 4 && a[1] == SPV_SC_UNIFORM && a[2] == v4 && v4) ptr_v4 = a[0];
+        else if (op == SPV_OP_MEMBER_DECORATE && len == 5 && a[1] == 10 && a[2] == SPV_DEC_OFFSET && a[3] == 1424)
+            last_offset = a[0];   // the struct whose member 10 is at 1424
+        if (op == SPV_OP_VARIABLE && len >= 4 && a[1] == sb && sb) sb_ptr = a[0];
+        // results: [0] type, [1] id for the instructions that have both
+        if ((op == SPV_OP_FMUL || op == SPV_OP_FDIV || op == SPV_OP_EXT_INST || op == SPV_OP_LOAD) && len >= 3 && a[1] < bound)
+            def[a[1]] = (uint32_t)i;
+        i += len;
+    }
+    for (uint64_t i = 5; i < n && sb_ptr; i += w[i] >> 16)   // the support buffer's block: pointer -> struct
+        if ((w[i] & 0xffff) == SPV_OP_TYPE_POINTER && (w[i] >> 16) == 4 && w[i + 1] == sb_ptr) st = w[i + 3];
+    for (uint64_t i = 5; i < n && st; i += w[i] >> 16)
+        if ((w[i] & 0xffff) == SPV_OP_TYPE_STRUCT && w[i + 1] == st) st_len = w[i] >> 16;
+    // the clamps: FClamp(FMul(FMul(x, Fma(x, 2.51, 0.03)), rcp), 0, 1)
+    enum { MAX_SITES = 8 };
+    uint64_t site[MAX_SITES];
+    uint32_t site_x[MAX_SITES];
+    int nsite = 0;
+    if (glsl && ft && bt && it && v4 && c0 && c1 && c251 && c003 && st_len == 13 && last_offset == st)
+        for (uint64_t i = 5; i < n && nsite < MAX_SITES; i += w[i] >> 16) {
+            const uint32_t *a = w + i + 1;
+            if ((w[i] & 0xffff) != SPV_OP_EXT_INST || (w[i] >> 16) != 8 || a[2] != glsl || a[3] != GLSL_FCLAMP ||
+                a[5] != c0 || a[6] != c1 || a[4] >= bound || !def[a[4]])
+                continue;
+            const uint32_t *m = w + def[a[4]];   // FMul(num, rcp)
+            if ((m[0] & 0xffff) != SPV_OP_FMUL || m[3] >= bound || !def[m[3]]) continue;
+            const uint32_t *num = w + def[m[3]];   // FMul(x, Fma(x, 2.51, 0.03))
+            if ((num[0] & 0xffff) != SPV_OP_FMUL || num[4] >= bound || !def[num[4]]) continue;
+            const uint32_t *f = w + def[num[4]];
+            if ((f[0] & 0xffff) != SPV_OP_EXT_INST || (f[0] >> 16) != 8 || f[4] != GLSL_FMA || f[6] != c251 || f[7] != c003)
+                continue;
+            site[nsite] = i, site_x[nsite++] = num[3];
+        }
+    free(def);
+    if (!nsite) return 0;
+    // the curve's constants: where it reaches ACES_YP, its slope there, the tangent's offset
+    double lo = 0, hi = 64;
+    for (int k = 0; k < 60; k++) *(aces((lo + hi) / 2) < ACES_YP ? &lo : &hi) = (lo + hi) / 2;
+    double xp = (lo + hi) / 2, slope = (aces(xp + 1e-4) - aces(xp - 1e-4)) / 2e-4;
+    float fxp = (float)xp, fslope = (float)slope, foff = (float)(ACES_YP - slope * xp), fhalf = 0.5f;
+    uint32_t id = bound;
+    uint32_t new_ptr = ptr_v4 ? 0 : id++, ptr = ptr_v4 ? ptr_v4 : new_ptr;
+    uint32_t i11 = id++, kxp = id++, kslope = id++, koff = id++, khalf = id++;
+    // the struct's extra word, its member decoration, six global instructions, 22 instructions of at most 8 words a site
+    uint64_t cap = n + 1 + 5 + 6 * 5 + (uint64_t)nsite * 22 * 8;
+    uint32_t *o = malloc(cap * sizeof *o);
+    if (!o) return 0;
+    uint64_t k = 0;
+    memcpy(o, w, 5 * sizeof *w), k = 5;
+    // one instruction: its opcode, then its operands
+#define EMIT(...) do { const uint32_t ins_[] = {__VA_ARGS__}; const uint32_t n_ = sizeof ins_ / sizeof *ins_; \
+        o[k] = n_ << 16 | ins_[0]; memcpy(o + k + 1, ins_ + 1, (n_ - 1) * sizeof *ins_); k += n_; } while (0)
+    int globals_done = 0, s = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        const uint32_t *a = w + i + 1;
+        if (op == SPV_OP_FUNCTION && !globals_done) {   // new types and constants close the global section
+            if (new_ptr) EMIT(SPV_OP_TYPE_POINTER, new_ptr, SPV_SC_UNIFORM, v4);
+            uint32_t b[4];
+            memcpy(&b[0], &fxp, 4), memcpy(&b[1], &fslope, 4), memcpy(&b[2], &foff, 4), memcpy(&b[3], &fhalf, 4);
+            EMIT(SPV_OP_CONSTANT, it, i11, 11);
+            EMIT(SPV_OP_CONSTANT, ft, kxp, b[0]);
+            EMIT(SPV_OP_CONSTANT, ft, kslope, b[1]);
+            EMIT(SPV_OP_CONSTANT, ft, koff, b[2]);
+            EMIT(SPV_OP_CONSTANT, ft, khalf, b[3]);
+            globals_done = 1;
+        }
+        if (op == SPV_OP_TYPE_STRUCT && a[0] == st) {   // the support block gains a vec4 at 1440
+            memcpy(o + k, w + i, len * sizeof *w);
+            o[k] = (len + 1) << 16 | op;
+            o[k + len] = v4;
+            k += len + 1;
+        } else if (op == SPV_OP_MEMBER_DECORATE && len == 5 && a[0] == st && a[1] == 10 && a[2] == SPV_DEC_OFFSET &&
+                   a[3] == 1424) {
+            memcpy(o + k, w + i, len * sizeof *w), k += len;
+            EMIT(SPV_OP_MEMBER_DECORATE, st, 11, SPV_DEC_OFFSET, 1440);
+        } else if (s < nsite && i == site[s]) {
+            uint32_t x = site_x[s], r = a[4], res = a[1];
+            uint32_t pv = id++, hv = id++, g = id++, p = id++, lin = id++, gt = id++, r0 = id++, y = id++, pm = id++,
+                     kn = id++, rng = id++, d = id++, q = id++, nq = id++, e = id++, om = id++, rl = id++, gk = id++,
+                     y2 = id++, gpos = id++, gs = id++;
+            EMIT(SPV_OP_ACCESS_CHAIN, ptr, pv, sb, i11);
+            EMIT(SPV_OP_LOAD, v4, hv, pv);
+            EMIT(SPV_OP_COMPOSITE_EXTRACT, ft, g, hv, 0);
+            EMIT(SPV_OP_COMPOSITE_EXTRACT, ft, p, hv, 1);
+            EMIT(SPV_OP_EXT_INST, ft, lin, glsl, GLSL_FMA, x, kslope, koff);   // the tangent
+            EMIT(SPV_OP_FORD_GREATER, bt, gt, x, kxp);
+            EMIT(SPV_OP_EXT_INST, ft, r0, glsl, GLSL_FMAX, r, c0);
+            EMIT(SPV_OP_SELECT, ft, y, gt, lin, r0);
+            EMIT(SPV_OP_EXT_INST, ft, pm, glsl, GLSL_FMAX, p, c1);              // the peak, in picture whites
+            EMIT(SPV_OP_FMUL, ft, kn, pm, khalf);                                // the knee: half of it
+            EMIT(SPV_OP_FSUB, ft, rng, pm, kn);
+            EMIT(SPV_OP_FSUB, ft, d, y, kn);
+            EMIT(SPV_OP_FDIV, ft, q, d, rng);
+            EMIT(SPV_OP_FNEGATE, ft, nq, q);
+            EMIT(SPV_OP_EXT_INST, ft, e, glsl, GLSL_EXP, nq);
+            EMIT(SPV_OP_FSUB, ft, om, c1, e);
+            EMIT(SPV_OP_EXT_INST, ft, rl, glsl, GLSL_FMA, rng, om, kn);
+            EMIT(SPV_OP_FORD_GREATER, bt, gk, y, kn);
+            EMIT(SPV_OP_SELECT, ft, y2, gk, rl, y);
+            EMIT(SPV_OP_FORD_GREATER, bt, gpos, g, c0);                          // the picture's white, 1 when unset
+            EMIT(SPV_OP_SELECT, ft, gs, gpos, g, c1);
+            EMIT(SPV_OP_FMUL, ft, res, y2, gs);
+            s++;
+        } else {
+            memcpy(o + k, w + i, len * sizeof *w), k += len;
+        }
+        i += len;
+    }
+#undef EMIT
+    if (!globals_done || s != nsite || k > cap) {
+        free(o);
+        return 0;
+    }
+    o[3] = id;
+    free(*spirv);
+    *spirv = o;
+    *words = k;
+    return nsite;
+}
+
 void vk_hdr_shader_swap(uint32_t **spirv, uint64_t *words) {
     if (!vk_hdr_wanted() || vk_hdr_native() || !*spirv || *words < 5) return;
+    int extended = aces_extend(spirv, words);
+    if (extended > 0) {
+        static volatile int32_t exts;
+        rt_log("hdr: the game's tonemap keeps highlights above the picture's white (%d channels; %d shaders so far)",
+               extended, plat_inc32(&exts));
+    }
     int unclamped = fsr_unclamp(*spirv, words);
     if (unclamped > 0) {
         static volatile int32_t fsrs;
@@ -352,7 +529,9 @@ void vk_hdr_metadata(VkSwapchainKHR sc, int new_sc) {
     VkCtx *c = vk_ctx();
     if (!c->has_hdr_metadata || (!new_sc && cfg_version() == sent)) return;
     sent = cfg_version();
-    PFN_vkSetHdrMetadataEXT set = (PFN_vkSetHdrMetadataEXT)vkGetDeviceProcAddr(c->device, "vkSetHdrMetadataEXT");
+    // AMD's frame generation swapchain takes it through its own call
+    PFN_vkSetHdrMetadataEXT set = vk_fg_hdr_metadata_fn();
+    if (!set) set = (PFN_vkSetHdrMetadataEXT)vkGetDeviceProcAddr(c->device, "vkSetHdrMetadataEXT");
     if (!set) return;
     Nits n = nits();
     VkHdrMetadataEXT m = {.sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT,

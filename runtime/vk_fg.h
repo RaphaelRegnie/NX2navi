@@ -20,4 +20,5 @@ VkResult vk_fg_present(const VkPresentInfoKHR *pi);   // on the game's queue, it
 // from which generation tells the HUD apart and keeps it out of the generated frames.
 void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless, VkImageView hudless_view);
 uint64_t vk_fg_presents(VkSwapchainKHR sc);   // frames the swapchain presented, generated ones included (0: off)
+PFN_vkSetHdrMetadataEXT vk_fg_hdr_metadata_fn(void);   // AMD's replacement for vkSetHdrMetadataEXT while active, else NULL
 void vk_fg_release(void);

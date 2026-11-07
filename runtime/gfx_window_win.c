@@ -22,6 +22,7 @@
 #include "nvn_api.h"
 #include "ui/menu.h"
 #include "vk.h"
+#include "vk_dlssg.h"
 #include "platform/platform.h"
 #include <vulkan/vulkan_win32.h>
 
@@ -378,7 +379,7 @@ static void window_main(void *arg) {
     // button flashes, and NX2NAVI_FULLSCREEN waits for the first activation.
     // NX2NAVI_BACKGROUND_WINDOW=1 (test runs): no flashing, never fullscreen at start, and F11 keeps the window's place.
     int background = g_background = cfg_get("NX2NAVI_BACKGROUND_WINDOW") && atoi(cfg_get("NX2NAVI_BACKGROUND_WINDOW"));
-    g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"Ocarina Recomp", WND_STYLE, CW_USEDEFAULT, CW_USEDEFAULT, ow, oh, NULL,
+    g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"NX2navi", WND_STYLE, CW_USEDEFAULT, CW_USEDEFAULT, ow, oh, NULL,
                              NULL, inst, NULL);
     if (!g_hwnd) {
         rt_log("gfx: CreateWindowEx failed (%lu)", GetLastError());
@@ -427,7 +428,9 @@ VkSurfaceKHR wsys_surface(VkInstance inst) {
     VkWin32SurfaceCreateInfoKHR si = {.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
                                       .hinstance = GetModuleHandleW(NULL), .hwnd = g_hwnd};
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkResult r = vkCreateWin32SurfaceKHR(inst, &si, NULL, &surface);
+    // through Streamline when DLSS Frame Generation is loaded: it maps swapchains to windows from this call
+    PFN_vkCreateWin32SurfaceKHR create = (PFN_vkCreateWin32SurfaceKHR)vk_dlssg_instance_proc(inst, "vkCreateWin32SurfaceKHR");
+    VkResult r = (create ? create : vkCreateWin32SurfaceKHR)(inst, &si, NULL, &surface);
     if (r != VK_SUCCESS) rt_log("gfx: vkCreateWin32SurfaceKHR failed (%d)", (int)r);
     return r == VK_SUCCESS ? surface : VK_NULL_HANDLE;
 }

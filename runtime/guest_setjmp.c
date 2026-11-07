@@ -2,8 +2,9 @@
 //
 // The guest's longjmp restores x19-x30, sp and d8-d15 and returns to the setjmp call's return address, which in lifted
 // code is the middle of a host function: rt_dispatch has no function there and the run ends ("not a function start").
-// Ocarina's libjpeg reaches it whenever a JPEG fails to decode (its error_exit longjmps to the decoder's trap at
-// main+0x1661670).
+// Ocarina's font rasterizer reaches it whenever a large glyph's cells overflow its pool: main+0x166215c longjmps back
+// to main+0x1661670, which reports the overflow, and the caller renders the glyph again in smaller bands. Text at a
+// 2160-high picture does it in normal play.
 //
 // The overrides keep both halves on the host:
 //   setjmp(env): the guest registers longjmp restores, kept for env, and the host state of the lifted function that

@@ -62,7 +62,7 @@ no part of them may be copied, published, or used to train, fine-tune or prompt 
 written permission. The base import stays under its [MIT License](LICENSE), and third-party code keeps its own license
 ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). No license grants anything for Nintendo's game.
 
-Ocarina Recomp is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *The Legend
+NX2navi is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *The Legend
 of Zelda*, *Ocarina of Time* and *Nintendo Switch* are trademarks of Nintendo.
 
 ## Building from source

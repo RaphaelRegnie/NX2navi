@@ -89,6 +89,22 @@ VkResult vk_dlssg_create_instance(const VkInstanceCreateInfo *ci, VkInstance *ou
     return f ? f(ci, NULL, out) : vkCreateInstance(ci, NULL, out);
 }
 
+// An instance function through the interposer while Streamline is loaded, else NULL (the caller takes the loader's).
+// The window surface goes through it: Streamline learns the window a swapchain shows from vkCreateWin32SurfaceKHR, and
+// without that its swapchain hook found "no window corresponding to this application" and generated no frames.
+PFN_vkVoidFunction vk_dlssg_instance_proc(VkInstance inst, const char *name) {
+    return S.loaded > 0 ? S.gipa()(inst, name) : NULL;
+}
+
+// The interposer's vkCreateDevice finds the device's instance in a map its own vkEnumeratePhysicalDevices fills; a
+// physical device enumerated through the loader alone left it a null instance, so the plugins got an empty instance
+// table and sl.common called a null GetPhysicalDeviceMemoryProperties while it set up. Enumerate through it as well.
+VkResult vk_dlssg_enumerate(VkInstance inst, uint32_t *n, VkPhysicalDevice *pd) {
+    PFN_vkEnumeratePhysicalDevices f =
+        S.loaded > 0 ? (PFN_vkEnumeratePhysicalDevices)S.gipa()(inst, "vkEnumeratePhysicalDevices") : NULL;
+    return f ? f(inst, n, pd) : vkEnumeratePhysicalDevices(inst, n, pd);
+}
+
 VkResult vk_dlssg_create_device(VkInstance inst, VkPhysicalDevice pd, const VkDeviceCreateInfo *ci, VkDevice *out) {
     PFN_vkCreateDevice f = S.loaded > 0 ? (PFN_vkCreateDevice)S.gipa()(inst, "vkCreateDevice") : NULL;
     return f ? f(pd, ci, NULL, out) : vkCreateDevice(pd, ci, NULL, out);

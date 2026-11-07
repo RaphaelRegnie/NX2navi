@@ -21,10 +21,11 @@ typedef struct {
     float fov_y, aspect;
 } VkDlaaCamera;
 int vk_dlaa_fg_views(VkImageView *depth, VkImageView *mv);
-// The picture without the HUD at the size of the game's picture, RGBA8 UNORM bytes like it (sRGB-encoded), made at
-// each evaluation while vk_dlaa_hudless_wanted (frame generation sets it); 1 once per evaluation.
+// The picture without the HUD at the size of the game's picture, in *fmt: RGBA8 UNORM bytes like it (sRGB-encoded), or
+// RGBA16F linear with HDR on; made at each evaluation while vk_dlaa_hudless_wanted (frame generation sets it); 1 once per
+// evaluation.
 extern int vk_dlaa_hudless_wanted;
-int vk_dlaa_fg_hudless(VkImage *img, VkImageView *view, uint32_t *w, uint32_t *h);
+int vk_dlaa_fg_hudless(VkImage *img, VkImageView *view, uint32_t *w, uint32_t *h, VkFormat *fmt);
 int vk_dlaa_fg_camera(VkDlaaCamera *c);     // ... and its temporal upscaler is AMD FSR 3.1 (NX2NAVI_TAA = fsr3) instead of DLSS
 // vk_device.c: NGX's instance and device extensions join the lists (room for max names); vk_dlaa_init after the
 // device exists brings NGX up and checks that DLSS is available.

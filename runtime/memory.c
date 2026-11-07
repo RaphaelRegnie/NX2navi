@@ -508,23 +508,52 @@ static uint64_t run_start(const uint8_t *p, uint64_t i, uint8_t v) {   // first 
     return i;
 }
 
-// Whether every byte of [a, a + n) can be read: no free, inaccessible or no-access page (mem_query's regions). For
-// host reads of guest memory the guest itself may never make, such as a texture upload of a pool slot no shader
-// samples (vk_exec_draw.c, texture pools: stale slots point at unmapped memory).
-int mem_readable(uint64_t a, uint64_t n) {
+static void query_locked(uint64_t a, RtMemoryInfo *out);
+
+static int readable_locked(uint64_t a, uint64_t n) {
     for (uint64_t end = a + n; a < end;) {
         RtMemoryInfo r;
-        mem_query(a, &r);
+        query_locked(a, &r);
         if (r.state == ST_FREE || r.state == ST_INACCESSIBLE || !(r.perm & PERM_R) || r.base + r.size <= a) return 0;
         a = r.base + r.size;
     }
     return 1;
 }
 
+// Whether every byte of [a, a + n) can be read: no free, inaccessible or no-access page (mem_query's regions). For
+// host reads of guest memory the guest itself may never make, such as a texture upload of a pool slot no shader
+// samples (vk_exec_draw.c, texture pools: stale slots point at unmapped memory).
+int mem_readable(uint64_t a, uint64_t n) {
+    plat_mutex_lock_shared(&lock);
+    int ok = readable_locked(a, n);
+    plat_mutex_unlock_shared(&lock);
+    return ok;
+}
+
+// mem_readable for a read that takes a while on another thread than the guest's: with 1 the range stays mapped until
+// mem_read_release, as unmapping it (UnmapPhysicalMemory, a smaller heap, a moved stack) waits for the lock. A pool
+// slot's storage the game has just released could otherwise be decommitted halfway through the copy (a texture
+// upload faulted that way in tex_bl_copy). In between, the caller takes no lock of this file (mem_query, mem_readable
+// and the mapping calls would wait for themselves). 0: not readable, and nothing held.
+int mem_read_hold(uint64_t a, uint64_t n) {
+    plat_mutex_lock_shared(&lock);
+    if (readable_locked(a, n)) return 1;
+    plat_mutex_unlock_shared(&lock);
+    return 0;
+}
+
+void mem_read_release(void) { plat_mutex_unlock_shared(&lock); }
+
 uint32_t mem_query(uint64_t a, RtMemoryInfo *out) {
+    plat_mutex_lock_shared(&lock);
+    query_locked(a, out);
+    plat_mutex_unlock_shared(&lock);
+    return R_OK;
+}
+
+static void query_locked(uint64_t a, RtMemoryInfo *out) {
     RtMemoryInfo r = {.base = a & ~(PAGE - 1), .size = PAGE};
     uint64_t low = L.aslr.base;
-    plat_mutex_lock_shared(&lock);
     int mi;
     if (a >= RT_ADDRESS_LIMIT) {
         r.base = RT_ADDRESS_LIMIT;
@@ -590,9 +619,7 @@ uint32_t mem_query(uint64_t a, RtMemoryInfo *out) {
         r.base = lo;
         r.size = hi - lo;
     }
-    plat_mutex_unlock_shared(&lock);
     if (out) *out = r;
-    return R_OK;
 }
 
 // ---- GetInfo memory ids

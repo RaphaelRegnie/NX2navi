@@ -731,18 +731,28 @@ static void restbl_overlay(void) {
 
 // The HeapDef table a bigger game resolution needs (resolution.c): its texture heap and that heap's parent grow. The
 // base is an overlay that replaces the table (a mod's heap sizes stay), else the RomFS original; the grown table is
-// written to <profile>/resolution/ and served in the base's place.
-#define HEAPDEF "System/HeapSize/Product.Nin_NX_NVN.HeapDef.byml.zs"
+// written to <profile>/resolution/ and served in the base's place. Switch titles name it for NX, Switch 2 ones
+// (Ocarina) for Ounce.
+static const char *const heapdef_names[] = {"System/HeapSize/Product.Nin_NX_NVN.HeapDef.byml.zs",
+                                            "System/HeapSize/Product.Nin_Ounce_NVN2.HeapDef.byml.zs"};
 static void heapdef_overlay(void) {
     if (!res_heap_extra_kib()) return;
     static const char keeps[] = "the game keeps its own resolution";
+    const char *rel = heapdef_names[0];
+    for (size_t k = 0; k < sizeof heapdef_names / sizeof *heapdef_names; k++) {
+        uint64_t i = lower(heapdef_names[k]);
+        if (i < file_count && !strcmp(entry_name(entry(i)), heapdef_names[k])) {
+            rel = heapdef_names[k];
+            break;
+        }
+    }
     Overlay *base;
     size_t n;
-    void *in = read_served(HEAPDEF, &base, &n, keeps), *out = NULL;
+    void *in = read_served(rel, &base, &n, keeps), *out = NULL;
     size_t out_n = 0;
     int ok = in && res_heapdef_build(in, n, &out, &out_n);
     free(in);
-    if (ok && serve_generated(HEAPDEF, base, out, out_n, "resolution", "grown heaps", keeps)) res_heapdef_served();
+    if (ok && serve_generated(rel, base, out, out_n, "resolution", "grown heaps", keeps)) res_heapdef_served();
 }
 
 // The player camera's pack with its stick speeds multiplied by NX2NAVI_STICK_SENS (camera_speed.c). The base is an
