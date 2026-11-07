@@ -77,6 +77,14 @@ NVN_API(nvnTextureBuilderSetSize2D) {
     b->d.width = (uint32_t)arg_x(c, 1);
     b->d.height = (uint32_t)arg_x(c, 2);
     b->d.depth = 1;
+    static int diag = -1, n;   // NX2NAVI_LOG_RT_SIZES=1 (diagnosis): who sizes textures in the 16:9 output's family
+    if (diag < 0) diag = cfg_get("NX2NAVI_LOG_RT_SIZES") != NULL;
+    if (diag && n < 200 && b->d.width * 9 == b->d.height * 16 && b->d.width >= 320) {
+        char at[160], up[160];
+        n++;
+        rt_log("nvn: SetSize2D %ux%u from %s, caller %s", b->d.width, b->d.height, ldr_describe(c->x[30], at, sizeof at),
+               ldr_describe(c->x[29] ? *(uint64_t *)(uintptr_t)(c->x[29] + 8) : 0, up, sizeof up));
+    }
 }
 NVN_API(nvnTextureBuilderSetSize3D) {
     tex_builder_t *b = TB(c);
