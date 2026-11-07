@@ -46,6 +46,7 @@ typedef struct Tex {
     uint32_t wgen;                // page generation of the last upload check
     uint32_t checked;             // submit_epoch of the last check from a draw binding
     int uploaded, released;
+    uint32_t rel_serial;          // reg_serial when it was released: slots registered before then are stale (slot_resolve)
     uint32_t n_up;                // uploads of this entry (vk_texture_debug)
     int last_ch;                  // last vk_mem_changed result of make_fresh: 1 written, 0 clean, -1 not tracked
     struct Tex *next_at;          // other entries at the same storage address
@@ -1154,6 +1155,7 @@ void vk_texture_release(const tex_t *t) {
     Tex *e = nvn_hm_get(&by_key, &k);
     if (e && !e->released) {
         e->released = 1;
+        e->rel_serial = reg_serial;
         nreleased++;
         rel_append(e);
         tex_gen_bump(k.addr);
@@ -1227,6 +1229,7 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
     TexKey k;
     make_key(&s->t, &k);
     Tex *e = nvn_hm_get(&by_key, &k);
+    int stale = 0;
     if (!e || e->released) {   // MNG hle_nvn.c: a finalized slot follows the live texture at its storage
         // Prefer the live entry that differs from the slot descriptor only in its swizzle: transient render targets
         // share storage, and the newest one at the address is usually another size. The map screen samples its
@@ -1250,10 +1253,16 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
             if (same_but_swizzle(&p->key, &k)) { e = p; break; }
             if (!any && (!cpu_slot || alias_has_gpu_content(p))) any = p;
         }
-        // own is missing or released here; for a CPU slot entry_of below finds or revives it by key
-        if (!e) e = any ? any : cpu_slot ? NULL : own;
+        // own is missing or released here; for a CPU slot entry_of below finds or revives it by key. A CPU slot whose
+        // own entry was released after the slot was registered is stale: the game finalized that texture and is
+        // freeing its storage, and reviving it uploaded from that storage while another thread unmapped it (an
+        // access violation in tex_bl_copy from the pool refresh, Kokiri Forest). It resolves to nothing; a slot
+        // registered again after the release is live and revives the entry.
+        if (!e && any) e = any;
+        else if (!e && !cpu_slot) e = own;
+        else if (!e && own && (uint32_t)(sinfo[s - tslots] >> 16) <= own->rel_serial) stale = 1;
     }
-    if (!e && s->t.mem) {
+    if (!e && s->t.mem && !stale) {
         if (create_budget < 0) e = entry_of(&s->t);
         else if (!create_budget) create_deferred = 1;
         else if (mem_readable((uint64_t)(uintptr_t)s->t.mem, s->t.L.size)) e = entry_of(&s->t), create_budget--;
