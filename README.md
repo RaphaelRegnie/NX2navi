@@ -45,10 +45,12 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installing
 
-The build kit builds the game on your PC from your own dump (a `.nup` file, or ExeFS and RomFS folders) in about 10 to
-15 minutes: [docs/README-BuildKit.md](docs/README-BuildKit.md). [docs/building.md](docs/building.md) describes building
-from source. Settings are in the in-game menu and in `nx2navi.ini` ([nx2navi.ini.example](nx2navi.ini.example) lists every
-key). Controls: [docs/controls.md](docs/controls.md).
+Download `NX2navi-Setup-<version>.exe` from the releases and start it next to your `.nup` dump. The launcher it
+installs finds the dump, downloads the build tools, builds the game on your PC (10 to 25 minutes, once) and starts
+it; afterwards it keeps the port up to date and rebuilds only what changed ([docs/launcher.md](docs/launcher.md)).
+[docs/README-BuildKit.md](docs/README-BuildKit.md) describes the same build by hand, [docs/building.md](docs/building.md)
+building from source. Settings are in the in-game menu and in `nx2navi.ini` ([nx2navi.ini.example](nx2navi.ini.example)
+lists every key). Controls: [docs/controls.md](docs/controls.md).
 
 Requirements: Windows 10 or later, an x86-64 CPU with SSE4.2 (AVX2/FMA machines get a faster build), a GPU with Vulkan
 1.3, `VK_EXT_external_memory_host` and `VK_EXT_mesh_shader`.

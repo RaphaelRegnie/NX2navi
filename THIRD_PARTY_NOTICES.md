@@ -107,3 +107,23 @@ folder's `licenses/` and in each component's own folder.
 | MacNativeGames shader variant list | as in the installer release row above | MIT | `data/shader_list.tsv` |
 | Weeping of the Empire menu cursor: eui's focus box read through ScreenMgr, BoxCursorMgr and the screens' node lists, AnimButton's hit test, the stale-hit-pane fallback to the parts panes, the three writes of moveBoxCursor, the structure offsets (1.0.0; the ScreenMgr instance placed in 1.4.3 by us) | https://github.com/daniel-madrid-07/weeping-of-the-empire @ `df0586cdc5702ca19bbebfa59697e0b6980f6237` (`engine/runtime/nx2navi_menu_cursor.cpp`), Copyright (c) 2026 daniel-madrid-07 | MIT | `runtime/menu_cursor.c` |
 | AMD FidelityFX API headers (FSR 3.1 upscaling and frame generation) and its signed Vulkan library | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK @ `v1.1.4` (`ffx-api/include/ffx_api/`, `PrebuiltSignedDLL/amd_fidelityfx_vk.dll`), Copyright (C) 2024 Advanced Micro Devices, Inc. | MIT | `runtime/third_party/ffx_api/` (unmodified, with `LICENSE.txt`), used by `runtime/vk_ffx.cpp`; the library ships in the build kit's `bin/` and beside the built game (never in this repository) |
+
+## Distributed in the launcher release
+
+`tools/make_launcher.py` assembles these into `NX2navi-Setup-<version>.exe` and the update archives of
+`docs/launcher.md`. Versions and sha256 of the downloads are pinned in that script and in
+`tools/requirements-launcher.txt`.
+
+| Component | Source | License | Where in the release |
+|---|---|---|---|
+| CPython 3.14.9 embeddable package; includes `vcruntime140*.dll` (Microsoft, redistributable with Python), OpenSSL, libffi, SQLite, zlib, libmpdec | https://www.python.org/downloads/release/python-3149/ | PSF-2.0 | `python/` |
+| `tkinter` and Tcl/Tk 9.0 (`_tkinter.pyd`, `tcl90.dll`, `tcl9tk90.dll`, `zlib1.dll`, `libtommath.dll`, `tcl/`), from python.org's 3.14.9 `amd64/tcltk.msi`, unpacked, never run | https://www.python.org/ftp/python/3.14.9/amd64/ | PSF-2.0; Tcl/Tk licence (BSD-style); libtommath public domain or BSD; zlib licence | `python/` |
+| numpy 2.5.4 (with its bundled OpenBLAS), lz4 4.4.5, zstandard 0.25.0 | PyPI binary wheels, pins in `tools/requirements-launcher.txt` | BSD-3-Clause; lz4 BSD-3-Clause; zstandard BSD-3-Clause | `python/Lib/site-packages/` |
+| zlib 1.4 (MSYS2 `mingw-w64-ucrt-x86_64-zlib`), static library | https://zlib.net, Copyright (C) Jean-loup Gailly and Mark Adler | zlib | linked into `NX2navi-Setup.exe` (its unzip) |
+| mingw-w64 CRT startup code and winpthreads 14.0.0, GCC 16.2.0's `libgcc` (MSYS2 packages), static | https://www.mingw-w64.org, https://gcc.gnu.org | mingw-w64: ZPL-2.1 / MIT / public domain; libgcc: GPL-3.0 with the GCC Runtime Library Exception | linked into `NX2navi.exe` and `NX2navi-Setup.exe` |
+
+Downloaded on the player's PC by the launcher, not distributed: the MSYS2 UCRT64 packages that
+`toolchain.lock.json` pins (clang and LLVM, Apache-2.0 with LLVM exception; GCC and binutils, GPL-3.0; the
+libraries of the "Compiler runtime in a source build" section and of `README-BuildKit.md`), from
+https://repo.msys2.org/mingw/ucrt64/; and zbic 1.0.1.post1 (GPL-2.0), from PyPI. The game build links them as a
+source build does.

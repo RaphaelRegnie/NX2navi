@@ -3,8 +3,9 @@
     python -I tools/make_game.py --nup "C:\\path\\game.nup" --out "C:\\Games\\Ocarina"
     python -I tools/make_game.py --exefs "C:\\path\\exefs" --romfs "C:\\path\\romfs" --out "C:\\Games\\Ocarina"
     python -I tools/make_game.py --nup "C:\\path\\game.nup" --check          # only checks the game's version
+    python -I tools/make_game.py --rebuild --out "C:\\Games\\Ocarina"         # a newer kit, the files of the last build
 
-Steps, each skipped when a run before finished it for the same input (state in <out>/build-cache/state.json):
+Steps, each skipped when a run before finished it for the same inputs (state in <out>/build-cache/state.json):
   1. check    the title (0400486024DEC000) and main's build id (game 1.1.1)
   2. exefs    the five ExeFS files, every module's segments unpacked (ZBIC through the player's own `zbic` package)
               and stored plainly, as the runtime's loader reads them -> <out>/exefs
@@ -16,15 +17,28 @@ Steps, each skipped when a run before finished it for the same input (state in <
   6. shaders  every shader in the game files (tools/prepare_shaders.py, default bind state) translated, and each one's
               GPU driver build done once, so play does not stop to compile them (`ocarina.exe --prepare-shaders`)
 
+The exefs and romfs steps depend only on the game files; lift and compile depend on this kit's code too. A newer kit
+therefore lifts and compiles again but keeps the unpacked game files, and --rebuild needs no game files at all. The
+compile step keeps every object with the dependency list clang wrote for it (build-cache/obj/objects.json) and
+compiles a file again only when it, a header it includes, the flags or the compiler changed. The new ocarina.exe
+replaces the old one only once it links, so a failed build leaves the last good one in place.
+
 Nothing is written outside --out. The game folder then holds only what this PC built from the player's files: never
 share it. Needs Python 3.10+ with numpy, lz4, zstandard and zbic (pip), and MSYS2 UCRT64's clang and libraries
-(README-BuildKit.md lists the commands). Delete <out>/build-cache afterwards to free about 5 GB.
+(README-BuildKit.md lists the commands). Delete <out>/build-cache afterwards to free about 5 GB; the next build then
+compiles everything again.
+
+--events adds one machine-readable line per step and progress change to stdout, each starting with "@@" and followed
+by a JSON object (launcher/build.py reads them): {"ev": "step", "step": ..., "state": "start" | "done" | "skip"},
+{"ev": "progress", "step": ..., "done": n, "total": n, "unit": ...}, {"ev": "phase", ...}, {"ev": "error", "message":
+...} and {"ev": "end", ...}.
 """
 import argparse
 import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -41,7 +55,8 @@ MAIN_BUILD_ID = 'e0f3ccfaf50065ae4ea01eb5aeb13b1a'   # main of game 1.1.1
 EXEFS_FILES = ('main', 'main.npdm', 'sdk', 'subsdk0', 'rtld')
 MODULES = ('main', 'sdk', 'subsdk0', 'rtld')
 ALIGN = 16
-STATE_VERSION = 1
+STATE_VERSION = 2
+STEPS = ('exefs', 'romfs', 'lift', 'compile', 'shaders')
 
 # Bring-up fixes in the lifted SDK, each anchored on exact generated text that must occur once.
 LIFT_FIXES = [
@@ -61,15 +76,60 @@ LIFT_FIXES = [
 LINK_LIBS = ['-lvulkan-1', '-lSDL3', '-lopus', '-lvpx', '-l:libdav1d.a', '-lzstd', '-l:libatomic.a', '-lbcrypt',
              '-limm32', '-luuid', '-lole32', '-luser32', '-lshell32', '-lgdi32', '-ladvapi32', '-lwinmm']
 SYSTEM_DLLS_SKIP = {'vulkan-1.dll'}   # the graphics driver's loader, never a copy
+EXE_NAME = 'ocarina.exe'
+
+# Runs a script the way `python script.py` does, with the script's folder first on sys.path. The launcher's
+# embeddable Python leaves the script folder off sys.path (its ._pth file), so every script this build starts goes
+# through this.
+RUN_SCRIPT = ('import os, runpy, sys; s = sys.argv[1]; sys.argv = sys.argv[1:]; '
+              'sys.path.insert(0, os.path.dirname(os.path.abspath(s))); runpy.run_path(s, run_name="__main__")')
+
+EVENTS = False
 
 
 def say(msg):
     print(msg, flush=True)
 
 
+def emit(ev, **fields):
+    """One "@@{json}" line for the launcher (--events); nothing otherwise."""
+    if EVENTS:
+        print('@@' + json.dumps({'ev': ev, **fields}, ensure_ascii=False), flush=True)
+
+
 def fail(msg):
+    emit('error', message=msg)
     print(f'\nerror: {msg}', file=sys.stderr, flush=True)
     sys.exit(1)
+
+
+def py_cmd(script, *args):
+    """The command line that runs a Python script of this kit with this interpreter (see RUN_SCRIPT)."""
+    flags = ['-I'] if sys.flags.isolated else []
+    return [sys.executable, *flags, '-c', RUN_SCRIPT, str(script), *map(str, args)]
+
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        while b := f.read(8 << 20):
+            h.update(b)
+    return h.hexdigest()
+
+
+def tree_digest(root, patterns):
+    """sha256 over the relative names and contents of the files under root matching the glob patterns."""
+    h = hashlib.sha256()
+    files = sorted({p for pat in patterns for p in Path(root).glob(pat) if p.is_file() and '__pycache__' not in p.parts})
+    for p in files:
+        h.update(p.relative_to(root).as_posix().encode() + b'\0')
+        h.update(p.read_bytes())
+        h.update(b'\0')
+    return h.hexdigest()
 
 
 # ---------------------------------------------------------------- input
@@ -137,6 +197,27 @@ class Source:
                 yield b
 
 
+class BuiltSource:
+    """--rebuild: the ExeFS and RomFS an earlier run unpacked into the game folder, under that run's input identity.
+    The ExeFS modules are stored plainly there but keep their headers, so check() reads the same build id."""
+
+    def __init__(self, out, state):
+        self.out = out
+        if state.get('version') != STATE_VERSION or not state.get('input'):
+            fail(f'{out} holds no finished build of this kit to rebuild from: give --nup, or --exefs and --romfs')
+        for step in ('exefs', 'romfs'):
+            if step not in state.get('steps', {}):
+                fail(f'the last build in {out} did not finish its {step} step: give the game files again')
+        missing = [n for n in EXEFS_FILES if not (out / 'exefs' / n).is_file()]
+        missing += [f'romfs/{n}' for n in ('romfs.bin', 'index.json') if not (out / 'romfs' / n).is_file()]
+        if missing:
+            fail(f'{out} lacks {", ".join(missing)}: give the game files again')
+        self.identity = state['input']
+
+    def read_exefs(self, name):
+        return (self.out / 'exefs' / name).read_bytes()
+
+
 def check(src):
     main = src.read_exefs('main')
     if main[:4] != b'NSO0':
@@ -182,11 +263,16 @@ def flat_nso(raw, name):
 def step_exefs(src, out):
     dst = out / 'exefs'
     dst.mkdir(parents=True, exist_ok=True)
-    for name in EXEFS_FILES:
+    for i, name in enumerate(EXEFS_FILES):
         raw = src.read_exefs(name)
         data = flat_nso(raw, name) if name in MODULES else raw
         (dst / name).write_bytes(data)
         say(f'  {name:9} {len(raw) / 1e6:6.1f} MB -> {len(data) / 1e6:6.1f} MB')
+        emit('progress', step='exefs', done=i + 1, total=len(EXEFS_FILES), unit='files')
+
+
+def exefs_digest(out):
+    return tree_digest(out / 'exefs', EXEFS_FILES)
 
 
 # ---------------------------------------------------------------- romfs
@@ -202,6 +288,7 @@ def step_romfs(src, out, jobs):
     say(f'  {len(files)} files, {total / 1e9:.1f} GB')
     entries, h, pos, done, t0 = [], hashlib.sha256(), 0, 0, time.time()
     part = dst / 'romfs.bin.part'
+    emit('progress', step='romfs', done=0, total=total, unit='bytes')
 
     def load(e):   # small files are read whole on a worker; big ones are streamed by the writer
         rel, ref = e
@@ -224,6 +311,7 @@ def step_romfs(src, out, jobs):
                     h.update(chunk)
                 pos += size
                 done += size
+            emit('progress', step='romfs', done=done, total=total, unit='bytes')
             if start // batch % 40 == 0:
                 say(f'  {done / 1e9:5.1f} of {total / 1e9:.1f} GB, {time.time() - t0:.0f} s')
     part.replace(dst / 'romfs.bin')
@@ -234,13 +322,31 @@ def step_romfs(src, out, jobs):
 
 # ---------------------------------------------------------------- lift
 
+EMITTED = re.compile(r'emitted (\d+)/(\d+) chunks')
+
+
+def lift_digest():
+    """The lifter's code, the patch table and the bring-up fixes: what the lifted C depends on besides the ExeFS."""
+    h = hashlib.sha256(tree_digest(KIT / 'recomp', ('*.py', 'patches-v111.txt')).encode())
+    h.update(repr(LIFT_FIXES).encode())
+    return h.hexdigest()
+
+
 def step_lift(out, cache):
+    """gen.py into build-cache/lift. The folder is kept: gen.py rewrites only the chunks whose text changed and
+    removes the ones it no longer writes."""
     lift = cache / 'lift'
-    if lift.exists():
-        shutil.rmtree(lift)
-    cmd = [sys.executable, str(KIT / 'recomp' / 'gen.py'), '--exefs', str(out / 'exefs'), '--out', str(lift),
-           '--patches', str(KIT / 'recomp' / 'patches-v111.txt')]
-    if subprocess.run(cmd).returncode:
+    cmd = py_cmd(KIT / 'recomp' / 'gen.py', '--exefs', out / 'exefs', '--out', lift,
+                 '--patches', KIT / 'recomp' / 'patches-v111.txt')
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                         errors='replace', bufsize=1)
+    for line in p.stdout:
+        line = line.rstrip('\n')
+        say(f'  {line}')
+        m = EMITTED.search(line)
+        if m:
+            emit('progress', step='lift', done=int(m.group(1)), total=int(m.group(2)), unit='chunks')
+    if p.wait():
         fail('the code generator failed (see above)')
     for mod, old, new in LIFT_FIXES:
         hits = [p for p in sorted((lift / mod).glob('*.c')) if old in p.read_text(encoding='utf-8')]
@@ -251,14 +357,6 @@ def step_lift(out, cache):
 
 
 # ---------------------------------------------------------------- compile
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        while b := f.read(8 << 20):
-            h.update(b)
-    return h.hexdigest()
-
 
 def modules_c(lift, out, gen):
     layout = json.loads((lift / 'layout.json').read_text(encoding='utf-8'))
@@ -286,10 +384,15 @@ def modules_c(lift, out, gen):
           'const int rt_nvn_api_version[2] = {231, 40};   /* NVN2: main asks for major 231, minor 40 or later */',
           f'const char rt_port_version[] = {json.dumps(kit_version())};']
     p = gen / 'modules.c'
-    p.write_text('\n'.join(L) + '\n', encoding='utf-8')
-    (gen / 'shim.c').write_text('/* Defined by the SDL window path only; this build uses the Win32 one. */\n'
-                                'void menu_sdl_event(void *e) { (void)e; }\n', encoding='utf-8')
+    write_if_changed(p, '\n'.join(L) + '\n')
+    write_if_changed(gen / 'shim.c', '/* Defined by the SDL window path only; this build uses the Win32 one. */\n'
+                                     'void menu_sdl_event(void *e) { (void)e; }\n')
     return p
+
+
+def write_if_changed(path, text):
+    if not path.is_file() or path.read_text(encoding='utf-8') != text:
+        path.write_text(text, encoding='utf-8')
 
 
 def kit_version():
@@ -323,6 +426,23 @@ def pe_imports(path):
     return names
 
 
+def copy_if_changed(src, dst):
+    """Copy src over dst unless dst already has its size and modification time. A file the running game holds open
+    cannot be replaced on Windows: that stops the build with a message instead of a traceback."""
+    s = os.stat(src)
+    try:
+        d = os.stat(dst)
+        if d.st_size == s.st_size and int(d.st_mtime) == int(s.st_mtime):
+            return False
+    except FileNotFoundError:
+        pass
+    try:
+        shutil.copy2(src, dst)
+    except PermissionError:
+        fail(f'{dst} is in use: close the game and try again')
+    return True
+
+
 def copy_dlls(exe, msys_bin, out):
     seen, todo, copied = set(), [exe], []
     while todo:
@@ -331,21 +451,136 @@ def copy_dlls(exe, msys_bin, out):
             if name in seen or name in SYSTEM_DLLS_SKIP or not src.is_file():
                 continue
             seen.add(name)
-            shutil.copy2(src, out / src.name)
+            copy_if_changed(src, out / src.name)
             copied.append(src.name)
             todo.append(src)
     return copied
 
 
-def step_compile(out, cache, msys, jobs):
-    lift, gen, obj = cache / 'lift', cache / 'gen', cache / 'obj'
+def parse_deps(text):
+    """The prerequisites of a make-style dependency file as clang -MMD writes it (the target dropped)."""
+    text = text.replace('\\\r\n', ' ').replace('\\\n', ' ')
+    tokens, cur, i = [], '', 0
+    while i < len(text):
+        c = text[i]
+        if c == '\\' and i + 1 < len(text) and text[i + 1] in ' #':
+            cur += text[i + 1]
+            i += 2
+            continue
+        if c == '$' and text[i + 1:i + 2] == '$':
+            cur += '$'
+            i += 2
+            continue
+        if c.isspace():
+            if cur:
+                tokens.append(cur)
+            cur = ''
+        else:
+            cur += c
+        i += 1
+    if cur:
+        tokens.append(cur)
+    for k, t in enumerate(tokens):   # the target ends with ':' (a drive letter's colon is followed by a separator)
+        if t.endswith(':'):
+            return tokens[k + 1:]
+    return tokens
+
+
+class ObjectCache:
+    """Which objects are current: per object the key of its command and source, and the sha256 of every file its
+    dependency list names (build-cache/obj/objects.json)."""
+
+    def __init__(self, path):
+        self.path = path
+        try:
+            self.entries = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        except (OSError, ValueError):
+            self.entries = {}
+        self._sha = {}
+
+    def file_sha(self, p):
+        p = os.path.normcase(os.path.abspath(p))
+        if p not in self._sha:
+            try:
+                self._sha[p] = sha256_file(p)
+            except OSError:
+                self._sha[p] = None
+        return self._sha[p]
+
+    def current(self, obj, key):
+        e = self.entries.get(obj.name)
+        return (e is not None and e.get('key') == key and obj.is_file()
+                and all(self.file_sha(p) == h for p, h in e.get('deps', {}).items()))
+
+    def record(self, obj, key, dep_file, src):
+        try:
+            deps = parse_deps(Path(dep_file).read_text(encoding='utf-8', errors='replace'))
+        except OSError:
+            deps = []
+        deps = deps or [str(src)]
+        self.entries[obj.name] = {'key': key, 'deps': {p: self.file_sha(p) for p in deps}}
+
+    def forget(self, obj):
+        self.entries.pop(obj.name, None)
+
+    def save(self):
+        tmp = self.path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(self.entries), encoding='utf-8')
+        tmp.replace(self.path)
+
+
+def compiler_id(clang, env):
+    p = subprocess.run([str(clang), '--version'], capture_output=True, text=True, env=env)
+    st = os.stat(clang)
+    return sha256_bytes(f'{p.stdout}\n{st.st_size}\n{int(st.st_mtime)}'.encode())
+
+
+def compile_all(srcs, cmd_for, cache, jobs, env, progress=None, salt=''):
+    """Compile each (source, object) whose object is not current in cache. cmd_for(src, dst) -> argv without the
+    dependency-file options; salt identifies the compiler. Returns (compiled, reused, failures) with failures as
+    (src, stderr tail)."""
+    todo, keys = [], {}
+    for src, dst in srcs:
+        cmd = cmd_for(src, dst)
+        flags = [c for c in cmd if c not in (str(src), str(dst))]
+        keys[dst] = sha256_bytes(json.dumps([salt, flags, cache.file_sha(src)]).encode())
+        if not cache.current(dst, keys[dst]):
+            todo.append((src, dst))
+    reused = len(srcs) - len(todo)
+
+    def cc(job):
+        src, dst = job
+        dep = dst.with_suffix('.d')
+        cmd = cmd_for(src, dst)
+        cmd[1:1] = ['-MMD', '-MF', str(dep)]
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env, errors='replace')
+        return src, dst, dep, p.returncode, p.stderr[-1500:]
+
+    done, bad = reused, []
+    if progress:
+        progress(done, len(srcs))
+    with concurrent.futures.ThreadPoolExecutor(max(1, jobs)) as ex:
+        for src, dst, dep, rc, err in ex.map(cc, todo):
+            done += 1
+            if rc:
+                bad.append((src, err))
+                cache.forget(dst)
+            else:
+                cache.record(dst, keys[dst], dep, src)
+            if progress:
+                progress(done, len(srcs))
+    cache.save()
+    return len(todo), reused, bad
+
+
+def step_compile(out, cache_dir, msys, jobs):
+    lift, gen, obj = cache_dir / 'lift', cache_dir / 'gen', cache_dir / 'obj'
     gen.mkdir(parents=True, exist_ok=True)
     obj.mkdir(parents=True, exist_ok=True)
     rt = KIT / 'runtime'
     clang, clangxx = msys / 'bin' / 'clang.exe', msys / 'bin' / 'clang++.exe'
     env = dict(os.environ, PATH=str(msys / 'bin') + os.pathsep + os.environ.get('PATH', ''))
-    if subprocess.run([sys.executable, str(KIT / 'tools' / 'romfs_index.py'), '--romfs', str(out / 'romfs'),
-                       '--out', str(gen)]).returncode:
+    if subprocess.run(py_cmd(KIT / 'tools' / 'romfs_index.py', '--romfs', out / 'romfs', '--out', gen)).returncode:
         fail('the RomFS index could not be written')
     srcs = [(p, obj / f'{mod}_{p.stem}.o') for mod in ('main', 'sdk', 'subsdk0') for p in sorted((lift / mod).glob('*.c'))]
     for pat in ('*.c', '*.cpp', 'platform/*.c', 'ui/*.cpp', 'third_party/imgui/*.cpp', 'third_party/imgui/backends/*.cpp'):
@@ -356,53 +591,74 @@ def step_compile(out, cache, msys, jobs):
     srcs += [(modules_c(lift, out, gen), obj / 'modules.o'), (gen / 'shim.c', obj / 'shim.o')]
     inc = ['-I', str(rt), '-I', str(lift), '-I', str(gen), '-I', str(rt / 'third_party' / 'imgui'),
            '-I', str(msys / 'include' / 'vma')]
+    cid = compiler_id(clang, env)
 
-    def cc(job):
-        src, dst = job
+    def cmd_for(src, dst):
         cpp = src.suffix in ('.cpp', '.cxx')
         # the lifted code at -O1 (its size makes -O2 slow to build), the runtime at -O2; neither may assume strict aliasing:
         # the lifted code reaches guest memory through casts of one address to several types (tools/build_game.py's flags)
         guest = dst.name.startswith(('main_', 'sdk_', 'subsdk0_'))
-        cmd = [str(clangxx if cpp else clang), '-c', '-std=gnu++17' if cpp else '-std=gnu11', '-O1' if guest else '-O2',
-               '-fno-strict-aliasing', '-w', *inc, '-o', str(dst), str(src)]
-        p = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        return src, p.returncode, p.stderr[-1500:]
+        return [str(clangxx if cpp else clang), '-c', '-std=gnu++17' if cpp else '-std=gnu11', '-O1' if guest else '-O2',
+                '-fno-strict-aliasing', '-w', *inc, '-o', str(dst), str(src)]
+
+    t0 = time.time()
+    last = [0.0]
+
+    def progress(done, total):
+        now = time.time()
+        if done == total or now - last[0] >= 0.25:
+            last[0] = now
+            emit('progress', step='compile', done=done, total=total, unit='files')
+        if done % 50 == 0 or done == total:
+            say(f'  compiled {done} of {total}, {now - t0:.0f} s')
 
     say(f'  {len(srcs)} files on {jobs} threads')
-    t0, done, bad = time.time(), 0, []
-    with concurrent.futures.ThreadPoolExecutor(jobs) as ex:
-        for src, rc, err in ex.map(cc, srcs):
-            done += 1
-            if rc:
-                bad.append((src, err))
-            if done % 50 == 0 or done == len(srcs):
-                say(f'  compiled {done} of {len(srcs)}, {time.time() - t0:.0f} s')
+    cache = ObjectCache(obj / 'objects.json')
+    compiled, reused, bad = compile_all(srcs, cmd_for, cache, jobs, env, progress, salt=cid)
+    say(f'  {compiled} compiled, {reused} unchanged since the last build')
     if bad:
         for src, err in bad[:3]:
             print(f'--- {src}\n{err}', file=sys.stderr)
         fail(f'{len(bad)} files did not compile')
+
     # the manifest (per-monitor DPI awareness: the picture at the monitor's real size, not one Windows stretches) and the
     # icon, runtime/nx2navi.rc through MSYS2's windres
     rco = obj / 'nx2navi_rc.o'
     r = subprocess.run([str(msys / 'bin' / 'windres.exe'), '-I', str(rt), '-O', 'coff', '-i', str(rt / 'nx2navi.rc'),
-                        '-o', str(rco)], capture_output=True, text=True, env=env)
+                        '-o', str(rco)], capture_output=True, text=True, env=env, errors='replace')
     if r.returncode:
         fail(f'windres failed on runtime/nx2navi.rc: {r.stderr.strip()[:400]}')
-    rsp = cache / 'link.rsp'
-    rsp.write_text('\n'.join('"%s"' % o.as_posix() for o in [o for _, o in srcs] + [rco]), encoding='utf-8')
-    exe = out / 'ocarina.exe'
-    say('  linking')
-    p = subprocess.run([str(clangxx), '-o', str(exe), '@' + str(rsp), '-L', str(msys / 'lib'), *LINK_LIBS],
-                       capture_output=True, text=True, env=env)
-    if p.returncode:
-        print(p.stderr[-4000:], file=sys.stderr)
-        fail('the link failed')
-    shutil.copy2(gen / 'romfs-index.bin', out / 'romfs-index.bin')
+    objs = [o for _, o in srcs] + [rco]
+    exe = out / EXE_NAME
+    rsp = cache_dir / 'link.rsp'
+    rsp.write_text('\n'.join('"%s"' % o.as_posix() for o in objs), encoding='utf-8')
+    link_key = sha256_bytes(json.dumps([LINK_LIBS, cid] + [[o.name, o.stat().st_size, o.stat().st_mtime_ns]
+                                                          for o in objs]).encode())
+    state_link = cache_dir / 'link.key'
+    if exe.is_file() and state_link.is_file() and state_link.read_text(encoding='utf-8') == link_key:
+        say('  ocarina.exe is current, not linked again')
+    else:
+        emit('phase', step='compile', phase='link')
+        say('  linking')
+        tmp = out / (EXE_NAME + '.new')
+        p = subprocess.run([str(clangxx), '-o', str(tmp), '@' + str(rsp), '-L', str(msys / 'lib'), *LINK_LIBS],
+                           capture_output=True, text=True, env=env, errors='replace')
+        if p.returncode:
+            print(p.stderr[-4000:], file=sys.stderr)
+            tmp.unlink(missing_ok=True)
+            fail('the link failed')
+        try:
+            os.replace(tmp, exe)
+        except PermissionError:
+            tmp.unlink(missing_ok=True)
+            fail(f'{exe} is in use: close the game and try again')
+        state_link.write_text(link_key, encoding='utf-8')
+    copy_if_changed(gen / 'romfs-index.bin', out / 'romfs-index.bin')
     for name in ('nx2navi_xlate.exe', 'nx2navi_xlate.id'):
-        shutil.copy2(KIT / 'bin' / name, out / name)
+        copy_if_changed(KIT / 'bin' / name, out / name)
     if (KIT / 'bin' / 'amd_fidelityfx_vk.dll').is_file():   # FSR 3.1 (runtime/vk_ffx.cpp)
-        shutil.copy2(KIT / 'bin' / 'amd_fidelityfx_vk.dll', out / 'amd_fidelityfx_vk.dll')
-    say(f'  ocarina.exe {exe.stat().st_size / 1e6:.0f} MB; beside it: {", ".join(copy_dlls(exe, msys / "bin", out))}')
+        copy_if_changed(KIT / 'bin' / 'amd_fidelityfx_vk.dll', out / 'amd_fidelityfx_vk.dll')
+    say(f'  {EXE_NAME} {exe.stat().st_size / 1e6:.0f} MB; beside it: {", ".join(copy_dlls(exe, msys / "bin", out))}')
     (out / 'profile').mkdir(exist_ok=True)
 
 
@@ -432,56 +688,111 @@ def keep_awake():
         pass
 
 
+def load_state(path):
+    try:
+        state = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    except (OSError, ValueError):
+        state = {}
+    if state.get('version') == 1:   # the first kit: a list of finished steps, all tied to one kit version
+        done = state.get('done', [])
+        state = {'version': STATE_VERSION, 'input': state.get('input'), 'steps': {}}
+        for step in ('exefs', 'romfs'):
+            if step in done:
+                state['steps'][step] = step_key(step, state['input'])
+    return state
+
+
+def step_key(step, identity, out=None):
+    """What a step's output depends on. exefs and romfs: the game files only; lift: the unpacked ExeFS and the
+    lifter; compile: the lift, the runtime sources and this script."""
+    if step in ('exefs', 'romfs'):
+        return f'{step}-1|{identity}'
+    lift = f'lift|{exefs_digest(out)}|{lift_digest()}'
+    if step == 'lift':
+        return lift
+    compile_key = f'compile|{lift}|{tree_digest(KIT / "runtime", ("**/*",))}|{sha256_file(Path(__file__))}|{kit_version()}'
+    if step == 'compile':
+        return compile_key
+    # shaders: the built game and the translator that prepared them
+    return f'shaders-1|{compile_key}|{sha256_file(KIT / "tools" / "prepare_shaders.py")}|{sha256_file(KIT / "bin" / "nx2navi_xlate.id")}'
+
+
 def main():
+    global EVENTS
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--nup', help='the game as one .nup file')
     ap.add_argument('--exefs', help='the game\'s exefs folder (with --romfs, instead of --nup)')
     ap.add_argument('--romfs', help='the game\'s romfs folder')
+    ap.add_argument('--rebuild', action='store_true',
+                    help='build again from the game files the last run unpacked into --out (after a kit update)')
     ap.add_argument('--out', help='the folder for the finished game')
     ap.add_argument('--check', action='store_true', help='only check the game\'s version; builds nothing')
     ap.add_argument('--msys', default=r'C:\msys64\ucrt64', help='MSYS2 UCRT64 folder (default C:\\msys64\\ucrt64)')
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4, help='parallel compiles')
+    ap.add_argument('--events', action='store_true', help='machine-readable progress lines on stdout ("@@" + JSON)')
+    ap.add_argument('--until', choices=STEPS, help=argparse.SUPPRESS)   # tests: stop after this step
     a = ap.parse_args()
-    if bool(a.nup) == bool(a.exefs or a.romfs) or (not a.nup and not (a.exefs and a.romfs)):
-        ap.error('give --nup, or both --exefs and --romfs')
-    src = Source(a)
+    EVENTS = a.events
+    given = bool(a.nup) + bool(a.exefs or a.romfs) + bool(a.rebuild)
+    if given != 1 or (not a.nup and not a.rebuild and not (a.exefs and a.romfs)):
+        ap.error('give --nup, both --exefs and --romfs, or --rebuild')
+    if a.rebuild and not a.out:
+        ap.error('--rebuild needs --out')
+    out = Path(a.out).resolve() if a.out else None
+    cache = out / 'build-cache' if out else None
+    state_path = cache / 'state.json' if cache else None
+    state = load_state(state_path) if state_path else {}
+
+    emit('step', step='check', state='start')
+    src = BuiltSource(out, state) if a.rebuild else Source(a)
     check(src)
     say('check: Ocarina of Time 1.1.1 (build e0f3ccfa)')
+    emit('check', version='1.1.1', build=MAIN_BUILD_ID[:8])
+    emit('step', step='check', state='done')
     if a.check:
         return
-    if not a.out:
+    if not out:
         ap.error('--out is needed to build')
     msys = Path(a.msys)
     for need in ('bin/clang.exe', 'bin/clang++.exe', 'bin/SDL3.dll', 'lib/libSDL3.dll.a', 'include/vma'):
         if not (msys / need).exists():
             fail(f'{msys / need} is missing: install MSYS2 and the packages README-BuildKit.md lists')
-    for mod in ('numpy', 'lz4', 'zbic'):
+    for mod in ('numpy', 'lz4') + (() if a.rebuild else ('zbic',)):
         try:
             __import__(mod)
         except ImportError:
             fail(f'the Python package {mod} is missing: pip install numpy lz4 zstandard zbic')
-    out = Path(a.out).resolve()
-    cache = out / 'build-cache'
     cache.mkdir(parents=True, exist_ok=True)
-    state_path = cache / 'state.json'
-    state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.is_file() else {}
-    if state.get('input') != src.identity or state.get('version') != STATE_VERSION or state.get('kit') != kit_version():
-        state = {'input': src.identity, 'version': STATE_VERSION, 'kit': kit_version(), 'done': []}
+    if state.get('version') != STATE_VERSION or state.get('input') != src.identity:
+        state = {'version': STATE_VERSION, 'input': src.identity, 'steps': {}}
+    state['kit'] = kit_version()
     keep_awake()
     t0 = time.time()
-    for name, run in (('exefs', lambda: step_exefs(src, out)), ('romfs', lambda: step_romfs(src, out, min(a.jobs, 8))),
-                      ('lift', lambda: step_lift(out, cache)), ('compile', lambda: step_compile(out, cache, msys, a.jobs)),
-                      ('shaders', lambda: step_shaders(out))):
-        if name in state['done']:
+    runs = {'exefs': lambda: step_exefs(src, out), 'romfs': lambda: step_romfs(src, out, min(a.jobs, 8)),
+            'lift': lambda: step_lift(out, cache), 'compile': lambda: step_compile(out, cache, msys, a.jobs),
+            'shaders': lambda: step_shaders(out)}
+    for name in STEPS:
+        key = step_key(name, src.identity, out)
+        if state['steps'].get(name) == key:
             say(f'{name}: done before')
-            continue
-        say(f'{name}:')
-        t = time.time()
-        run()
-        state['done'].append(name)
-        state_path.write_text(json.dumps(state, indent=1), encoding='utf-8')
-        say(f'{name}: {time.time() - t:.0f} s')
-    say(f'\nfinished in {(time.time() - t0) / 60:.1f} min: {out / "ocarina.exe"}')
+            emit('step', step=name, state='skip')
+        else:
+            # a step that runs makes every step after it run too: their keys hash its output, not its key
+            for later in STEPS[STEPS.index(name):]:
+                state['steps'].pop(later, None)
+            say(f'{name}:')
+            emit('step', step=name, state='start')
+            t = time.time()
+            runs[name]()
+            state['steps'][name] = step_key(name, src.identity, out)
+            state_path.write_text(json.dumps(state, indent=1), encoding='utf-8')
+            say(f'{name}: {time.time() - t:.0f} s')
+            emit('step', step=name, state='done', seconds=round(time.time() - t, 1))
+        if name == a.until:
+            break
+    state_path.write_text(json.dumps(state, indent=1), encoding='utf-8')
+    say(f'\nfinished in {(time.time() - t0) / 60:.1f} min: {out / EXE_NAME}')
+    emit('end', exe=str(out / EXE_NAME), seconds=round(time.time() - t0, 1), kit=kit_version())
 
 
 if __name__ == '__main__':

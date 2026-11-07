@@ -4,6 +4,9 @@ This kit builds *The Legend of Zelda: Ocarina of Time* (Nintendo Switch 2, game 
 program **on your PC, from your own copy of the game**. The kit contains no game code or data. Everything the build
 writes (`ocarina.exe`, the RomFS image, the shader cache, your saves) comes from your game: keep it to yourself.
 
+The NX2navi launcher (`NX2navi-Setup.exe`, [launcher.md](launcher.md)) does everything below for you, the
+downloads included, and keeps the game up to date. This page is the same build by hand.
+
 ## What you need
 
 - 64-bit Windows 10 or 11, 16 GB of RAM, a Vulkan 1.3 graphics card with mesh shaders and a current driver (tested on

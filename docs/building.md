@@ -5,8 +5,8 @@ default build targets x86-64-v3 (AVX2/FMA); a CPU without them builds with `--cp
 "Build"). Allow about 60 GB for the work folder. Extraction wants about 55 GB free while it runs and keeps about 35 GB
 afterwards.
 
-Players who only want to play can use the [installer](installer.md) instead: it builds the game on their machine
-without this toolchain.
+Players who only want to play use the [launcher](launcher.md) instead: it installs its own build tools, builds the
+game on their machine and keeps it up to date.
 
 ## Toolchain
 
