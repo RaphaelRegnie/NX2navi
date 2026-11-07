@@ -800,7 +800,10 @@ out:
 // builds dx = (first two registers), dy = (last two) = (du/dx, du/dy) and
 // (dv/dx, dv/dy): a mip level chosen from the wrong derivatives, too sharp on terrain faces turned across the screen,
 // which crawled in patches that followed the faces. NX2NAVI_TXD_TRANSPOSE=0 turns it off.
-// Applied to the SPIR-V after it is loaded, so the shader cache is untouched.
+// Applied to the SPIR-V after it is loaded, so the shader cache is untouched. Not for a Switch 2 title (NVN 200 and up):
+// its SM86 programs are lowered by tools/xlate/AmpereLowering.cs (Txd), which puts SM86's interleaved derivatives
+// (dx.x, dy.x, dx.y, dy.y) in the translator's order already, so transposing again here swapped them back and chose
+// Ocarina's mip levels from the wrong derivatives. NX2NAVI_TXD_TRANSPOSE=1 forces it on.
 enum { OP_COMPOSITE_CONSTRUCT = 80, OP_SAMPLE_EXPLICIT = 88, IO_GRAD = 4 };
 
 static void patch_txd_transpose(GfxShader *s) {
@@ -808,7 +811,7 @@ static void patch_txd_transpose(GfxShader *s) {
     static volatile int32_t n_logged;
     if (on < 0) {
         const char *e = cfg_get("NX2NAVI_TXD_TRANSPOSE");
-        on = !(e && *e == '0');
+        on = e && *e ? *e != '0' : rt_nvn_api_version[0] < 200;
     }
     uint32_t *w = s->spirv;
     uint64_t n = s->words;
