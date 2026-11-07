@@ -53,6 +53,7 @@ void vk_queue_lock(void);
 void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
 int res_adjustable(void);
+int wide_available(void);
 const char *const *vk_color_preset(const char *name);
 double frame_step_limit_hz(void);
 int frame_limit_adjustable(void);
@@ -689,6 +690,10 @@ static void tab_screen(float scale) {
     // The game resolution needs the output and scene patch sets (resolution.c res_adjustable): Ocarina's build has
     // none and always draws its own size, so the row would change nothing
     if (res_adjustable()) row_output_res();
+    // Widescreen needs the patch sets of recomp/patches-v111.txt (widescreen.c wide_available)
+    static const UiTextId wide[] = {UI_MENU_GAME_ASPECT_16_9, UI_MENU_GAME_ASPECT_WINDOW, UI_MENU_GAME_ASPECT_21_9,
+                                    UI_MENU_GAME_ASPECT_32_9};
+    if (wide_available()) opt_choice("NX2NAVI_GAME_ASPECT", UI_MENU_GAME_ASPECT, wide, 4, UI_MENU_GAME_ASPECT_DESC);
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
     opt_choice("NX2NAVI_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
     // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear the slider would do nothing

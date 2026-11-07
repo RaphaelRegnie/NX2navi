@@ -80,6 +80,11 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_ASPECT] = "Picture shape",
     [UI_MENU_ASPECT_DESC] = "When the window's shape differs from the game resolution's (a 16:9 picture on a 21:9 "
                             "screen): keep the picture's shape with black bars, or stretch it over the window.",
+    [UI_MENU_GAME_ASPECT] = "Widescreen",
+    [UI_MENU_GAME_ASPECT_DESC] = "The game draws a wider picture: more of the world at the sides, the HUD and menus in "
+                                 "the middle 16:9. Window shape follows the window (the monitor in fullscreen).",
+    [UI_MENU_GAME_ASPECT_16_9] = "16:9 (the game's)", [UI_MENU_GAME_ASPECT_WINDOW] = "Window shape",
+    [UI_MENU_GAME_ASPECT_21_9] = "21:9", [UI_MENU_GAME_ASPECT_32_9] = "32:9",
     [UI_MENU_ASPECT_FIT] = "Black bars", [UI_MENU_ASPECT_STRETCH] = "Stretch",
     [UI_MENU_FOV] = "Field of view",
     [UI_MENU_FOV_DESC] = "How much of the world the camera shows, in percent of the game's own. Game version 1.4.3 only.",
@@ -554,6 +559,11 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_ASPECT] = "Форма картинки",
     [UI_MENU_ASPECT_DESC] = "Когда форма окна отличается от разрешения игры (картинка 16:9 на экране 21:9): сохранить "
                             "форму картинки с чёрными полосами или растянуть её на всё окно.",
+    [UI_MENU_GAME_ASPECT] = "Широкий экран",
+    [UI_MENU_GAME_ASPECT_DESC] = "Игра рисует более широкую картинку: больше мира по бокам, интерфейс и меню в "
+                                 "центральной части 16:9. «По окну» берёт форму окна (монитора в полноэкранном режиме).",
+    [UI_MENU_GAME_ASPECT_16_9] = "16:9 (как в игре)", [UI_MENU_GAME_ASPECT_WINDOW] = "По окну",
+    [UI_MENU_GAME_ASPECT_21_9] = "21:9", [UI_MENU_GAME_ASPECT_32_9] = "32:9",
     [UI_MENU_ASPECT_FIT] = "Чёрные полосы", [UI_MENU_ASPECT_STRETCH] = "Растянуть",
     [UI_MENU_FOV] = "Поле зрения",
     [UI_MENU_FOV_DESC] = "Сколько мира показывает камера, в процентах от игрового. Только для версии игры 1.4.3.",
@@ -1063,6 +1073,11 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_ASPECT] = "Formato da imagem",
     [UI_MENU_ASPECT_DESC] = "Quando o formato da janela difere do da resolução do jogo (uma imagem 16:9 numa tela "
                             "21:9): manter o formato da imagem com barras pretas ou esticá-la sobre a janela.",
+    [UI_MENU_GAME_ASPECT] = "Tela larga",
+    [UI_MENU_GAME_ASPECT_DESC] = "O jogo desenha uma imagem mais larga: mais do mundo nas laterais, a interface e os "
+                                 "menus no centro 16:9. Formato da janela segue a janela (o monitor em tela cheia).",
+    [UI_MENU_GAME_ASPECT_16_9] = "16:9 (o do jogo)", [UI_MENU_GAME_ASPECT_WINDOW] = "Formato da janela",
+    [UI_MENU_GAME_ASPECT_21_9] = "21:9", [UI_MENU_GAME_ASPECT_32_9] = "32:9",
     [UI_MENU_ASPECT_FIT] = "Barras pretas", [UI_MENU_ASPECT_STRETCH] = "Esticar",
     [UI_MENU_SHARPNESS] = "Nitidez do FSR",
     [UI_MENU_SHARPNESS_DESC] = "Aumento de nitidez após a escala do FSR, também quando a imagem é reduzida à janela; 0 "
@@ -1578,6 +1593,11 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_ASPECT] = "画面宽高比",
     [UI_MENU_ASPECT_DESC] = "当窗口宽高比和游戏分辨率不同时（21:9 屏幕上显示 16:9 画面）："
                             "用黑边保持画面比例，或拉伸铺满窗口。",
+    [UI_MENU_GAME_ASPECT] = "宽屏",
+    [UI_MENU_GAME_ASPECT_DESC] = "游戏绘制更宽的画面：两侧显示更多场景，界面和菜单位于中间的 16:9 区域。"
+                                 "“窗口比例”跟随窗口（全屏时跟随显示器）。",
+    [UI_MENU_GAME_ASPECT_16_9] = "16:9（游戏原生）", [UI_MENU_GAME_ASPECT_WINDOW] = "窗口比例",
+    [UI_MENU_GAME_ASPECT_21_9] = "21:9", [UI_MENU_GAME_ASPECT_32_9] = "32:9",
     [UI_MENU_ASPECT_FIT] = "黑边",
     [UI_MENU_ASPECT_STRETCH] = "拉伸",
     [UI_MENU_FOV] = "视野",

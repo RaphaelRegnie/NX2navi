@@ -192,9 +192,11 @@ static void refresh_rate_update(HWND h, int force) {
     gfx_window_set_refresh(monitor_rate_hz(mon));
 }
 
+// Before the window exists (widescreen.c wide_init at start), the primary monitor: the one a fullscreen window opens on.
 int gfx_window_monitor_size(int *w, int *h) {
     MONITORINFO mi = {sizeof mi};
-    if (!g_hwnd || !GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) return 0;
+    HMONITOR mon = g_hwnd ? MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTOPRIMARY) : MonitorFromPoint((POINT){0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    if (!GetMonitorInfoW(mon, &mi)) return 0;
     *w = mi.rcMonitor.right - mi.rcMonitor.left;
     *h = mi.rcMonitor.bottom - mi.rcMonitor.top;
     return 1;
