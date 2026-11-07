@@ -760,7 +760,8 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         if (every < 0) {
             const char *e = cfg_get("NX2NAVI_SHOT_EVERY");
             every = e ? atof(e) : 0;
-            next_ns = plat_now_ns() + (uint64_t)(every * 1e9);
+            const char *after = cfg_get("NX2NAVI_SHOT_AFTER");   // seconds after the start before the first shot
+            next_ns = plat_now_ns() + (uint64_t)((every + (after ? atof(after) : 0)) * 1e9);
         }
         const char *dir = cfg_get("NX2NAVI_SHOT_DIR");
         if (!menu_shot && every > 0 && dir && plat_now_ns() >= next_ns && n < 200) {

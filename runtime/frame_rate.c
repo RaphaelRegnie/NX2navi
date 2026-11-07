@@ -62,6 +62,7 @@
 static _Atomic uint64_t *step_word;   // patch page +0: ratio (low float), seconds (high float)
 static double step_now = STEP_FIRST_S;   // the step the patch page holds: what the game steps each frame
 static _Atomic uint32_t *step_interval;   // patch page +8: seconds * 60 (patches-v143.txt realtime)
+static _Atomic uint32_t *ostep_page;   // patch page +256 with the set ostep: frames per update (patches-v111.txt)
 static uint64_t last_ns;
 static double samples[STEP_SAMPLES];
 static unsigned sample_count, sample_next;
@@ -81,6 +82,15 @@ static void frame_limit_live(void);
 
 void frame_step_init(void) {
     int fps60 = rt_patch_set("fps60"), realtime = rt_patch_set("realtime"), cloth = rt_patch_set("cloth");
+    int ostep = rt_patch_set("ostep");
+    if (ostep >= 0 && rt_patch_enabled(ostep)) {   // Ocarina: frames per update from the page, one 60 Hz frame until the first present
+        ostep_page = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 256);
+        float one = 1.0f;
+        uint32_t bits;
+        memcpy(&bits, &one, 4);
+        atomic_store_explicit(ostep_page, bits, memory_order_release);
+        rt_log("frame rate: the game's frames per update follow the display interval (set ostep)");
+    }
     if (realtime < 0) {
         rt_log("frame rate: no patch table, shipping 30 fps whole-vsync steps");
         return;
@@ -250,6 +260,7 @@ static double ocarina_step_s(void) {
 static uint64_t ostep_writes, ostep_changed;
 static float ostep_last = -1;
 
+
 static void ocarina_step_write(double dt) {
     static int on = -1;
     if (on < 0) {
@@ -257,6 +268,16 @@ static void ocarina_step_write(double dt) {
         on = !(e && !strcmp(e, "0"));
     }
     if (!on || dt <= 0) return;
+    if (ostep_page) {   // the set ostep: the game makes its whole nominal frame from this, the interface's included
+        if (dt < 1.0 / 1000) dt = 1.0 / 1000;
+        if (dt > STEP_MAX_S) dt = STEP_MAX_S;
+        float f = (float)(dt * 60.0);
+        uint32_t bits;
+        memcpy(&bits, &f, 4);
+        atomic_store_explicit(ostep_page, bits, memory_order_release);
+        ostep_last = f;
+        return;
+    }
     uint64_t slot = read_ptr(MOD_MAIN_BASE + 0x4c7e890), mgr = slot ? read_ptr(slot) : 0;
     if (!mgr || !plat_mem_readable(mgr + 0x1c0, 4)) return;
     _Atomic uint32_t *word = (_Atomic uint32_t *)(uintptr_t)(mgr + 0x1c0);
@@ -271,9 +292,31 @@ static void ocarina_step_write(double dt) {
     memcpy(&bits, &v, 4);
     atomic_store_explicit(word, bits, memory_order_relaxed);
     ostep_last = v;
+
     if (++ostep_writes % 1200 == 0)
         rt_log("frame step: Ocarina base step %.3f frames (%.2f ms); the game changed it %llu times in the last 1200 presents",
                v, dt * 1000, (unsigned long long)ostep_changed), ostep_changed = 0;
+}
+
+// NX2NAVI_TIME_DUMP=1: the time manager's first 0x280 bytes once, 30 s into the run (diagnosis)
+static void time_dump(void) {
+    static int done;
+    const char *e = cfg_get("NX2NAVI_TIME_DUMP");
+    if (done || !e || strcmp(e, "1") || !rt_guest_start_ns || kern_now_ns() - rt_guest_start_ns < 30000000000ull) return;
+    done = 1;
+    uint64_t slot = read_ptr(MOD_MAIN_BASE + 0x4c7e890), mgr = slot ? read_ptr(slot) : 0;
+    uint32_t w[160];
+    if (!mgr || !read_guest(mgr, w, sizeof w)) return;
+    for (int i = 0; i < 160; i += 8) {
+        char line[512];
+        int o = snprintf(line, sizeof line, "time dump +%03x:", i * 4);
+        for (int k = 0; k < 8; k++) {
+            float f;
+            memcpy(&f, &w[i + k], 4);
+            o += snprintf(line + o, sizeof line - o, " %08x(%g)", w[i + k], (double)f);
+        }
+        rt_log("%s", line);
+    }
 }
 
 static void speed_report(uint64_t now, double step, int interval) {
@@ -372,6 +415,7 @@ void frame_step_present(uint64_t display_ns, int interval) {
                           memory_order_relaxed);
     world_clock(dt, step);
     if (rt_trace & RT_TRACE_PERF) {
+        time_dump();
         if (frame_free_running()) {   // the game's own step, as its time manager holds it
             double s = ocarina_step_s();
             step = s > 0 ? s : 0;
