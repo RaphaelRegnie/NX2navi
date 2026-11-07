@@ -428,6 +428,8 @@ static class AmpereLowering
                 case 0x3c4: Redux(); return;
                 case 0x81a: Sgxt(); return;
                 case 0x806: case 0x886: Vote(op == 0x886); return;
+                case 0x3a1: Match(); return;
+                case 0xf8c: AtomsPopcInc(); return;
                 case 0x3a8: case 0x9a8: Atomg(op == 0x9a8); return;
                 case 0x38c: Atoms(); return;
                 case 0x98e: Red(); return;
@@ -1357,6 +1359,47 @@ static class AmpereLowering
                 }
             }
             if (signedOrder) Lop32i(t, t, 0x80000000, 2);
+        }
+
+        // MATCH.ALL Pd, Rd, Ra (op 0x3a1 with no mode bits; Ocarina's NVN2 compute programs test subgroupAllEqual with it
+        // before an aggregated shared atomic: @!Pd per-lane ATOMS, else REDUX and one): Pd = every active lane holds Ra's
+        // value, Rd = the active-lane mask then, else 0. Lowered as VOTE.ANY (the active lanes), FLO (the highest of
+        // them), SHFL.IDX (that lane's value), ISETP.EQ into Pd and VOTE.ALL over Pd. Only the unguarded form with a
+        // predicate destination is taken.
+        void Match()
+        {
+            uint pd = _i.Bits(81, 3);
+            if (_i.W1 != 0 || (_i.W2 & ~(7u << 17)) != 0 || _i.Bits(12, 4) != 7 || pd == PT)
+                throw Fail("MATCH mode");
+            int d = Gpr((uint)Dst), src = Gpr(_i.Bits(24, 8));
+            const int ballot = 240, lead = 241, value = 242;
+            Emit(Unguarded(0x50d8000000000000UL | (1UL << 48) | (7UL << 45) | ((ulong)PT << 39) | ballot));        // VOTE.ANY
+            Emit(Unguarded(0x5c30000000000000UL | ((ulong)ballot << 20) | lead));                                    // FLO.U32
+            Emit(Unguarded(0xef10000000000000UL | (7UL << 48) | (31UL << 34) | (1UL << 29) | ((ulong)lead << 20)
+                           | ((ulong)src << 8) | value));                                                            // SHFL.IDX
+            Emit(Unguarded(0x5b60000000000000UL | (2UL << 49) | ((ulong)PT << 39) | ((ulong)value << 20)
+                           | ((ulong)src << 8) | ((ulong)pd << 3) | PT));                                            // ISETP.EQ.U32
+            Emit(Unguarded(0x50d8000000000000UL | ((ulong)pd << 45) | ((ulong)pd << 39) | RZ));                     // VOTE.ALL
+            if (d != RZ) Sel(d, ballot, RZ, pd, false);
+        }
+
+        // ATOMS.POPC.INC RZ, [Ra + URb + offset] (op 0xf8c, mode word 0x0d000000; the increment of Ocarina's aggregated
+        // shared counters after MATCH and REDUX): memory goes up by the number of active lanes. With no result register
+        // that is one ATOMS.ADD of 1 per active lane, which is what this emits; a form that wants the per-lane result (its
+        // rank among the active lanes) is not taken.
+        void AtomsPopcInc()
+        {
+            uint offset = _i.Bits(40, 24), ur = _i.Bits(64, 6);
+            if ((_i.W2 & ~0x3fu) != 0x0d000000u || _i.Bits(32, 8) != 0 || Dst != RZ || (offset & 3) != 0 || offset >= (1u << 22))
+                throw Fail("ATOMS.POPC.INC mode");
+            int addr = Gpr(_i.Bits(24, 8));
+            if (ur != 0x3f)
+            {
+                Iadd3(SA, addr, Ur(ur), RZ, false);
+                addr = SA;
+            }
+            Mov32i(SB, 1);
+            EmitG(0xec00000000000000UL | RZ | ((ulong)addr << 8) | ((ulong)SB << 20) | ((ulong)(offset >> 2) << 30));   // ATOMS.ADD
         }
 
         // VOTE Rd, Pu, Pin: ballot into Rd (URd for VOTEU), mode 72-73 (ALL, ANY, EQ) over the vector predicate of bits

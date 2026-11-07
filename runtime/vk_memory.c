@@ -19,6 +19,7 @@
 #include "nvn_pool_index.h"
 #include "vk.h"
 #include "vk_exec.h"
+#include "vk_gpa.h"
 #include "wb_merge_spv.h"
 #include "platform/platform.h"
 
@@ -55,6 +56,9 @@ typedef struct PoolRec {
     uint8_t untracked;                 // the last dirty scan found no write watch over it
     // VRAM mirror (POOL_IMPORT, "VRAM mirror" below). mstate and mbuf change on the replay thread only.
     uint8_t mstate;                    // MS_NONE until the first buffer use, then MS_ON or MS_REFUSED
+    uint32_t gpa_rec;                  // POOL_IMPORT: its record in the device address table (vk_gpa.c), 0 none
+    struct GpaMap { uint64_t lo, hi; uint32_t rec; } *vmaps;   // POOL_VIRT: its mapped ranges in the table
+    int nvmaps, cvmaps;
     VkBuffer mbuf;                     // MS_ON: device-local copy of [import_lo, import_hi), same offsets as buf
     VmaAllocation malloc_;
     uint32_t acc_sub;                  // replay: the last submission that synced the mirror (mirror_sync)
@@ -102,6 +106,7 @@ static VkBufferUsageFlags pool_usage(const VkCtx *c) {
     if (c->has_transform_feedback)
         u |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT | VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT;
     if (c->has_conditional_rendering) u |= VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT;
+    if (vk_gpa_wanted()) u |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;   // pages of the device address table
     return u;
 }
 
@@ -153,8 +158,11 @@ static int import_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     VkImportMemoryHostPointerInfoEXT im = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
                                            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
                                            .pHostPointer = (void *)(uintptr_t)r->import_lo};
-    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &im, .allocationSize = n,
-                               .memoryTypeIndex = (uint32_t)type};
+    // A buffer with device address usage needs memory allocated for device addresses (vk_gpa.c).
+    VkMemoryAllocateFlagsInfo fi = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, .pNext = &im,
+                                    .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = vk_gpa_wanted() ? (void *)&fi : (void *)&im,
+                               .allocationSize = n, .memoryTypeIndex = (uint32_t)type};
     if ((res = vkAllocateMemory(c->device, &ai, NULL, &r->mem)) != VK_SUCCESS ||
         (res = vkBindBufferMemory(c->device, r->buf, r->mem, 0)) != VK_SUCCESS) {
         rt_log("vk: pool %#llx+%#llx: host memory import failed (%d)", (unsigned long long)addr, (unsigned long long)size, (int)res);
@@ -295,8 +303,27 @@ int vk_pool_init(pool_t *p) {
         phys_list[nphys++] = r;
     }
     plat_mutex_unlock(&pool_lock);
+    // The imported pages go into the device address table: shaders that read a pointer from memory reach them there.
+    if (r->kind == POOL_IMPORT && r->mem && r->buf && r->import_hi > r->import_lo)
+        r->gpa_rec = vk_gpa_map(r->import_lo, r->import_hi, r->buf, r->import_lo);
     return 1;
 }
+
+// vk_gpa_unmap: the record of another live imported pool that holds the 4 KiB page at a whole (overlapping imports
+// of the same guest memory), 0 for none.
+static uint32_t gpa_cover(uint64_t a) {
+    uint32_t rec = 0;
+    plat_mutex_lock_shared(&pool_lock);
+    for (int i = pidx_upper(&pool_index, a) - 1; i >= 0 && !rec; i--) {
+        const PoolRec *o = pool_index.e[i].buf;
+        if (o->kind == POOL_IMPORT && o->gpa_rec && o->import_lo <= a && o->import_hi >= a + 4096) rec = o->gpa_rec;
+        if (i && pool_index.maxhi[i - 1] <= a) break;
+    }
+    plat_mutex_unlock_shared(&pool_lock);
+    return rec;
+}
+
+static void gpa_retire(void *arg) { destroy_rec(vk_ctx(), arg); }
 
 void vk_pool_fini(pool_t *p) {
     VkCtx *c = vk_ctx();
@@ -314,12 +341,19 @@ void vk_pool_fini(pool_t *p) {
             PoolRec *v = pool_index.e[i].buf;
             if (v->kind != POOL_VIRT) continue;
             for (uint64_t k = 0; k < v->npages; k++)
-                if (v->pt[k].phys == r) v->pt[k].phys = NULL;
+                if (v->pt[k].phys == r) {
+                    v->pt[k].phys = NULL;
+                    vk_gpa_clear(v->lo + k * NVN_VPOOL_PAGE, v->lo + (k + 1) * NVN_VPOOL_PAGE);   // the buffer goes away
+                }
         }
     }
     plat_mutex_unlock(&pool_lock);
     if (!r) return;
     if (r->smap) shadow_forget(r);
+    // Off the device address table first; the buffer outlives the submissions that may still read the old pages.
+    if (r->gpa_rec) vk_gpa_unmap(r->import_lo, r->import_hi, r->gpa_rec, gpa_cover);
+    for (int i = 0; i < r->nvmaps; i++) vk_gpa_unmap(r->vmaps[i].lo, r->vmaps[i].hi, r->vmaps[i].rec, NULL);
+    free(r->vmaps), r->vmaps = NULL, r->nvmaps = 0;
     if (r->kind == POOL_IMPORT) mem_thaw(r->lo, r->size);   // the storage goes back to the guest writable
     // Images cut from this range go first; a used buffer or memory waits until the GPU is done with it, since the
     // guest gets the storage back when this returns.
@@ -334,7 +368,27 @@ void vk_pool_fini(pool_t *p) {
     // A mirrored pool's record and buffers outlive the submission being recorded, whose sync copies and write-backs may
     // name them (the game frees a pool only once the GPU is done with it, but its CPU writes may still be queued).
     if (r->mbuf) mirror_retiring(r), vk_completion_add(vk_sync_issued() + 1, mirror_retire, r);
+    else if (r->gpa_rec && !r->used) vk_completion_add(vk_sync_issued() + 1, gpa_retire, r);   // the queue was not drained
     else destroy_rec(c, r);
+}
+
+// pool_lock held: the device address table follows a MapVirtual request on [lo, hi) of virtual pool v. Ranges it
+// covers whole leave the table (their records retire); the pages then name the physical pool's buffer at poff, or none.
+static void gpa_map_virtual(PoolRec *v, uint64_t lo, uint64_t hi, PoolRec *ph, uint64_t poff) {
+    if (!vk_gpa_wanted()) return;
+    for (int i = 0; i < v->nvmaps;)
+        if (v->vmaps[i].lo >= lo && v->vmaps[i].hi <= hi) {
+            vk_gpa_unmap(v->vmaps[i].lo, v->vmaps[i].hi, v->vmaps[i].rec, NULL);
+            v->vmaps[i] = v->vmaps[--v->nvmaps];
+        } else {
+            i++;
+        }
+    vk_gpa_clear(lo, hi);
+    if (!ph || !ph->buf) return;
+    uint32_t rec = vk_gpa_map(lo, hi, ph->buf, lo - poff);
+    if (!rec) return;
+    if (v->nvmaps == v->cvmaps) grow((void **)&v->vmaps, &v->cvmaps, sizeof *v->vmaps);
+    v->vmaps[v->nvmaps++] = (struct GpaMap){lo, hi, rec};
 }
 
 // Requests were checked by the front end (nvn_api_core.c); apply them in order.
@@ -357,6 +411,8 @@ int vk_pool_map_virtual(pool_t *v, int n, const void *requests) {
         if (first + count > r->npages) { ok = 0; break; }
         for (uint64_t k = 0; k < count; k++)
             r->pt[first + k] = (VPage){ph, ph ? (uint64_t)rq[i].physical_offset + k * NVN_VPOOL_PAGE : 0};
+        gpa_map_virtual(r, r->lo + first * NVN_VPOOL_PAGE, r->lo + (first + count) * NVN_VPOOL_PAGE, ph,
+                        (uint64_t)rq[i].physical_offset);
     }
     plat_mutex_unlock(&pool_lock);
     if (!ok) rt_log("vk: MapVirtual on pool %p failed", (void *)v->mem);
@@ -1344,6 +1400,8 @@ static void mirror_create(PoolRec *r) {
     plat_mutex_unlock(&pool_lock);
     r->acc_sub = msub;
     r->mstate = MS_ON;
+    // The device address table names the mirror from now on: the GPU's writes go there, and the sync copies the CPU's.
+    if (r->gpa_rec) r->gpa_rec = vk_gpa_remap(r->import_lo, r->import_hi, r->gpa_rec, r->mbuf, r->import_lo);
     range_add(&pend, &npend, &cpend, r, 0, n);
     mrep.first_n++, mrep.first_bytes += n;
     plat_inc64(&m_live_n);
@@ -2009,6 +2067,7 @@ static void mirror_log(uint64_t frame) {
         snprintf(ver, sizeof ver, "; verify: pages compared %lld, skipped %lld (written since), mismatches %lld",
                  (long long)plat_xchg64(&v_pages, 0), (long long)plat_xchg64(&v_skipped, 0),
                  (long long)plat_xchg64(&v_mismatch, 0));
+    vk_gpa_report();
     rt_log("mem: mirror frame %llu: pools %lld, %.1f MiB device-local; stay imported: budget %lld (%.1f MiB), untracked "
            "%lld, overlapping %lld, failed %lld; per frame: submits %.2f, syncs %.1f, upload %.3f MiB in %.1f ranges, "
            "first use %.2f pools %.3f MiB, write-back %.3f MiB in %.1f ranges, merge %.3f MiB in %.1f dispatches "
@@ -2363,6 +2422,8 @@ void vk_mem_shutdown(void) {
     vk_queue_lock();
     vkDeviceWaitIdle(c->device);
     vk_queue_unlock();
+    vk_gpa_report();
+    vk_gpa_shutdown();
     vk_texture_shutdown();
     plat_rmutex_lock(&cmd_lock);
     retire(c, 1);

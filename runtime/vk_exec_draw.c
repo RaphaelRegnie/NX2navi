@@ -28,6 +28,7 @@
 #define NX2NAVI_TONEMAP_STANDIN 1   // vk_tonemap.c, see untranslated_dispatch_fallback
 #endif
 #include "vk_exec.h"
+#include "vk_gpa.h"
 #include "platform/platform.h"
 #include "vk_dlaa.h"
 
@@ -1263,6 +1264,14 @@ uint64_t vk_exec_cs_storage_addr(const VkExec *ex, const GfxShaderRes *r) {
 }
 
 static VkDescriptorBufferInfo ssbo_info(VkExec *ex, int st, const GfxShaderRes *r, int written) {
+    // The device address table (vk_gpa.c, translator patch 0030). Mirrored pools are not synced for its readers: a sync
+    // of every mirror at a table reader's draw copied stale guest bytes over what the GPU had written into the mirrors
+    // earlier in the frame, and Kokiri Forest's lit areas went black. A pool read only through the table is rarely a
+    // mirrored one (mirrors are made for pools bound as buffers, which sync then).
+    if (r->cbuf_slot == VK_GPA_CB_SLOT) {
+        VkDescriptorBufferInfo t = vk_gpa_info();
+        return t.buffer ? t : (VkDescriptorBufferInfo){Z.zbuf, 0, VK_WHOLE_SIZE};
+    }
     if (!__atomic_load_n(&LIM.ubo_max, __ATOMIC_ACQUIRE)) limits_init();
     uint64_t max = LIM.sbo_max, align = LIM.sbo_align;
     VkDescriptorBufferInfo bi;

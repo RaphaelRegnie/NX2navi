@@ -19,6 +19,7 @@
 #include "gfx.h"
 #include "host.h"
 #include "vk.h"
+#include "vk_gpa.h"
 
 VkCaps vk_caps = {.float64 = 1, .sg_size = 32};
 static int f64_supported;
@@ -124,7 +125,8 @@ void vk_caps_init(VkCtx *c) {
     // undefined off Mesa, as before: zeroing moved that hash and the picture shook under DLAA (maxwell.md 3.12).
     // NX2NAVI_ZERO_LOCALS=1 / 0 forces either.
     uint32_t zero_locals = env_u32("NX2NAVI_ZERO_LOCALS", vk_caps.mesa || !cfg_bool("NX2NAVI_DLAA"));
-    gfx_shader_set_host(vk_caps.float64, vk_caps.sbuf_align, told, gather, zero_locals != 0);
+    // bda: global accesses the translator finds no storage buffer for go through the device address table (vk_gpa.c)
+    gfx_shader_set_host(vk_caps.float64, vk_caps.sbuf_align, told, gather, zero_locals != 0, vk_gpa_wanted_ctx(c));
     if (gather) rt_log("vk caps: gather coordinates biased for %u sub-texel bits (NX2NAVI_GATHER_BIAS)", gather);
 
     char dv[32];

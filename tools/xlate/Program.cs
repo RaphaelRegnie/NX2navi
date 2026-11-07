@@ -129,6 +129,9 @@ static class SwshXlate
         public bool QueryHostSupportsNonConstantTextureOffset() => false;
         // "softfloat64": true lowers FP64 operations to FP32 (the translator's DoubleToFloat pass), for a host without shaderFloat64.
         public bool QueryHostSupportsShaderFloat64() => _job["softfloat64"] is not JsonValue v || !(v.TryGetValue<bool>(out bool b) && b);
+        // The runtime binds the device address table (runtime/vk_gpa.c) when the device has buffer device addresses:
+        // global accesses the translator finds no storage buffer for go through it (patch 0030).
+        public bool QueryHostSupportsBufferDeviceAddress() => _job["bda"] is JsonValue v && v.TryGetValue<bool>(out bool b) && b;
         public bool QueryHostSupportsTextureShadowLod() => true;
         // Sub-texel precision bits of a host whose gathers round differently from Maxwell (AMD, Intel): the translator then
         // biases gather coordinates so the same texels are picked (TexturePass.InsertCoordGatherBias). 0: no bias.
@@ -234,6 +237,7 @@ static class SwshXlate
                     var o = new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = pointer ? b.SbCbSlot & 0x1f : b.SbCbSlot,
                         ["cb_offset"] = pointer ? b.SbCbOffset & 0x3ff : b.SbCbOffset, ["flags"] = (int)b.Flags };
                     if (pointer) o["ptr"] = (b.SbCbOffset >> 10) * 8;
+                    if (b.SbCbSlot == 0x40) o["table"] = true;   // the device address table (patch 0030, ResourceManager.DeviceAddressTableCbSlot)
                     res["sbufs"].AsArray().Add((JsonNode)o);
                 }
                 foreach (var (list, name) in new[] { (p.Info.Textures, "textures"), (p.Info.Images, "images") })
