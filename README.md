@@ -47,8 +47,10 @@ Requirements: Windows 10 or later, an x86-64 CPU with SSE4.2 (AVX2/FMA machines 
 
 ## License
 
-The project's own code is under the [MIT License](LICENSE); third-party code keeps its own license
-([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The license grants nothing for Nintendo's game.
+This repository is private. Its additions and changes are all rights reserved ([LICENSE-ADDITIONS](LICENSE-ADDITIONS)):
+no part of them may be copied, published, or used to train, fine-tune or prompt AI models or AI coding tools without
+written permission. The base import stays under its [MIT License](LICENSE), and third-party code keeps its own license
+([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). No license grants anything for Nintendo's game.
 
 Ocarina Recomp is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *The Legend
 of Zelda*, *Ocarina of Time* and *Nintendo Switch* are trademarks of Nintendo.
