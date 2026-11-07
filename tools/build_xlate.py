@@ -114,15 +114,79 @@ def prepare_sources() -> Path:
     return src
 
 
+# What the identity covers besides the sources: the publish settings in main(). Change it with them.
+BUILD_SETTINGS = "PublishAot=true InvariantGlobalization=true Release"
+
+
+def strip_code(text: str, xml: bool = False) -> str:
+    """C# (or MSBuild XML) without its comments, trailing spaces and blank lines, string and character literals kept:
+    what the compiler sees, so that a comment-only edit keeps the identity (and so every shader cache key)."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if xml:
+            if text.startswith("<!--", i):
+                j = text.find("-->", i + 4)
+                i = n if j < 0 else j + 3
+                continue
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        elif c in "\"'" or text.startswith('@"', i):
+            verbatim = text.startswith('@"', i)
+            q = '"' if verbatim else c
+            j = i + (2 if verbatim else 1)
+            while j < n:
+                if verbatim and text.startswith('""', j):
+                    j += 2
+                elif not verbatim and text[j] == "\\":
+                    j += 2
+                elif text[j] == q:
+                    j += 1
+                    break
+                else:
+                    j += 1
+            out.append(text[i:j])
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    lines = (line.rstrip() for line in "".join(out).splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def code_digest(path: Path) -> str:
+    """sha256 of a file, comments left out of C# and MSBuild files (strip_code)."""
+    data = path.read_bytes()
+    if path.suffix in (".cs", ".csproj", ".props", ".targets"):
+        data = strip_code(data.decode("utf-8-sig", errors="replace"), xml=path.suffix != ".cs").encode()
+    return hashlib.sha256(data).hexdigest()
+
+
 def identity() -> str:
-    """sha256 over the translator's inputs, in a fixed order: path and content hash of each file."""
+    """sha256 over what the translator is built from, comments left out: the patched tree as the build compiles it
+    (build/xlate/ryujinx from prepare_sources), tools/xlate's own sources and the publish settings. Without a prepared
+    tree, the vendor tree and the patch files as they are."""
     h = hashlib.sha256()
-    files = [Path(__file__).resolve(), XLATE / "Program.cs", XLATE / "AmpereLowering.cs", XLATE / "MeshSpirv.cs", XLATE / "nx2navi_xlate.csproj",
-             *sorted((XLATE / "patches").glob("*.patch"))]
-    for f in files:
-        h.update(f"{f.name}\0{hashlib.sha256(f.read_bytes()).hexdigest()}\n".encode())
-    for rel, digest in tree_hashes(VENDOR).items():
-        h.update(f"vendor/{rel}\0{digest}\n".encode())
+    h.update(f"settings\0{BUILD_SETTINGS}\n".encode())
+    for name in ("Program.cs", "AmpereLowering.cs", "MeshSpirv.cs", "nx2navi_xlate.csproj"):
+        h.update(f"{name}\0{code_digest(XLATE / name)}\n".encode())
+    tree = BUILD / "ryujinx"
+    if (tree / "src").is_dir():
+        for f in sorted(tree.rglob("*")):
+            rel = f.relative_to(tree)
+            if f.is_file() and not (len(rel.parts) > 2 and rel.parts[0] == "src" and rel.parts[2] in ("obj", "bin")):
+                h.update(f"tree/{rel.as_posix()}\0{code_digest(f)}\n".encode())
+    else:
+        for f in sorted((XLATE / "patches").glob("*.patch")):
+            h.update(f"{f.name}\0{hashlib.sha256(f.read_bytes()).hexdigest()}\n".encode())
+        for rel, digest in tree_hashes(VENDOR).items():
+            h.update(f"vendor/{rel}\0{digest}\n".encode())
     return h.hexdigest()
 
 
