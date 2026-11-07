@@ -396,20 +396,19 @@ static void stick(SDL_GamepadAxis ax, SDL_GamepadAxis ay, float dead, int32_t ou
     input_pad_stick(SDL_GetGamepadAxis(pad, ax), -(int32_t)SDL_GetGamepadAxis(pad, ay), dead, out);
 }
 
-// Open the first gamepad when none is open or the open one went away; logs once per change.
-static void scan_pads(void) {
-    if (pad && SDL_GamepadConnected(pad)) return;
-    if (pad) {
-        SDL_CloseGamepad(pad); pad = NULL; sensor_pad = 0; sensor_ok = 0;
-        plat_xchg32(&pad_layout_shown, -1);
-        for (int i = 0; i < 4; i++) plat_xchg32(&pad_labels[i], PAD_LABEL_NONE);
-        rt_log("input: gamepad disconnected");
-    }
-    int n = 0;
-    SDL_JoystickID *ids = SDL_GetGamepads(&n);
-    for (int i = 0; ids && i < n && !pad; i++) pad = SDL_OpenGamepad(ids[i]);
-    SDL_free(ids);
-    if (!pad) return;
+// Every connected gamepad is kept open; `pad` is the one the game reads (and the one that rumbles and feeds motion):
+// the first one found, then whichever one the player presses (pad_follow). Taking only the first gamepad SDL lists
+// left the game deaf when that one was a device nobody holds: a virtual pad of Steam Input or DS4Windows, a wheel, a
+// receiver's idle second slot, listed before the controller in the player's hands.
+enum { MAX_PADS = 8 };
+static SDL_Gamepad *pads[MAX_PADS];
+static int npads;
+static int pad_pressed_logged;       // the primary's first press was logged (once per primary)
+
+// Under lock: makes p the gamepad the game reads, with its labels, rumble and layout; logs it.
+static void pad_primary(SDL_Gamepad *p, const char *why) {
+    pad = p;
+    sensor_pad = 0, sensor_ok = 0, pad_pressed_logged = 0;
     pad_rumble = SDL_GetBooleanProperty(SDL_GetGamepadProperties(pad), SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
     pad_east_a = SDL_GetGamepadButtonLabel(pad, SDL_GAMEPAD_BUTTON_EAST) == SDL_GAMEPAD_BUTTON_LABEL_A;
     for (int i = 0; i < 4; i++) {
@@ -426,8 +425,54 @@ static void scan_pads(void) {
     }
     pad_layout = -1;
     int motion = SDL_GamepadHasSensor(pad, SDL_SENSOR_GYRO) && SDL_GamepadHasSensor(pad, SDL_SENSOR_ACCEL);
-    rt_log("input: gamepad \"%s\" (%s, %s, east button %s)", SDL_GetGamepadName(pad), pad_rumble ? "rumble" : "no rumble",
-           motion ? "gyro and accelerometer" : "no motion sensors", pad_east_a ? "labelled A" : "not labelled A");
+    rt_log("input: gamepad \"%s\" %s (%s, %s, east button %s)", SDL_GetGamepadName(pad), why,
+           pad_rumble ? "rumble" : "no rumble", motion ? "gyro and accelerometer" : "no motion sensors",
+           pad_east_a ? "labelled A" : "not labelled A");
+}
+
+// Under lock: closes the gamepads that went away and opens the ones that came; the primary falls back to the first
+// open one when it left. Logs each change.
+static void scan_pads(void) {
+    for (int i = 0; i < npads;) {
+        if (SDL_GamepadConnected(pads[i])) { i++; continue; }
+        rt_log("input: gamepad \"%s\" disconnected", SDL_GetGamepadName(pads[i]) ? SDL_GetGamepadName(pads[i]) : "?");
+        if (pads[i] == pad) {
+            pad = NULL, sensor_pad = 0, sensor_ok = 0;
+            plat_xchg32(&pad_layout_shown, -1);
+            for (int k = 0; k < 4; k++) plat_xchg32(&pad_labels[k], PAD_LABEL_NONE);
+        }
+        SDL_CloseGamepad(pads[i]);
+        pads[i] = pads[--npads];
+    }
+    int n = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&n);
+    for (int i = 0; ids && i < n && npads < MAX_PADS; i++) {
+        int open = 0;
+        for (int k = 0; k < npads && !open; k++) open = SDL_GetGamepadID(pads[k]) == ids[i];
+        if (open) continue;
+        SDL_Gamepad *p = SDL_OpenGamepad(ids[i]);
+        if (!p) { rt_log("input: gamepad %u could not be opened (%s)", (unsigned)ids[i], SDL_GetError()); continue; }
+        pads[npads++] = p;
+        if (pad) rt_log("input: gamepad \"%s\" connected (the game switches to it at its first press)", SDL_GetGamepadName(p));
+    }
+    SDL_free(ids);
+    if (!pad && npads) pad_primary(pads[0], "in use");
+}
+
+// Under lock: 1 when p has a button down, a trigger pulled or a stick past half way (a drifting stick does not count).
+static int pad_active(SDL_Gamepad *p) {
+    for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; b++)
+        if (SDL_GetGamepadButton(p, (SDL_GamepadButton)b)) return 1;
+    for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; a++)
+        if (abs(SDL_GetGamepadAxis(p, (SDL_GamepadAxis)a)) > PAD_USED) return 1;
+    return 0;
+}
+
+// Under lock: when the primary is idle and another open gamepad is pressed, that one becomes the primary.
+static void pad_follow(void) {
+    if (npads < 2 || (pad && pad_active(pad))) return;
+    for (int i = 0; i < npads; i++)
+        if (pads[i] != pad && pad_active(pads[i])) { pad_primary(pads[i], "in use (pressed)"); return; }
 }
 
 // Under lock: the layout of the open gamepad, picked again when a setting or the gamepad changed; logs each change.
@@ -501,6 +546,9 @@ static void start(void) {
     binds_refresh();
     const char *e = cfg_get("NX2NAVI_INPUT");
     if (e && !strcmp(e, "none")) { state = -1; rt_log("input: disabled (NX2NAVI_INPUT=none)"); return; }
+    // SDL drops gamepad presses while it thinks the program is in the background, and it judges that from windows of
+    // its own: the Win32 window (gfx_window_win.c) is not one, and keyboard focus is gated here (ikb_foreground)
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_Init(SDL_INIT_GAMEPAD)) { state = -1; rt_log("input: SDL gamepad init failed (%s), keyboard only", SDL_GetError()); }
     else state = 1;
     if (state == 1) test_pad_attach();
@@ -543,13 +591,19 @@ static int32_t shake_stick(int held) {
 
 // Under lock, state 1: the open gamepad's inputs by position (pd[PAD_*] != 0 held); 0 without a connected gamepad.
 static int pad_physical(uint8_t pd[PAD_COUNT]) {
-    if ((!pad || !SDL_GamepadConnected(pad)) && plat_now_ns() / 1000000u >= next_scan) { next_scan = plat_now_ns() / 1000000u + RESCAN_MS; scan_pads(); }
+    // every RESCAN_MS, not only without a gamepad: a second controller, or one that wakes up after the start, is found
+    if (plat_now_ns() / 1000000u >= next_scan) { next_scan = plat_now_ns() / 1000000u + RESCAN_MS; scan_pads(); }
     SDL_UpdateGamepads();
+    pad_follow();
     if (!pad || !SDL_GamepadConnected(pad)) return 0;
     for (int p = PAD_SOUTH; p < PAD_ZL; p++) pd[p] = SDL_GetGamepadButton(pad, pad_sdl[p]);
     pd[PAD_ZL] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > TRIGGER_ON;
     pd[PAD_ZR] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > TRIGGER_ON;
     for (int p = PAD_ZR + 1; p < PAD_COUNT; p++) pd[p] = SDL_GetGamepadButton(pad, pad_sdl[p]);   // false without paddles
+    if (!pad_pressed_logged) {   // once per primary: the log then shows that its presses arrive
+        for (int p = PAD_SOUTH; p < PAD_COUNT && !pad_pressed_logged; p++)
+            if (pd[p]) pad_pressed_logged = 1, rt_log("input: gamepad \"%s\": first press (%s)", SDL_GetGamepadName(pad), input_pad_name(p));
+    }
     return 1;
 }
 
