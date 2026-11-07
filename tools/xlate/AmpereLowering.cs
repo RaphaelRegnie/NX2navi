@@ -509,8 +509,10 @@ static class AmpereLowering
             int d = Ur((uint)Dst);
             if (width < 4)   // U8, S8, U16, S16: Maxwell LDC with the same width code, immediate address (any alignment)
             {
+                // (this form, 0xab9, has no register index: bits 24-29 are not read, as for the 32- and 64-bit loads
+                // below; compilers leave 0 there as well as 63, and the 0 cases failed. 0xabb is the indexed form.)
                 int cb = Bank(_i.Bits(54, 5)), at = (int)_i.Bits(38, 16);
-                if (cb >= 18 || at >= 0x8000 || _i.Bits(24, 6) != 63) throw Fail($"ULDC width {width} c[{_i.Bits(54, 5)}][0x{at:x}]");
+                if (cb >= 18 || at >= 0x8000) throw Fail($"ULDC width {width} c[{_i.Bits(54, 5)}][0x{at:x}]");
                 if (d != RZ)
                     EmitG(0xef90000000000000UL | ((ulong)RZ << 8) | ((ulong)at << 20) | ((ulong)cb << 36) | ((ulong)width << 48) | (uint)d);
                 return;
