@@ -226,7 +226,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_MODS_QUICKMENU_DESC] = "The port's fix for the black background of the weapon, shield and material menus "
                                     "at 60 FPS.",
 
-    [UI_MENU_VOLUME] = "Volume", [UI_MENU_VOLUME_DESC] = "Master volume of the game.",
+    [UI_MENU_VOLUME] = "Volume", [UI_MENU_VOLUME_DESC] = "Master volume of the game.", [UI_MENU_MENU_SOUNDS] = "Menu sounds", [UI_MENU_MENU_SOUNDS_DESC] = "Volume of this menu's sounds, the game's own cursor, confirm and cancel sounds. 0 turns them off.",
     [UI_MENU_AUDIO_CHANNELS] = "Speakers",
     [UI_MENU_AUDIO_CHANNELS_DESC] = "Stereo or 5.1 surround output. Automatic picks 5.1 when the Windows speaker setup "
                                     "has six or more channels. Applies after a restart.",
@@ -703,7 +703,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_MODS_QUICKMENU] = "Исправление быстрого меню",
     [UI_MENU_MODS_QUICKMENU_DESC] = "Исправление порта: чёрный фон меню оружия, щитов и материалов при 60 FPS.",
 
-    [UI_MENU_VOLUME] = "Громкость", [UI_MENU_VOLUME_DESC] = "Общая громкость игры.",
+    [UI_MENU_VOLUME] = "Громкость", [UI_MENU_VOLUME_DESC] = "Общая громкость игры.", [UI_MENU_MENU_SOUNDS] = "Звуки меню", [UI_MENU_MENU_SOUNDS_DESC] = "Громкость звуков этого меню (курсор, выбор и отмена из самой игры). 0 выключает их.",
     [UI_MENU_AUDIO_CHANNELS] = "Динамики",
     [UI_MENU_AUDIO_CHANNELS_DESC] = "Стерео или объёмный звук 5.1. Автоматически выбирается 5.1, если в Windows "
                                     "настроено шесть каналов или больше. Применяется после перезапуска.",
@@ -1108,7 +1108,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_OPERATION_MODE_DESC] = "Se o jogo acha que está no modo TV ou no modo portátil.",
     [UI_MENU_MODE_DOCKED] = "Modo TV", [UI_MENU_MODE_HANDHELD] = "Modo portátil",
 
-    [UI_MENU_VOLUME] = "Volume", [UI_MENU_VOLUME_DESC] = "Volume geral do jogo.",
+    [UI_MENU_VOLUME] = "Volume", [UI_MENU_VOLUME_DESC] = "Volume geral do jogo.", [UI_MENU_MENU_SOUNDS] = "Sons do menu", [UI_MENU_MENU_SOUNDS_DESC] = "Volume dos sons deste menu (cursor, confirmar e cancelar do próprio jogo). 0 desliga.",
 
     [UI_MENU_MOTION] = "Controles de movimento", [UI_MENU_MOTION_DESC] = "Mirar com o giroscópio do controle.",
     [UI_MENU_RUMBLE_STRENGTH] = "Intensidade da vibração",
@@ -1655,6 +1655,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
                                   "窗口失去焦点即暂停，如同在 Switch 上按 Home 键；"
                                   "这样被打断的读取可能会永久卡住。",
     [UI_MENU_VOLUME] = "音量",
+    [UI_MENU_MENU_SOUNDS] = "菜单音效", [UI_MENU_MENU_SOUNDS_DESC] = "此菜单音效（游戏自带的光标、确认和取消音效）的音量。0 为关闭。",
     [UI_MENU_VOLUME_DESC] = "游戏的主音量。",
     [UI_MENU_MOTION] = "体感操作",
     [UI_MENU_MOTION_DESC] = "用手柄的陀螺仪瞄准。",

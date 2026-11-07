@@ -29,6 +29,7 @@ static int g_font_bad;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
 #include "imstb_truetype.h"
+#include "menu_sound.h"
 #pragma clang diagnostic pop
 #include "ui/amiibo_page.h"
 #include "ui/binds_page.h"
@@ -88,6 +89,7 @@ static int change_open(int want) {
         g_open.store(open);
         g_reset.store(1);
         input_menu(open);
+        menu_sound_play(open ? MENU_SOUND_OPEN : MENU_SOUND_CLOSE);
         rt_log("menu: %s", open ? "open" : "closed");
     }
     plat_mutex_unlock(&open_lock);
@@ -717,6 +719,7 @@ static void tab_game(float scale) {
 static void tab_sound(float scale) {
     opt_begin("##sound", scale);
     opt_slider("NX2NAVI_VOLUME", UI_MENU_VOLUME, 0, 100, UI_MENU_VOLUME_DESC, 5, "%.0f %%");
+    opt_slider("NX2NAVI_MENU_SOUND_VOLUME", UI_MENU_MENU_SOUNDS, 0, 100, UI_MENU_MENU_SOUNDS_DESC, 5, "%.0f %%");
     static const UiTextId channels[] = {UI_MENU_CHANNELS_AUTO, UI_MENU_CHANNELS_STEREO, UI_MENU_CHANNELS_51};
     opt_choice("NX2NAVI_AUDIO_CHANNELS", UI_MENU_AUDIO_CHANNELS, channels, 3, UI_MENU_AUDIO_CHANNELS_DESC);
     opt_end();
@@ -825,7 +828,7 @@ static void restart_confirm(void) {
     }
     ImGui::EndDisabled();
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
-        close = true;
+        close = true, menu_sound_play(MENU_SOUND_CANCEL);
     if (close) {
         ImGui::CloseCurrentPopup();
         restart_rebuild = false;
@@ -869,6 +872,22 @@ static void go_to(int tab, const char *key) {
     opt_focus_key(key);
 }
 
+// The game's interface sounds (menu_sound.c) for what the frame did: a press or click on an item, the cursor on another
+// item, another tab by a click (L and R play theirs where they are read). The first frame after opening only records.
+static void menu_sounds_frame(void) {
+    ImGuiContext &g = *GImGui;
+    static int last_frame = -2, last_tab = -1;
+    static ImGuiID last_nav;
+    bool fresh = g.FrameCount != last_frame + 1;
+    last_frame = g.FrameCount;
+    if (!fresh) {
+        if (g.ActiveId && g.ActiveIdIsJustActivated) menu_sound_play(MENU_SOUND_DECIDE);
+        else if (g.NavId && g.NavId != last_nav) menu_sound_play(MENU_SOUND_CURSOR);
+        if (g_tab != last_tab && last_tab >= 0) menu_sound_play(g_tab > last_tab ? MENU_SOUND_TAB_RIGHT : MENU_SOUND_TAB_LEFT);
+    }
+    last_nav = g.NavId, last_tab = g_tab;
+}
+
 static void layout_menu(uint32_t w, uint32_t h, float scale) {
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), IM_COL32(4, 8, 20, 140));
     float ww = fminf(w * 0.88f, 1400 * scale), wh = fminf(h * 0.86f, 820 * scale);
@@ -899,6 +918,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
              : ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || ImGui::IsKeyPressed(ImGuiKey_Q, false) ? -1
                                                                                                          : 0;
     if (step) g_tab_request = (g_tab + step + TAB_COUNT) % TAB_COUNT;
+    if (step) menu_sound_play(step > 0 ? MENU_SOUND_TAB_RIGHT : MENU_SOUND_TAB_LEFT);
     if (g_tab_request >= 0) g_focus_page = g_tab_request;   // the new page's first row takes the cursor
 
     const ImGuiStyle &st = ImGui::GetStyle();
@@ -943,6 +963,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     if (ImGui::Button(cont, ImVec2(bw, 0))) set_open(0);
     ImGui::SameLine();
     if (ImGui::Button(quit, ImVec2(bw, 0))) gfx_window_request_close();
+    menu_sounds_frame();
     bool was_modal = g_modal || binds_modal();
     if (g_tab != TAB_CONTROLS) g_modal = false;
     if (!was_modal && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)))

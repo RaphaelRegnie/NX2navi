@@ -18,6 +18,7 @@ extern "C" {
 #include "cfg.h"
 #include "platform/platform.h"
 #include "ui_text.h"
+#include "menu_sound.h"
 // host.h pulls in cpu.h, which is C only: the one function needed from it, as declared there.
 void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 }
@@ -243,6 +244,7 @@ static void apply(const char *key, const char *value) {
         cfg_reset(&k, 1);
     }
     opt_save_soon();
+    menu_sound_play(MENU_SOUND_CURSOR);
 }
 
 void opt_save_soon(void) { g_save_at = plat_now_ns() + 400000000ull; }

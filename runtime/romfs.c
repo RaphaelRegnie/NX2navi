@@ -1024,6 +1024,30 @@ const char *romfs_entry(uint64_t i, uint64_t *offset, uint64_t *size) {
 }
 
 const char *romfs_image_path(void) { return image_file; }
+// The whole of a RomFS file by its path from the RomFS root, for host-side readers (menu_sound.c: the game's own
+// interface sounds); malloc'd, NULL when the file is absent or not in the image (an added mod file). The original
+// file, not a mod's replacement.
+uint8_t *romfs_load(const char *rel, uint64_t *size_out) {
+    if (!rel || !image) return NULL;
+    uint64_t i = file_index(rel);
+    if (i >= file_count) return NULL;
+    Entry e = entry(i);
+    uint8_t *b = malloc(e.size ? (size_t)e.size : 1);
+    if (!b) return NULL;
+    if (image_map) {
+        memcpy(b, image_map + e.offset, (size_t)e.size);
+    } else {
+        for (uint64_t done = 0; done < e.size;) {
+            uint32_t chunk = e.size - done > READ_CHUNK ? READ_CHUNK : (uint32_t)(e.size - done);
+            int64_t r = read_at(image, b + done, chunk, e.offset + done);
+            if (r <= 0) { free(b); return NULL; }
+            done += (uint64_t)r;
+        }
+    }
+    if (size_out) *size_out = e.size;
+    return b;
+}
+
 
 size_t romfs_overlay_count(void) { return noverlay; }
 

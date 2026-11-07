@@ -25,6 +25,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "menu_sound.h"
 #include "cfg.h"
 #include "audio_effects.h"
 #include "audio_reverb.h"
@@ -202,6 +203,7 @@ static void SDLCALL sdl_pull(void *user, SDL_AudioStream *stream, int additional
         if (!frames) break;
         if (frames > 1024) frames = 1024;
         ring_pull(m, tmp, frames);
+        menu_sound_mix(tmp, frames, (int)m->channels, (int)m->rate);   // the settings menu's sounds (menu_sound.c)
         if (!SDL_PutAudioStreamData(stream, tmp, (int)(frames * frame_bytes))) break;
         additional -= (int)(frames * frame_bytes);
     }
