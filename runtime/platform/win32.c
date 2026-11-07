@@ -681,6 +681,19 @@ static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_ILLEGAL_INSTRUCTION)
         raw_note("crash_veh", code, (uintptr_t)ep->ContextRecord->Rip,
                  ep->ExceptionRecord->NumberParameters >= 2 ? (uintptr_t)ep->ExceptionRecord->ExceptionInformation[1] : 0);
+    if (code == EXCEPTION_ACCESS_VIOLATION && !ep->ContextRecord->Rip) {
+        // a call through a null pointer: the call's return address is on top of the stack, in whichever module made it
+        const uintptr_t *sp = (const uintptr_t *)ep->ContextRecord->Rsp;
+        for (int i = 0; i < 4; i++) {
+            void *base = NULL;
+            if (!RtlPcToFileHeader((void *)sp[i], &base) || !base) continue;
+            char b[200];
+            int n = snprintf(b, sizeof b, "[host] crash_veh: called from %s+%#llx (stack word %d)\n", image_name(base),
+                             (unsigned long long)(sp[i] - (uintptr_t)base), i);
+            DWORD w;
+            if (n > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), b, (DWORD)n, &w, NULL);
+        }
+    }
     const char *what = code == EXCEPTION_ACCESS_VIOLATION ? "access violation"
                      : code == EXCEPTION_ILLEGAL_INSTRUCTION ? "illegal instruction"
                      : code == EXCEPTION_INT_DIVIDE_BY_ZERO ? "integer division by zero"

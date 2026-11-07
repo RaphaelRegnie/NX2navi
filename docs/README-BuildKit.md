@@ -1,4 +1,4 @@
-# Ocarina Recomp build kit
+# NX2navi build kit
 
 This kit builds *The Legend of Zelda: Ocarina of Time* (Nintendo Switch 2, game version 1.1.1) as a native Windows
 program **on your PC, from your own copy of the game**. The kit contains no game code or data. Everything the build
@@ -34,7 +34,7 @@ writes (`ocarina.exe`, the RomFS image, the shader cache, your saves) comes from
    Answer `Y` when it asks. If MSYS2 is somewhere other than `C:\msys64`, add `--msys <folder>\ucrt64` to the build
    command.
 
-## Build (about 10 to 25 minutes, once)
+## Build (about 10 to 15 minutes, once)
 
 Unpack this kit anywhere, open a Command Prompt in its folder and run:
 
@@ -58,8 +58,13 @@ When it says `finished`, start `C:\Games\Ocarina\ocarina.exe`. You can delete `C
 ## Playing
 
 - **F1** opens the settings menu. Settings are saved in `nx2navi.ini` beside the game; saves go to `profile\`.
-- The first time a shader appears it is translated, which can stutter briefly; it is cached from then on. After an
-  update of the kit or your graphics driver, the next start shows "Preparing shaders" once.
+- Every shader was prepared during the build. After an update of your graphics driver, the next start shows
+  "Preparing shaders" once while the driver rebuilds them.
+- **Screen** in the menu has Upscaling (DLSS on NVIDIA RTX cards, FSR 3.1 on any card), Frame generation (FSR 3.1; it
+  needs DLSS or FSR 3.1 upscaling on), HDR (Native is the game's own HDR; turn HDR on in Windows first) and the
+  resolution. Those marked "after restart" take effect when the game starts again.
+- DLSS needs `nvngx_dlss.dll` from NVIDIA beside `ocarina.exe` (the kit does not include it); FSR 3.1's
+  `amd_fidelityfx_vk.dll` is copied there by the build.
 - Logs are in `logs\`. When reporting a problem, say where you were in the game and which graphics card you have, and
   attach `logs\nx2navi.log`. Never send game files.
 

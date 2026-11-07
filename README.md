@@ -27,7 +27,14 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - Native code, not emulation
 - 60 fps by default, or a limit of 30 to 240 fps, the display's refresh rate or unlimited
 - Native widescreen and ultrawide (the window's shape, 21:9 or 32:9) with the HUD, menus and movies kept 16:9
-- AMD FSR 1 or bilinear scaling to the window, with a sharpness setting; black bars or stretch
+- Resolutions above the game's 1440p: 1800p, 4K, 5K or the window's own size, sharp on high-DPI displays
+- Upscaling and anti-aliasing: NVIDIA DLSS (DLAA, Quality, Balanced, Performance, Ultra Performance; RTX GPUs) or
+  AMD FSR 3.1 (Native AA and the same modes; any GPU), which render the 3D scene at the mode's share and keep the HUD
+  sharp; or AMD FSR 1 or bilinear scaling to the window, with a sharpness setting; black bars or stretch
+- Frame generation with AMD FSR 3.1 (any GPU): a generated frame between every two the game draws, with the HUD kept
+  out of it, for about twice the frame rate on a fast display
+- HDR on HDR displays: the game's own native HDR, or an enhanced HDR made from its SDR picture
+- Every shader prepared when the game is built, so play does not stop to compile them
 - In-game settings menu (F1, or Minus and Plus together on a gamepad) and performance overlay (F10)
 - Keyboard, mouse and gamepads with remapping, Nintendo or Xbox button layout, rumble and gyro; the game follows
   whichever connected gamepad you press
@@ -38,8 +45,9 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installing
 
-The setup program for this game is not ready yet. [docs/building.md](docs/building.md) describes building from
-source. Settings are in the in-game menu and in `nx2navi.ini` ([nx2navi.ini.example](nx2navi.ini.example) lists every
+The build kit builds the game on your PC from your own dump (a `.nup` file, or ExeFS and RomFS folders) in about 10 to
+15 minutes: [docs/README-BuildKit.md](docs/README-BuildKit.md). [docs/building.md](docs/building.md) describes building
+from source. Settings are in the in-game menu and in `nx2navi.ini` ([nx2navi.ini.example](nx2navi.ini.example) lists every
 key). Controls: [docs/controls.md](docs/controls.md).
 
 Requirements: Windows 10 or later, an x86-64 CPU with SSE4.2 (AVX2/FMA machines get a faster build), a GPU with Vulkan
