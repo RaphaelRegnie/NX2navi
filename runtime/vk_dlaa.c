@@ -315,6 +315,8 @@ static struct {
     // camera (vk_dlaa_draw) and motion vectors (mv_pass)
     uint64_t cam_addr;           // this frame's scene camera block (vk_dlaa_draw), 0: none seen
     uint32_t cam_size, cam_vp;   // its size and the offset of its view-projection rows
+    struct { uint64_t addr; uint32_t n; } views[8];   // Ocarina: this frame's scene contexts of light-target draws
+    int nviews;
     VkBuffer camb;               // two CAM_SLOT slots: this frame's block and last frame's
     VmaAllocation camb_mem;
     VkBuffer mvm;                // MVM_SLOTS pairs of blocks for dlaa_mv.comp: the identity and the reprojection (mv_pass)
@@ -506,6 +508,8 @@ static void times_begin(VkCommandBuffer cb) {
 // and the compute pass reprojects every pixel's depth through the two (inv4 and mv_pass below). Then the per-object
 // pass (vk_exec_draw.c, vk_mvobj_execute) writes the motion of whatever moves on its own over it.
 #define CAM_BYTES 256u   // vec4 rows 0-15: view, view-projection (3-6), projection, inverse view
+#define OCAM_BLOCK 0x3500u   // Ocarina's scene context block (vk_dlaa_draw)
+#define OCAM_BYTES 0xb0u     // its rows 0-10: the view and the projection
 #define CAM_BLOCK 0x940u   // the whole block, kept for the per-object motion pass's vertex shaders (vk_exec_draw.c)
 #define CAM_SLOT 0xa00u    // camb slot stride
 #define MVM_SLOTS 16u      // frames the GPU may still be reading the reprojection blocks of
@@ -596,6 +600,20 @@ static int inv4(const double m[16], double o[16]) {
     return 1;
 }
 
+// Ocarina's camera from its scene context block (vk_dlaa_draw): its scene vertex shaders take the world position to
+// the camera through rows 0-2 (a 3x4 view) and then to clip space through rows 7-10 (the projection, 4x4), so the
+// view-projection is rows 7-10 times rows 0-2.
+static void ocam_vp(const float *v, double out[16]) {
+    const float *P = v + 7 * 4;
+    double V[16] = {v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], 0, 0, 0, 1};
+    for (int r = 0; r < 4; r++)
+        for (int k = 0; k < 4; k++) {
+            double acc = 0;
+            for (int j = 0; j < 4; j++) acc += (double)P[r * 4 + j] * V[j * 4 + k];
+            out[r * 4 + k] = acc;
+        }
+}
+
 // The pass, recorded through the recorder like the replay's own commands. 0: no camera this frame (the vectors stay
 // zero and DLSS starts a new history). bias > 0 with this frame's G-buffer classes (D.ids) also writes e->mask, the
 // bias mask (dlaa_mv.comp); *masked says whether it did.
@@ -604,18 +622,22 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
     VkCommandBuffer cb = ex->cb;
     uint32_t w = e->w, h = e->h;
     VkDescriptorBufferInfo cam;
-    if (!mv_init() || !D.cam_addr || !vk_usnap_find(D.cam_addr, D.cam_size, 4, &cam)) {
+    if (!mv_init() || !D.cam_addr ||
+        !vk_usnap_find(D.cam_addr, D.cam_size == OCAM_BLOCK ? OCAM_BYTES : D.cam_size, 4, &cam)) {
         D.mv_none++;
         D.cam_prev_ok = 0;
         e->chars_ok = 0;
         return 0;
     }
     // this frame's view-projection as the snapshot holds it, for the reprojection; kept as last frame's for the next
-    const float *cr = (const float *)vk_usnap_bytes(D.cam_addr + D.cam_vp, 64);
+    const float *cr = D.cam_size == OCAM_BLOCK ? (const float *)vk_usnap_bytes(D.cam_addr, OCAM_BYTES)
+                                               : (const float *)vk_usnap_bytes(D.cam_addr + D.cam_vp, 64);
     double cur_vp[16], m[16], ci[16];
     int have_m = 0;
-    if (cr) {
+    if (cr && D.cam_size == OCAM_BLOCK) ocam_vp(cr, cur_vp);
+    else if (cr)
         for (int i = 0; i < 16; i++) cur_vp[i] = cr[i];
+    if (cr) {
         if (D.cam_prev_ok && inv4(cur_vp, ci)) {
             for (int r = 0; r < 4; r++)
                 for (int k = 0; k < 4; k++) {
@@ -627,9 +649,11 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
         }
     }
     int s = D.cam_slot, had_prev = D.cam_prev_ok;
-    VkBufferCopy bc = {cam.offset, (VkDeviceSize)s * CAM_SLOT, D.cam_size};
-    vkCmdCopyBuffer(cb, cam.buffer, D.camb, 1, &bc);
-    full_barrier(cb);
+    if (D.cam_size == CAM_BLOCK) {   // the whole block, for the per-object motion pass (the deferred engine's only)
+        VkBufferCopy bc = {cam.offset, (VkDeviceSize)s * CAM_SLOT, CAM_BLOCK};
+        vkCmdCopyBuffer(cb, cam.buffer, D.camb, 1, &bc);
+        full_barrier(cb);
+    }
     D.cam_slot ^= 1, D.cam_prev_ok = cr != NULL;
     if (cr) memcpy(D.cam_prev, cur_vp, sizeof cur_vp);
     if (!had_prev || !have_m) {   // nothing to reproject into: zero motion, new history
@@ -883,6 +907,8 @@ void vk_dlaa_viewport(VkExec *ex, VkViewport *v) {
     D.ux = D.jx, D.uy = D.jy, D.jit_used = 1;
 }
 
+static int scene_color(VkFormat f);
+
 void vk_dlaa_draw(VkExec *ex) {
     if (!dl_active() || D.ended) return;
     static int survey = -1;   // NX2NAVI_DLAA_SURVEY=1 (test): what is drawn into the armed light target
@@ -916,16 +942,26 @@ void vk_dlaa_draw(VkExec *ex) {
         }
     }
     // The scene camera of a draw into the scene depth: the deferred engine binds a 0x940-byte block at c4 with the
-    // view-projection in rows 3-6 (0x30). Ocarina has no such block. Its draws into the light target bind one
-    // 0x200-byte block at c3 a frame (rows 0-2 a view, row 3 near 0.1, far 25000; rows 5-8 a 4x4 whose z row is its w
-    // row less 0.2), but reprojecting depth through rows 5-8 moved a still picture by tens of pixels a frame
-    // (NX2NAVI_MV_CHECK), and its per-draw c4 blocks carry the object transforms, so its camera is not known yet: no
-    // camera motion, and no jitter (next_jitter), so DLSS runs on each frame alone without shaking the picture.
+    // view-projection in rows 3-6 (0x30); Ocarina's opaque scene draws bind a 0x3500-byte scene context at c3, whose
+    // rows 0-2 and 7-10 their vertex shaders use as the view and the projection (ocam_vp). Its full-screen passes bind
+    // a 0x200-byte block at c3 instead, which is not the camera. Without a camera there is no camera motion and no
+    // jitter (next_jitter), so DLSS runs on each frame alone without shaking the picture.
     const p_bind_buf *b = &ex->ubo[0][1];   // c4: the replay keeps user banks from c3 on
     const VkExecTarget *z = &ex->depth;
     if (!z->image || z->width < DLAA_SCENE_MIN_W || z->format != VK_FORMAT_D32_SFLOAT || (D.jdepth && z->image != D.jdepth))
         return;
     if (b->size == CAM_BLOCK && b->addr) D.cam_addr = b->addr, D.cam_size = CAM_BLOCK, D.cam_vp = 0x30;
+    else if (ex->ubo[0][0].size == OCAM_BLOCK && ex->ubo[0][0].addr && ex->color[0].image &&
+             scene_color(ex->color[0].format)) {   // Ocarina: the scene context most light-target draws use this frame
+        uint64_t a = ex->ubo[0][0].addr;
+        int i = 0, best = 0;
+        while (i < D.nviews && D.views[i].addr != a) i++;
+        if (i == D.nviews && D.nviews < 8) D.views[D.nviews].addr = a, D.views[D.nviews++].n = 0;
+        if (i < D.nviews) D.views[i].n++;
+        for (int k = 1; k < D.nviews; k++)
+            if (D.views[k].n > D.views[best].n) best = k;
+        D.cam_addr = D.views[best].addr, D.cam_size = OCAM_BLOCK, D.cam_vp = 0;
+    }
 }
 
 // The jitter moves on right after DLAA ran, not at the present: the replay can record the next frame's scene before
@@ -942,7 +978,10 @@ static void next_jitter(uint32_t w, uint32_t ow) {
     if (phases > 72) phases = 72;
     uint32_t i = D.jframe++ % phases + 1;
     D.jx = halton(i, 2) - 0.5f, D.jy = halton(i, 3) - 0.5f;
-    D.jit_ok = !D.hold && !nj && D.cam_size;   // jitter only where the camera is known (vk_dlaa_draw)
+    // Jitter only where the camera is known (vk_dlaa_draw), and not on Ocarina's frame: with it the picture went white
+    // within seconds (no matter the motion vectors; without it the same frames look right), so DLSS there keeps its
+    // history along the camera's motion but samples the same spot of each pixel.
+    D.jit_ok = !D.hold && !nj && D.cam_size == CAM_BLOCK;
 }
 
 // The DLSS model (NX2NAVI_DLSS_PRESET, live): default takes NVIDIA's model per mode (evaluate: K for DLAA, Quality and
@@ -1236,7 +1275,7 @@ void vk_dlaa_frame(void) {
     else if (D.hold) D.hold--;
     if (!D.done) D.jit_ok = 0;
     D.armed = D.done = D.jit_used = D.gbuf = D.ended = D.up = D.ids_ok = 0;
-    D.cam_addr = 0;
+    D.cam_addr = 0, D.nviews = 0;
 }
 
 // ---------------------------------------------------------------- the game's FXAA (NX2NAVI_FXAA, live)
