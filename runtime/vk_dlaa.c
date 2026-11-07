@@ -313,7 +313,8 @@ static struct {
     int jit_ok, jit_used, hold;  // jitter allowed this frame / a draw used it / frames left without it
     uint64_t holds;
     // camera (vk_dlaa_draw) and motion vectors (mv_pass)
-    uint64_t cam_addr;           // this frame's scene camera block (c4 of a scene draw's vertex stage), 0: none seen
+    uint64_t cam_addr;           // this frame's scene camera block (vk_dlaa_draw), 0: none seen
+    uint32_t cam_size, cam_vp;   // its size and the offset of its view-projection rows
     VkBuffer camb;               // two CAM_SLOT slots: this frame's block and last frame's
     VmaAllocation camb_mem;
     VkBuffer mvm;                // MVM_SLOTS pairs of blocks for dlaa_mv.comp: the identity and the reprojection (mv_pass)
@@ -603,14 +604,14 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
     VkCommandBuffer cb = ex->cb;
     uint32_t w = e->w, h = e->h;
     VkDescriptorBufferInfo cam;
-    if (!mv_init() || !D.cam_addr || !vk_usnap_find(D.cam_addr, CAM_BLOCK, 4, &cam)) {
+    if (!mv_init() || !D.cam_addr || !vk_usnap_find(D.cam_addr, D.cam_size, 4, &cam)) {
         D.mv_none++;
         D.cam_prev_ok = 0;
         e->chars_ok = 0;
         return 0;
     }
     // this frame's view-projection as the snapshot holds it, for the reprojection; kept as last frame's for the next
-    const float *cr = (const float *)vk_usnap_bytes(D.cam_addr + 48, 64);
+    const float *cr = (const float *)vk_usnap_bytes(D.cam_addr + D.cam_vp, 64);
     double cur_vp[16], m[16], ci[16];
     int have_m = 0;
     if (cr) {
@@ -626,7 +627,7 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
         }
     }
     int s = D.cam_slot, had_prev = D.cam_prev_ok;
-    VkBufferCopy bc = {cam.offset, (VkDeviceSize)s * CAM_SLOT, CAM_BLOCK};
+    VkBufferCopy bc = {cam.offset, (VkDeviceSize)s * CAM_SLOT, D.cam_size};
     vkCmdCopyBuffer(cb, cam.buffer, D.camb, 1, &bc);
     full_barrier(cb);
     D.cam_slot ^= 1, D.cam_prev_ok = cr != NULL;
@@ -687,7 +688,7 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
     vk_mvcheck_camera(cb, e->mv, w, h, jx, jy);   // NX2NAVI_MV_CHECK (test)
     // the characters' own motion over the camera's (vk_exec_draw.c, per-object motion)
     uint64_t c0 = T.on > 0 ? kern_now_ns() : 0;
-    if (vk_mvobj_execute(ex, D.cam_addr, e->mv_view, zv, D.depth.format, w, h)) full_barrier(cb);
+    if (D.cam_size == CAM_BLOCK && vk_mvobj_execute(ex, D.cam_addr, e->mv_view, zv, D.depth.format, w, h)) full_barrier(cb);
     if (T.on > 0) T.cpu_mv += kern_now_ns() - c0;
     times_mark(cb, T_OBJ);
     if (T.on > 0) T.used[T.slot] = 1;   // the DLSS marks follow in evaluate
@@ -703,6 +704,7 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
 // this frame's into slot cam_slot and leaves the other slot, last frame's, as it is. 0: none (no history).
 int vk_dlaa_prev_camera(VkDescriptorBufferInfo *out, float jitter[2]) {
     if (!dl_active() || !D.cam_prev_ok || !D.camb) return 0;
+    if (D.cam_size != CAM_BLOCK) return 0;   // the per-object pass knows the deferred engine's block only
     *out = (VkDescriptorBufferInfo){D.camb, (VkDeviceSize)(D.cam_slot ^ 1) * CAM_SLOT, CAM_BLOCK};
     jitter[0] = D.jit_ok ? D.jx : 0.0f, jitter[1] = D.jit_ok ? D.jy : 0.0f;
     return 1;
@@ -913,11 +915,17 @@ void vk_dlaa_draw(VkExec *ex) {
             }
         }
     }
-    const p_bind_buf *b = &ex->ubo[0][1];   // constant bank c4: the replay keeps user banks from c3 on
+    // The scene camera of a draw into the scene depth: the deferred engine binds a 0x940-byte block at c4 with the
+    // view-projection in rows 3-6 (0x30). Ocarina has no such block. Its draws into the light target bind one
+    // 0x200-byte block at c3 a frame (rows 0-2 a view, row 3 near 0.1, far 25000; rows 5-8 a 4x4 whose z row is its w
+    // row less 0.2), but reprojecting depth through rows 5-8 moved a still picture by tens of pixels a frame
+    // (NX2NAVI_MV_CHECK), and its per-draw c4 blocks carry the object transforms, so its camera is not known yet: no
+    // camera motion, and no jitter (next_jitter), so DLSS runs on each frame alone without shaking the picture.
+    const p_bind_buf *b = &ex->ubo[0][1];   // c4: the replay keeps user banks from c3 on
     const VkExecTarget *z = &ex->depth;
-    if (b->size == 0x940 && b->addr && z->image && z->width >= DLAA_SCENE_MIN_W && z->format == VK_FORMAT_D32_SFLOAT &&
-        (!D.jdepth || z->image == D.jdepth))
-        D.cam_addr = b->addr;
+    if (!z->image || z->width < DLAA_SCENE_MIN_W || z->format != VK_FORMAT_D32_SFLOAT || (D.jdepth && z->image != D.jdepth))
+        return;
+    if (b->size == CAM_BLOCK && b->addr) D.cam_addr = b->addr, D.cam_size = CAM_BLOCK, D.cam_vp = 0x30;
 }
 
 // The jitter moves on right after DLAA ran, not at the present: the replay can record the next frame's scene before
@@ -934,7 +942,7 @@ static void next_jitter(uint32_t w, uint32_t ow) {
     if (phases > 72) phases = 72;
     uint32_t i = D.jframe++ % phases + 1;
     D.jx = halton(i, 2) - 0.5f, D.jy = halton(i, 3) - 0.5f;
-    D.jit_ok = !D.hold && !nj;
+    D.jit_ok = !D.hold && !nj && D.cam_size;   // jitter only where the camera is known (vk_dlaa_draw)
 }
 
 // The DLSS model (NX2NAVI_DLSS_PRESET, live): default takes NVIDIA's model per mode (evaluate: K for DLAA, Quality and
@@ -1108,14 +1116,30 @@ static int scene_color(VkFormat f) {
     return f == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || f == VK_FORMAT_R16G16B16A16_SFLOAT;
 }
 
+// Two frame shapes. A deferred frame (the G-buffer, several colour targets at the scene size) arms on the light target
+// drawn after it and ends the scene at the first pass a quarter as wide (the bloom), as described above. Ocarina's
+// frame has no G-buffer: its light target (B10G11R11 at the scene size, with the D32F scene depth) is drawn into from the
+// first opaque pass on, half- and quarter-size effect passes come and go in between, and the scene ends at the pass
+// that tonemaps the light target into the 8-bit output target. So without a G-buffer the frame arms on the first
+// scene-size light pass and ends at that output pass: at the output size and without depth when DLSS scales up
+// (DLSS writes the output and the tonemap samples it through vk_dlaa_swap_img), an sRGB target of the scene size in
+// DLAA (DLSS's picture goes back into the light target, which the tonemap then reads).
+static int srgb8(VkFormat f) { return f == VK_FORMAT_R8G8B8A8_SRGB || f == VK_FORMAT_B8G8R8A8_SRGB; }
+
 void vk_dlaa_pass(VkExec *ex) {
     const VkExecTarget *c = &ex->color[0], *z = &ex->depth;
     if (!dl_active() || D.done) return;
-    // The G-buffer: several colour targets with a D32F depth of at least DLAA_SCENE_MIN_W wide. Only the light target drawn after it
-    // arms the frame; at night the game draws into the light target alone with the scene depth before the G-buffer too,
-    // and DLAA then ran at a small pass ahead of the whole scene, which reached the screen jittered.
-    if (ex->pass_ncolor >= 3 && z->image && z->format == VK_FORMAT_D32_SFLOAT && z->width >= DLAA_SCENE_MIN_W) {
-        D.gbuf = 1, D.armed = 0;
+    static int deferred;   // a scene-size G-buffer was seen: the deferred shape
+    unsigned o[2], s[2];
+    res_sizes(o, s);
+    // Ocarina's builds carry no scene or output patch sets, so res_sizes reports placeholders there: the sizes come
+    // from the frame itself (the light target's, and the output pass's).
+    int scene = z->image && z->format == VK_FORMAT_D32_SFLOAT && z->width >= DLAA_SCENE_MIN_W;
+    // The G-buffer: several colour targets with the D32F scene depth. Only the light target drawn after it arms the
+    // frame; at night the game draws into the light target alone with the scene depth before the G-buffer too, and
+    // DLAA then ran at a small pass ahead of the whole scene, which reached the screen jittered.
+    if (ex->pass_ncolor >= 3 && scene) {
+        D.gbuf = 1, D.armed = 0, deferred = 1;
         // target 0 is the object-class buffer (RGBA8, the scene size): the characters' bias mask reads its green. A
         // smaller pass of the same shape (640x360, seen while loading) does not replace the scene's in the same frame.
         if (c->image && c->format == VK_FORMAT_R8G8B8A8_UNORM && c->width == z->width && c->height == z->height &&
@@ -1127,27 +1151,35 @@ void vk_dlaa_pass(VkExec *ex) {
     // A smaller pair never takes over an armed one: the camera rune draws a half-size RGBA16F target with a half-size
     // D32F depth after the lighting (852x480 under a 1704x960 scene), and DLSS ran on that and wrote its picture into
     // the scene's own light target, which left every object black.
-    if (D.gbuf && ex->pass_ncolor == 1 && c->image && scene_color(c->format) && z->image && z->format == VK_FORMAT_D32_SFLOAT &&
-        c->width == z->width && c->height == z->height && c->width >= DLAA_SCENE_MIN_W &&
-        (!D.armed || (c->width >= D.color.width && c->height >= D.color.height)) &&
-        c->samples <= 1 && !c->is3d) {
+    if ((D.gbuf || !deferred) && ex->pass_ncolor == 1 && c->image && scene_color(c->format) && scene &&
+        c->width == z->width && c->height == z->height &&
+        (!D.armed || (c->width >= D.color.width && c->height >= D.color.height)) && c->samples <= 1 && !c->is3d) {
         int first = !D.armed;
         D.color = *c, D.depth = *z, D.armed = 1;
         if (first) mask_snapshot(ex);   // the lit scene, before the transparents (reactive mask)
         return;
     }
     if (!D.armed) return;
+    if (!deferred) {   // Ocarina's shape: the output pass ends the scene and runs DLSS
+        int one = ex->pass_ncolor == 1 && c->image && !z->image && c->image != D.color.image && c->samples <= 1 &&
+                  !c->is3d;
+        if (one && c->width > D.color.width && c->height > D.color.height) {
+            D.ended = D.done = D.up = 1;
+            evaluate(ex, c);
+        } else if (one && srgb8(c->format) && c->width == D.color.width &&
+                   c->height == D.color.height) {
+            D.ended = D.done = 1;
+            evaluate(ex, NULL);
+        }
+        return;
+    }
     if (!D.ended) {
         if (!ex->pass_w || ex->pass_w * 4 > D.color.width) return;
         D.ended = 1;
-        unsigned o[2], s[2];
-        res_sizes(o, s);
         if (D.color.width >= o[0]) D.done = 1, evaluate(ex, NULL);   // DLAA in place; else wait for the scaling pass
         return;
     }
     // the game's scaling pass: one colour target of the output size, no depth
-    unsigned o[2], s[2];
-    res_sizes(o, s);
     if (ex->pass_ncolor == 1 && c->image && !z->image && scene_color(c->format) && c->width > D.color.width &&
         c->width == o[0] && c->height == o[1] && c->samples <= 1 && !c->is3d) {
         D.done = D.up = 1;
