@@ -122,6 +122,7 @@ typedef struct Pipe {
     const struct Layout *lay;          // graphics: the layout it was entered with
     VkPipeline fast;                   // GPL: the fast-linked pipeline (kept until shutdown: recorded draws use it)
     uint8_t fast_tried;
+    uint8_t link_queued;               // a waiting draw queued its fast link to the workers (LibJob p), not yet run
     size_t key_size;
     uint8_t key[];
 } Pipe;
@@ -1614,6 +1615,7 @@ out:
 // Background build signalling, both with P.lock: work_cv wakes the pipeline workers, done_cv wakes threads waiting for a
 // pipeline or a stage library to be published.
 static PlatCond work_cv = PLAT_COND_INIT, done_cv = PLAT_COND_INIT;
+static PlatCond lib_cv = PLAT_COND_INIT;   // wakes the library workers (lib_worker): work_cv's signal must reach a pool worker
 #define LIB_BUCKETS 1024
 enum { LIB_VI, LIB_PR, LIB_FS, LIB_FO };
 typedef struct Lib { struct Lib *next; uint64_t hash; VkPipeline pipe; uint32_t size; uint8_t pre, used, building, pad;
@@ -1777,17 +1779,20 @@ static VkPipeline lib_put(uint64_t h, const void *key, uint32_t size, VkPipeline
     return pipe;
 }
 
-// Shader libraries a waiting draw needs (lib_wait): queued here ahead of every pipeline job, so an idle worker builds
-// each at once and the vertex and fragment libraries of one draw build in parallel. A job no worker took is built by
-// the first thread that needs its library (lib_get, lib_wait). Under P.lock.
-typedef struct LibJob { struct LibJob *next; Lib *b; int kind; Layout *l; VkPipeState s; GKey k; } LibJob;
+// Shader libraries a waiting draw needs (lib_wait, link_queue): queued here ahead of every pipeline job, so an idle
+// worker builds each at once and the vertex and fragment libraries of one draw build in parallel. A job no worker took
+// is built by the first thread that needs its library (lib_get; lib_wait only without library workers). A job with p
+// is a waiting draw's fast link of p (after its library jobs), run on a worker so the drawing thread only waits.
+// Under P.lock.
+typedef struct LibJob { struct LibJob *next; Lib *b; int kind; Layout *l; VkPipeState s; GKey k; Pipe *p; } LibJob;
 static struct {
     LibJob *head, *tail;
     int idle;                          // workers asleep on work_cv
     int running;                       // jobs workers are building
     int on;                            // NX2NAVI_PIPE_WAIT: 1 workers (default), 0 the drawing thread builds them (draw);
                                        // set by vk_pipeline_async_enable, before the replay runs
-    uint64_t waits, queued, by_worker, stolen, timeouts;
+    int lib_workers;                   // workers that take only these jobs (lib_worker), started with the pool
+    uint64_t waits, queued, by_worker, stolen, timeouts, links;
 } U;
 
 // A building entry for key, NULL when out of memory. Caller holds P.lock and found none.
@@ -2170,6 +2175,48 @@ static void prebuild_report(void) {
            "ready", K.built, K.failed, K.promoted, now_ms() - K.t0);
 }
 
+static void job_lower(Job *j);
+
+// Runs a waiting draw's job taken from U on a worker: a library build or, for a job with p, p's fast link (gpl_link
+// build 1 builds a library still missing and waits for one another worker builds). Releases P.lock while building.
+static void u_run(LibJob *lj) {
+    U.by_worker++, U.running++;
+    if (lj->p) {
+        Pipe *p = lj->p;
+        if (!p->info.pipeline) {
+            int final = 0;
+            VkPipeline f = gpl_link(&lj->s, &lj->k, lj->l, 1, &final);   // releases P.lock while linking
+            if (f && !p->info.pipeline) {
+                p->fast = p->info.pipeline = f;
+                job_lower(p->job);   // its job now only does the optimised build
+            } else if (f) {
+                vkDestroyPipeline(P.device, f, NULL);   // the job published one meanwhile
+            }
+        }
+        p->link_queued = 0;
+        U.links++;
+        plat_cond_broadcast(&done_cv);
+    } else {
+        lib_build(lj->b, lj->kind, &lj->s, &lj->k, lj->l);
+    }
+    U.running--;
+    free(lj);
+}
+
+// A worker for waiting draws' jobs only (U): a draw that waits finds one free even while the pool builds pipelines,
+// so the drawing thread never builds a library itself.
+static void lib_worker(void *arg) {
+    (void)arg;
+    plat_mutex_lock(&P.lock);
+    for (;;) {
+        while (!U.head) plat_cond_wait(&lib_cv, &P.lock);
+        LibJob *lj = U.head;
+        if (!(U.head = lj->next)) U.tail = NULL;
+        if (lj->b) lj->b->job = NULL;
+        u_run(lj);
+    }
+}
+
 static void pipe_worker(void *arg) {
     int me = (int)(intptr_t)arg;
     plat_mutex_lock(&P.lock);
@@ -2184,12 +2231,9 @@ static void pipe_worker(void *arg) {
         if (U.head) {   // a library a draw waits for
             LibJob *lj = U.head;
             if (!(U.head = lj->next)) U.tail = NULL;
-            lj->b->job = NULL;
+            if (lj->b) lj->b->job = NULL;
             if (A.prio_low[me]) A.prio_low[me] = 0, plat_thread_priority(PLAT_PRIO_NORMAL);
-            U.by_worker++, U.running++;
-            lib_build(lj->b, lj->kind, &lj->s, &lj->k, lj->l);   // releases P.lock while building
-            U.running--;
-            free(lj);
+            u_run(lj);   // releases P.lock while building
             continue;
         }
         Job *j = A.head;
@@ -2268,7 +2312,12 @@ static int workers_start(void) {
         if (!t) break;
         A.thread[A.threads++] = t;   // kept: promote() raises a worker running a prebuild job
     }
-    if (A.threads) rt_log("vk_pipeline: %d background graphics pipeline workers", A.threads);
+    // two for waiting draws' libraries and links (the vertex and fragment libraries of one draw in parallel)
+    for (int i = 0; A.threads && U.on && P.gpl && i < 2; i++)
+        if (plat_thread_new(lib_worker, NULL, "pipe lib worker")) U.lib_workers++;
+    if (A.threads)
+        rt_log("vk_pipeline: %d background graphics pipeline workers, %d for waiting draws' libraries", A.threads,
+               U.lib_workers);
     else rt_log("vk_pipeline: cannot start pipeline workers; building synchronously");
     return A.threads != 0;
 }
@@ -2417,7 +2466,15 @@ static void job_lower(Job *j) {
 // A draw waits for pipeline s: its missing pre-rasterization and fragment shader libraries go to the head of the
 // worker queues (U), so they build in parallel on idle workers, and this thread sleeps until both are published or
 // end (now_ms) passes. A job no worker took within 1 ms (all busy) is built here. Caller holds P.lock.
-static void lib_wait(const VkPipeState *s, const GKey *k, Layout *l, double end) {
+static void u_push(LibJob *j) {
+    if (U.tail) U.tail->next = j;
+    else U.head = j;
+    U.tail = j;
+}
+
+// Queues s's missing pre-rasterization and fragment shader libraries (b: both entries). 0 when one cannot be entered
+// (no layout half, out of memory). Caller holds P.lock.
+static int lib_queue(const VkPipeState *s, const GKey *k, Layout *l, Lib *b[2]) {
     ViKey vk_;
     PrKey pk;
     FsKey fk;
@@ -2426,25 +2483,42 @@ static void lib_wait(const VkPipeState *s, const GKey *k, Layout *l, double end)
     U.waits++;
     const void *key[2] = {&pk, &fk};
     uint32_t size[2] = {sizeof pk, sizeof fk};
-    Lib *b[2];
     int queued = 0;
     for (int i = 0; i < 2; i++) {
         uint64_t h = key_hash(key[i], size[i]);
         if ((b[i] = lib_find(h, key[i], size[i]))) continue;
-        if (!half_layout(l, i)) return;   // gpl_link reports it
+        if (!half_layout(l, i)) return 0;   // gpl_link reports it
         LibJob *j = calloc(1, sizeof *j);
         if (!j || !(b[i] = lib_new(h, key[i], size[i]))) {
             free(j);
-            return;
+            return 0;
         }
         *j = (LibJob){.b = b[i], .kind = i ? LIB_FS : LIB_PR, .l = l, .s = *s, .k = *k};
         b[i]->job = j;
-        if (U.tail) U.tail->next = j;
-        else U.head = j;
-        U.tail = j;
+        u_push(j);
         U.queued++, queued++;
     }
-    if (queued) plat_cond_broadcast(&work_cv);
+    if (queued) plat_cond_broadcast(&work_cv), plat_cond_broadcast(&lib_cv);
+    return 1;
+}
+
+// A waiting draw's whole fast link of p on the library workers: its library jobs, then the link job behind them.
+// The caller then waits for p->info.pipeline. 0 when nothing was queued (the caller links as before). Under P.lock.
+static int link_queue(Pipe *p, const VkPipeState *s, const GKey *k, Layout *l) {
+    Lib *b[2];
+    if (!U.lib_workers || !lib_queue(s, k, l, b)) return 0;
+    LibJob *j = calloc(1, sizeof *j);
+    if (!j) return 0;
+    *j = (LibJob){.l = l, .s = *s, .k = *k, .p = p};
+    p->link_queued = 1;
+    u_push(j);
+    plat_cond_broadcast(&work_cv), plat_cond_broadcast(&lib_cv);
+    return 1;
+}
+
+static void lib_wait(const VkPipeState *s, const GKey *k, Layout *l, double end) {
+    Lib *b[2];
+    if (!lib_queue(s, k, l, b)) return;
     double steal_at = now_ms() + 1.0;
     for (;;) {
         if (!b[0]->building && !b[1]->building) return;
@@ -2454,7 +2528,7 @@ static void lib_wait(const VkPipeState *s, const GKey *k, Layout *l, double end)
             return;
         }
         Lib *q = b[0]->job ? b[0] : b[1]->job ? b[1] : NULL;
-        if (q && (now >= steal_at || !U.idle)) {
+        if (q && !U.lib_workers && (now >= steal_at || !U.idle)) {
             U.stolen++;
             lib_steal(q);   // releases P.lock while building
             continue;
@@ -2494,7 +2568,13 @@ static VkPipeline graphics(const VkPipeState *s, const VkPipeInfo **info, int as
                       : "builds its libraries itself (NX2NAVI_PIPE_WAIT=draw)");
     }
     double end = wait_ms ? now_ms() + wait_ms : 0;
-    if (p && p->building && P.gpl && !p->info.pipeline && !p->fast_tried && p->lay && !is_mesh(s)) {
+    if (p && p->building && P.gpl && !p->info.pipeline && !p->fast_tried && !p->link_queued && p->lay && !is_mesh(s) &&
+        wait_ms && draw_build && U.on && link_queue(p, s, &k, (Layout *)p->lay)) {
+        // the libraries and the link on the library workers; this thread waits below without building
+        p->fast_tried = 1;
+        job_lower(p->job);
+    } else if (p && p->building && P.gpl && !p->info.pipeline && !p->fast_tried && !p->link_queued && p->lay &&
+               !is_mesh(s)) {
         int final = 0, build = wait_ms != 0 && draw_build;
         uint64_t p0 = perf_begin(), t0 = qpc();
         if (build && U.on) {
@@ -3459,9 +3539,10 @@ void vk_pipeline_save(void) {
                (unsigned long long)P.g.dlinks, P.g.dlinks ? P.g.dlink_ms / P.g.dlinks : 0.0, P.g.dlink_max);
         if (U.waits || U.queued)
             rt_log("vk_pipeline: gpl: library jobs for waiting draws: %llu queued, %llu built by a worker, %llu by the "
-                   "thread that needed them (no worker free), %llu waits ended at their limit",
+                   "thread that needed them (no worker free), %llu waits ended at their limit; %llu fast links on the %d "
+                   "library workers",
                    (unsigned long long)U.queued, (unsigned long long)U.by_worker, (unsigned long long)U.stolen,
-                   (unsigned long long)U.timeouts);
+                   (unsigned long long)U.timeouts, (unsigned long long)U.links, U.lib_workers);
         static const char *const kn[4] = {"vertex input", "pre-rasterization", "fragment shader", "fragment output"};
         for (int i = 0; i < 4; i++)
             rt_log("vk_pipeline: gpl: %s libraries %llu (avg %.2f ms, max %.2f ms)", kn[i], (unsigned long long)P.g.lib_n[i],
