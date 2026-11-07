@@ -1,5 +1,4 @@
-# Adapted from MacNativeGames games/<game>/scripts/make_button_icons.py @ 933b6a0 (MIT, Copyright (c) 2026
-# MacNativeGames contributors).
+# Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 """Xbox and keyboard-and-mouse button icons for the game's prompts, drawn on the player's machine for
 tools/make_romfs_patches.py --prompts.
 The outlines are our own shapes with letters cut out of them in the game's own text fonts: nothing of the game is in
@@ -13,7 +12,7 @@ buttons, the triggers, Plus, Minus and the d-pad as an Xbox controller names the
 cross), or every button as the key or mouse button the keyboard presses it with (pc_icons), can swap the glyphs of
 the face buttons (A with B, X with Y), and has fontTools write the font again. The archive then grows by a kilobyte or
 two, more than the game's resource size table allows it: grow_restbl raises those entries (without it the game stops at
-start, MacNativeGames found).
+start).
 
 The button guide in play (bottom right) draws its buttons, L and ZL among them, from images of the common layout
 archive instead (timg/__Combined.bntx, Nt_KeyTexL_00 and Nt_KeyTexZL_00): bntx_redraw paints the same icons into them,

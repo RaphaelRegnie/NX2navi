@@ -8,7 +8,7 @@ Skipped: system instructions and exceptions, whose single step cannot be compare
 atomics, which atomic.py covers. Encodings the lifter rejects are counted per module and mnemonic; --coverage lifts
 every distinct word instead of testing.
 
-Adapted from LAS Recomp tools/test_lift.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 
 Usage: lift.py [--exefs DIR] [--modules main,sdk,subsdk0] [--encodings N] [--cases K] [--seed S] [--jobs J]
        lift.py --coverage

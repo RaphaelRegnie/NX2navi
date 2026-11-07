@@ -1,4 +1,4 @@
-# Python 3.14 venv at .venv-py314: MacNativeGames NX2navi scripts (need stdlib compression.zstd, 3.14+). Source: refs/MacNativeGames/games/<game>/requirements-dev.txt
+# Python 3.14 venv at .venv-py314: the extraction and shader scripts (need stdlib compression.zstd, 3.14+).
 # Recreate: uv venv --python 3.14 .venv-py314 && uv pip install --python .venv-py314/Scripts/python.exe -r tools/requirements-py314.txt
 ansicon==1.89.0
 blessed==1.51.0

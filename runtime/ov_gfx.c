@@ -1,6 +1,6 @@
 // Adapted from MacNativeGames games/<game>/runtime/frontend.m (nn::vi, lines 345-359) and gfx_bridge.c (nv, lines
-// 74-86) @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames contributors). The nvnBootstrapLoader stop takes the place
-// of MacNativeGames' NVN entry (third_party/d2r_gfx/gfx/nvn/hle_nvn.c:115-118); no code of it is copied.
+// 74-86) @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames contributors). The nvnBootstrapLoader stop is the entry
+// to the NVN layer.
 // Graphics bring-up:
 //   nv::*        record the game's allocator callbacks and graphics work memory (guest addresses) for the NVN layer
 //   nn::vi::*    display, layer and native window identities; the vsync event is bound here
@@ -12,7 +12,7 @@
 #include "ov.h"
 #include "platform/platform.h"
 
-#define VI_R_INVALID 0xf601u   // MacNativeGames' result for a call on an unknown display or layer
+#define VI_R_INVALID 0xf601u   // the result for a call on an unknown display or layer
 
 static OvNvState nv;
 static PlatMutex lock = PLAT_MUTEX_INIT;

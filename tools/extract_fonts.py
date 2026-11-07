@@ -2,9 +2,8 @@
 
 NX2navi needs them only with Simplified Chinese, Korean or Traditional Chinese text: those font archives fall back to the
 Standard shared font (runtime/ov_system.c). The fonts come from the system data NCAs 0100000000000810..814 of a
-firmware NCA directory (an unpacked firmware, or an emulator's installed `registered` directory such as
-%APPDATA%\\Ryujinx\\bis\\system\\Contents\\registered). The keys file named in config.local.toml decrypts them; key
-values are never printed. Every NCA FS header, all six IVFC levels and each BFTTF header are verified
+firmware NCA directory (an unpacked firmware, or an emulator's installed `registered` directory). The
+keys file named in config.local.toml decrypts them; key values are never printed. Every NCA FS header, all six IVFC levels and each BFTTF header are verified
 (tools/vendor/macnativegames/extract_shared_fonts.py).
 
 Runs under .venv-py314:  python tools\\extract_fonts.py --firmware <dir>   (or set input.firmware in config.local.toml)

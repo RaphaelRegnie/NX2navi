@@ -16,12 +16,12 @@
 //
 // The floor: with a shorter step (ratio below 0.125) 1.4.3 aborts within seconds of some save loads (issue #241, a
 // 280 Hz monitor): Havok's hkDefaultMemoryImpl reports "Out of memory" for the buffer the physics pre-solve (profiler
-// scope "TtPreSolve") resizes in main+0x1261630. Forced steps on the Depths save: 1/240 s plays, 1/244 s and shorter
+// scope "TtPreSolve") resizes in main+0x1261630. Forced steps on one save: 1/240 s plays, 1/244 s and shorter
 // abort; the field, sky island and fight saves play at 1/280 s, the town save aborts after about 800 frames. The
 // same short steps also crash a physics worker reading that buffer's contacts: an access violation in main+0x1292560
 // or its caller main+0x1286870 (narrowphase contact setup, reached from the grid task main+0x12f1ea0), reading a
 // Havok body's shape at body+0x78 as null or garbage (issues #29 and #92, 240 Hz monitors with fps_limit = display).
-// Steps drawn from 1/252..1/230 s crash the Depths load there in seconds; 1/240..1/230 s plays. The frame limit
+// Steps drawn from 1/252..1/230 s crash that save's load in seconds; 1/240..1/230 s plays. The frame limit
 // stops at 240 too (LIMIT_MAX_HZ), so the floor only catches the average dipping under 1/240 s at that limit: a
 // present late by less than a period keeps the pacer's phase (nvn_api_obj.c, pace), so the next display interval is
 // shorter than the period. No limit makes the game run slower than the clock.
@@ -118,7 +118,7 @@ static int game_interval = 1;   // the present interval of the newest frame (fra
 // A build without the fps60 and realtime patch sets (Ocarina) steps its game by the clock itself: walked by the same
 // frame-numbered input script, Link covered half the distance at 120 fps that he covers at 60. There the pacer holds
 // frames to the limit alone (nvn_api_obj.c present_period), the game's own 60 Hz interval aside, and the limit may be
-// any rate or none (LIMIT_FREE_MAX_HZ, "unlimited"); NX2navi's physics fails past LIMIT_MAX_HZ, Ocarina has no such floor.
+// any rate or none (LIMIT_FREE_MAX_HZ, "unlimited"); LIMIT_MAX_HZ is for builds whose physics fail past it, Ocarina has no such floor.
 #define LIMIT_FREE_MAX_HZ 1000
 int frame_free_running(void) { return rt_patch_set("fps60") < 0 && rt_patch_set("realtime") < 0; }
 int frame_limit_adjustable(void) { return 1; }
@@ -212,8 +212,8 @@ static uint64_t read_ptr(uint64_t a) {
     return read_guest(a, &p, 8) ? p : 0;
 }
 // 1.2.1: [main+0x4728538] (1.1.0: [main+0x4630a68], 1.4.3: [main+0x3add238]) +0x1e8 scene, its component 13 lists the
-// resident actors; the one named "Player" has its position at +0x2b4 (MacNativeGames world_survey.c, game_version.h
-// NX2NAVI_GAME_V121/V143). The 1.1.0 slot was measured from its own dereference chain: 181 scene accesses in that build
+// resident actors; the one named "Player" has its position at +0x2b4.
+// The 1.1.0 slot was measured from its own dereference chain: 181 scene accesses in that build
 // read it, and one of them reproduces this walk (the 14-component check, component 13, the 0x70 stride and the name
 // compare) instruction for instruction.
 static int player_pos(float xyz[3]) {

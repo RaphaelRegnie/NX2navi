@@ -1,8 +1,7 @@
 """One loaded NSO module as the generator and its analyses see it: image at a guest base, .text as words,
 function seeds, and bounded-cache instruction lifting.
 
-The function seeds and the .eh_frame_hdr reader are adapted from LAS Recomp tools/analyze.py and tools/gen.py
-@ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+The function seeds and the .eh_frame_hdr reader: Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 """
 import struct
 from collections import OrderedDict

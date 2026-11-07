@@ -1,8 +1,8 @@
 // nx2navi.exe --probe-nvn: the NVN front end and the null back end, called the way the
 // game calls them: through the real nvnp_* procs with a synthetic Cpu (AAPCS64 arguments in x0..x7 and v0..v7), on the
 // guest main thread, on the null back end whatever NX2NAVI_GPU says. Checks, in order:
-//   - pool, buffer, texture, sampler, sync and event objects against MacNativeGames' semantics (hle_nvn.c), the
-//     texture storage sizes against the original-SDK goldens of MNG tests/texture_auto_layout/probe.c;
+//   - pool, buffer, texture, sampler, sync and event objects against the expected NVN semantics, the
+//     texture storage sizes against original-SDK goldens;
 //   - every op kind recorded through the CommandBuffer procs and parsed back with nvn_op_first/next/payload, and
 //     CallCommands inlining a recording;
 //   - the null back end's CPU-visible side effects (event write and add, counter report, buffer copy, uniform update,
@@ -107,7 +107,7 @@ static void probe_device_and_pools(void) {
     CHECK(nvn_pool_find(U(pmem) + 0x100, 0x200) == P() && !nvn_pool_find(U(pmem) + PROBE_POOL_SIZE - 8, 16), "pool index");
     n_objects += 6;
 
-    // refused: no storage, PHYSICAL | VIRTUAL, a size that is not a 64 KiB multiple (MNG nx2navi_vpool.c)
+    // refused: no storage, PHYSICAL | VIRTUAL, a size that is not a 64 KiB multiple
     static NVNmemoryPool bad;
     CHECK(make_pool(&bad, NULL, 0x10000, NVN_MEMORY_POOL_FLAGS_CPU_CACHED) == 0, "a pool without storage is refused");
     CHECK(make_pool(&bad, gmem, PROBE_GPOOL_SIZE, NVN_MEMORY_POOL_FLAGS_PHYSICAL | NVN_MEMORY_POOL_FLAGS_VIRTUAL) == 0,
@@ -193,7 +193,7 @@ static void set_tex(int fmt, int w, int h, int levels, uint64_t off) {
     CALL(nvnTextureBuilderSetStorage, U(&texb), U(&pool), off);
 }
 
-// Four of the 40 original-SDK goldens of MNG texture_auto_layout/probe.c: {format, width, height, levels, size}
+// Four of the 40 original-SDK layout goldens: {format, width, height, levels, size}
 static const struct { int format, width, height, levels; uint64_t size; } layout_goldens[] = {
     {0x25, 40, 9, 6, 6144}, {0x25, 40, 128, 8, 37888}, {0x48, 160, 160, 8, 57344}, {0x48, 160, 516, 10, 222208}};
 

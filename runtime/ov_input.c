@@ -5,7 +5,7 @@
 // NX2NAVI_OPERATION_MODE=handheld it is the handheld controller (id 0x20, style bit 1) and player 1 is not connected,
 // which is the controller the game reads in that mode. Mouse and keyboard report no input. The controller has two
 // vibration devices (left, right) played on the gamepad's motors (NX2NAVI_RUMBLE=0: none) and a six-axis sensor fed by
-// the gamepad's gyro and accelerometer (NX2NAVI_MOTION=0, live: reads at rest). State layouts follow libnx HID.
+// the gamepad's gyro and accelerometer (NX2NAVI_MOTION=0, live: reads at rest). State layouts follow the HID shared-memory format.
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -161,7 +161,7 @@ static void ov_keyboard_state(Cpu *c) {
     plat_mutex_unlock(&lock);
 }
 
-// ---- vibration and six-axis sensor (MacNativeGames hid_feedback.c)
+// ---- vibration and six-axis sensor
 // Handles are the SDK's (nn::hid::utility, sdk+0x4a6e00 and sdk+0x4a6ab0): byte 0 the style index (3 full-key,
 // 4 handheld), byte 1 the controller id, byte 2 the device (vibration 0 left / 1 right, six-axis 2). Every call under
 // the public functions goes through nn::hid::detail (sdk's PLT), answered here instead of by the hid service, including

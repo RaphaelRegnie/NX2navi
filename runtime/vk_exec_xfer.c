@@ -22,11 +22,11 @@
 // from guest memory; a counter reported by an earlier submission that is not done yet counts as 0 if it is a timestamp,
 // as unknown if it is samples passed. An unknown count renders: the report usually sits in the command buffer being
 // recorded, so its value cannot be waited for, and the word in memory still holds an older query's count. Rendering
-// costs at most the work the condition would have saved (MacNativeGames nvn_mtl.m decides the same); in the field
+// costs at most the work the condition would have saved; in the field
 // NX2NAVI conditions only on timestamp reports. The condition sets VkExec.render_disabled, which vk_exec.c honours for
 // clears and vk_exec_draw.c for draws and dispatches. A condition that cannot be read (address outside every pool)
 // renders.
-// Copies and CLEAR_TEX are not conditional (as in MacNativeGames, nvn_mtl.m).
+// Copies and CLEAR_TEX are not conditional.
 //
 // The copy semantics (region and layer arithmetic, row and image strides, whole-level clears, copy / blit / resolve
 // choice) follow MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m:10080-10368, 10618-10642, 1700-1725
@@ -670,7 +670,7 @@ static int int_format(VkFormat f) {
 }
 
 // Whole levels only (vkCmdClear*Image has no rectangle); partial regions, channel masks and a view that reinterprets
-// the format are skipped (MacNativeGames does not replay them either, nvn_mtl.m).
+// the format are skipped.
 static void clear_tex(VkExec *ex, const p_clear_tex *p) {
     const tex_t *t = p->tex;
     if (!t) return;

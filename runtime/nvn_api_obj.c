@@ -720,7 +720,7 @@ NVN_API(nvnWindowInitialize) {
             t0 ? t0->d.width : 0, t0 ? t0->d.height : 0, t0 ? t0->d.format : 0);
     ret_x(c, 1);
 }
-// void nvnWindowFinalize(NVNwindow *w): nothing to release (MNG lists it in g_nops)
+// void nvnWindowFinalize(NVNwindow *w): nothing to release
 NVN_API(nvnWindowFinalize) { (void)c; }
 NVN_API(nvnWindowSetPresentInterval) {
     win_t *o = WN(c);
@@ -750,7 +750,7 @@ static uint64_t present_period(const win_t *o) {
     return (o->interval > 0 ? (uint64_t)o->interval : 1ull) * 1000000000ull / VSYNC_HZ;
 }
 
-// MacNativeGames nvn_pace.h: the present slot is the previous slot plus one period. Early: wait for the slot. Late by
+// The present slot is the previous slot plus one period. Early: wait for the slot. Late by
 // less than a period: present at once and keep the phase. Behind by a period or more: restart from now, no catch-up
 // burst. Returns the ns to wait.
 static uint64_t pace(uint64_t *target, uint64_t now, uint64_t period) {

@@ -3,8 +3,8 @@
 // added), NX2NAVI_COLOR_CONTRAST and NX2NAVI_COLOR_SATURATION (%, 100 = unchanged) and NX2NAVI_COLOR_GAMMA (exponent, 1 =
 // unchanged), read when the settings change. NX2NAVI_COLOR_PRESET names a profile (vk_color_preset) whose values win
 // over the four, so a profile set in nx2navi.ini or by NX2NAVI_MENU_TEST_SET applies without the menu; custom uses the
-// four. At the default values nothing is recorded and the present is what it was. Design and preset values: STS78721's
-// colour profiles (issue #136).
+// four. At the default values nothing is recorded and the present is what it was. Design and preset values: the
+// colour profiles of issue #136.
 //
 // One compute pass (shaders/color_grade.comp) reads the crop rectangle of the game's image and writes an RGBA16F image
 // of its size, which present_image then hands to FSR or the blit in place of the game's image. The HUD is part of that

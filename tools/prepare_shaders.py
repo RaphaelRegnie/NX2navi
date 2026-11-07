@@ -1,12 +1,12 @@
-"""Prepare the default variant of every game shader and the variants of the MacNativeGames shared shader list for a
+"""Prepare the default variant of every game shader and the variants of the shared shader list for a
 build, once, before play.
 
-The list (refs/MacNativeGames games/<game>/assets/shader_list.tsv, MIT; docs/shader-list.md there) names shader variants
+The list (tools/shader_list.py) names shader variants
 players met: a shader key (sha256 of the NVN control section and code, as tools/shader_census.py names shaders) and
 the translator answers it was translated for. This tool reads the shaders from the extracted RomFS and ExeFS
 (tools/shader_census.py inventory), keeps the list's variants whose shader is in this game version, adds each shader's
-default variant (every texture slot a 2D texture, float vertex inputs and colour outputs, as MacNativeGames' seed
-translates every shader for its default bind state: prepare_shader_seed.py all_default), and writes them next to the
+default variant (every texture slot a 2D texture, float vertex inputs and colour outputs: the
+default bind state), and writes them next to the
 build's nx2navi.exe in the record layouts of runtime/gfx_shader.c ("answers met in play"):
 
     seed-programs.bin  "NX2NSPRG": stage, length, c1 length, runtime code hash, control section, code, c1
@@ -77,9 +77,9 @@ def read_list(path):
 
 
 def pipeline_variants(key):
-    """The vertex and fragment variant names of an R/B row's pipeline key. Since MacNativeGames f024ef04 (2026-10-28) the
-    NX2navi list keeps keys packed, "<vs variant>:<fs variant>:<the rest in hex>"; older revisions and contribution files
-    hold the whole key in hex, "<vs variant>\\0<fs variant>\\0" + a Metal descriptor (docs/shader-list.md there)."""
+    """The vertex and fragment variant names of an R/B row's pipeline key. Since its revision of 2026-10-28 the
+    list keeps keys packed, "<vs variant>:<fs variant>:<the rest in hex>"; older revisions and contribution files
+    hold the whole key in hex, "<vs variant>\\0<fs variant>\\0" + a Metal descriptor."""
     if ':' in key:
         return key.split(':', 2)[:2]
     return [n.decode('ascii', 'replace') for n in bytes.fromhex(key).split(b'\0')[:2]]

@@ -1,7 +1,7 @@
 // nx2navi.exe --probe-nvn-tex: texture storage size, block height, alignment and mip offsets of nvn_tex.c.
 // Ported from MacNativeGames games/<game>/tests/texture_auto_layout/probe.c @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou).
 // The 40 size and block-height goldens are original-SDK CPU queries for uncompressed and BC3-sRGB boundary cases; no game bytes.
-// The old rounded-up heuristic mismatches 16 of them, including the 160x160 shrine pad. MNG's nvn_bl_offset address checks
+// The old rounded-up heuristic mismatches 16 of them, including the 160x160 case. Block-linear address checks
 // belong to the deswizzler and are not part of this probe.
 #include <stdint.h>
 #include <stdio.h>

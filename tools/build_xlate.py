@@ -1,7 +1,7 @@
-"""Build the shader translator: build/xlate/nx2navi_xlate.exe (Ryujinx 1.3.2 + patches, NativeAOT, SPIR-V for Vulkan).
+"""Build the shader translator: build/xlate/nx2navi_xlate.exe (vendored translator 1.3.2 + patches, NativeAOT, SPIR-V for Vulkan).
 
 Copies tools/vendor/ryujinx to build/xlate/ryujinx, applies tools/xlate/patches/*.patch there (tools/vendor stays
-byte-identical; 0001-0004 are MNG's, 0005-0013 and 0015-0022 are ours), then runs `dotnet publish`. Needs the .NET 10 SDK, the MSVC build
+byte-identical), then runs `dotnet publish`. Needs the .NET 10 SDK, the MSVC build
 tools and vswhere.exe (docs/building.md). Run with .venv. On Linux it builds build/xlate/nx2navi_xlate for linux-x64, which
 NativeAOT links with the system's clang (no MSVC); NativeAOT builds for the OS it runs on only.
 
@@ -57,7 +57,7 @@ def mng_pin() -> str:
 
 
 def pinned_blobs() -> dict[str, str]:
-    """Git blob ids of MNG's vendor/ryujinx at the pinned commit. The checkout itself may be newer than the pin or
+    """Git blob ids of vendor/ryujinx in the refs/ checkout at the pinned commit. The checkout itself may be newer than the pin or
     carry CRLF line ends (core.autocrlf), so its files are not compared."""
     out = subprocess.run(["git", "-C", str(MNG_VENDOR.parent.parent), "ls-tree", "-r", mng_pin(), "vendor/ryujinx"],
                          capture_output=True, text=True)
@@ -80,7 +80,7 @@ def blob_ids(base: Path) -> dict[str, str]:
 
 
 def verify_vendor() -> None:
-    """tools/vendor/ryujinx must be byte-identical to MNG's copy at the pinned commit (when refs/ is present)."""
+    """tools/vendor/ryujinx must be byte-identical to the refs/ checkout's copy at the pinned commit (when present)."""
     if not MNG_VENDOR.is_dir():
         print("refs/MacNativeGames missing: vendor comparison skipped")
         return

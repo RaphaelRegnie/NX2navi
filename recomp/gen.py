@@ -1,4 +1,4 @@
-# Adapted from LAS Recomp tools/gen.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+# Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 """Generate C for the ExeFS modules: function discovery, then parallel emission into chunked C files.
 
 Usage: gen.py --exefs build/extracted/v121/exefs --out generated/v121 [--modules main,subsdk0,sdk] [--jobs N]

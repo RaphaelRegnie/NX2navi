@@ -11,7 +11,7 @@
 #include "host.h"
 #include "platform/platform.h"
 
-#define CODEC_R_INVALID 0x1fcd1u   // MacNativeGames' "invalid argument" result for nn::codec
+#define CODEC_R_INVALID 0x1fcd1u   // the "invalid argument" result for nn::codec
 #define OPUS_WORK_SIZE 0x9000u     // what the game is told to reserve: libopus stereo decoder state (about 26 KiB) plus 4 KiB
 
 // One record per initialised decoder object (the guest's HardwareOpusDecoderType). The registry lock only guards the

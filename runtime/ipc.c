@@ -1,5 +1,5 @@
 ﻿// Adapted from MacNativeGames games/<game>/runtime/ipc.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors). Message framing per libnx sf/hipc.h, cmif.h, tipc.h (ISC), read for the layout only.
+// contributors). Message framing per the HIPC, CMIF and TIPC wire layouts.
 // In-process Horizon IPC: SVCs 0x15, 0x1F, 0x21, 0x22, the sm: service manager
 // and the service table. The SDK client code runs unchanged: requests are read from the calling thread's message
 // buffer (TLR, or the user buffer of 0x22) and answered in place. Unknown ports, services and commands stop with their
@@ -361,7 +361,7 @@ static void respond(uint32_t *m, int tipc, const IpcResponse *rs) {
         payload += 16;
     }
     unsigned used = (unsigned)(payload - words) + header + rs->data_size;
-    unsigned nwords = tipc ? (used + 3) / 4 : (used + 16 + 3) / 4;   // CMIF keeps alignment slack like libnx
+    unsigned nwords = tipc ? (used + 3) / 4 : (used + 16 + 3) / 4;   // CMIF keeps alignment slack
     if ((size_t)(words - (uint8_t *)out) + nwords * 4 > IPC_MSG_BYTES) rt_fatal("ipc: response exceeds the message buffer");
     if (tipc) memcpy(payload, &rs->result, 4);
     else {
@@ -602,7 +602,7 @@ static void msg_build(uint32_t *m, const Msg *q) {
         uint32_t h[4] = {CMIF_IN_MAGIC, 0, q->cmd, 0};
         memcpy(payload, h, 16);
         if (q->size) memcpy(payload + 16, q->data, q->size);
-        ndata = (16 + 16 + q->size + 3) / 4;   // libnx reserves the 16-byte alignment pad in the data size
+        ndata = (16 + 16 + q->size + 3) / 4;   // the 16-byte alignment pad is reserved in the data size
     }
     m[1] = ndata | (special ? 1u << 31 : 0);
 }

@@ -1,7 +1,7 @@
-"""Build hactool: toolchain/hactool/hactool.exe (SciresM/hactool at a pinned commit + tools/hactool/*.patch).
+"""Build hactool: toolchain/hactool/hactool.exe (hactool at a pinned commit + tools/hactool/*.patch).
 
 Fetches the pinned commit into toolchain/src/hactool, resets it (local changes and build output there are discarded),
-applies portable.patch (MacNativeGames' Windows-relevant changes) and unicode.patch (ours), and builds a static exe
+applies portable.patch (title keys and BKTR fixes) and unicode.patch (a UTF-8 manifest), and builds a static exe
 with MSYS2 UCRT64 gcc; mbedtls comes with hactool's tree. The exe and hactool's LICENSE go to toolchain/hactool, where
 tools/extract.py and tools/make_release.py take them. Run with .venv. On Linux: the system's cc and make build
 toolchain/hactool/hactool (unicode.patch only adds a Windows manifest, under EXEEXT .exe).

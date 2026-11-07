@@ -3,7 +3,7 @@
 // Texels past the right or bottom edge repeat the last column or row.
 //
 // Colour: the BC1 four-colour block of the box around the block's colours, its diagonal turned to the sign of the
-// colours' covariance and inset by 1/16 of the range (the bounding-box method of stb_dxt and of the hardware's BC1 recompression),
+// colours' covariance and inset by 1/16 of the range (the bounding-box method),
 // then each texel takes the nearest of the four palette entries along that axis. Alpha: the eight-value BC3 alpha
 // block between the block's smallest and largest alpha. The bytes are what the texels hold, so an sRGB image keeps
 // sRGB-encoded values, as BC3_SRGB expects.

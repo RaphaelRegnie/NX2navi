@@ -2,7 +2,7 @@
 // into a radial dead zone, clamps the radius to one and applies StickExponent. The mouse enters after all three,
 // at main+0x874cb4, before the game's X/Y inversion and input-activity flags. It never becomes a HID stick value.
 // Free orbit removes that sample again before the camera's additional vertical square/velocity filters and adds
-// raw-count angular deltas at its spherical-angle output instead. object has a separate post-curve hook.
+// raw-count angular deltas at its spherical-angle output instead. Object manipulation has a separate post-curve hook.
 // The ordinary stick's result stays, so a controller still uses the game's own response.
 //
 // This is deliberately not a render-camera override: the game remains responsible for aiming, camera collision,
@@ -284,7 +284,7 @@ static void orbit_angles(Cpu *c) {
     c->v[12] = bits;   // displaced ldr s12, [sp, #0x44]
 }
 
-// object reads the player's manipulation input rather than the camera's processed stick. Insert the mouse
+// Object manipulation reads the player's manipulation input rather than the camera's processed stick. Insert the mouse
 // after that controller's per-axis power curves (main+0x1d59460), preserving the keyboard/controller contribution.
 static void hand_input(Cpu *c) {
     __atomic_store_n(&hand_update, plat_now_ns(), __ATOMIC_RELEASE);

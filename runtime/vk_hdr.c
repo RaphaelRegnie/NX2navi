@@ -18,8 +18,7 @@
 // 3. vk_hdr_encode: on the present, the crop rectangle goes to PQ code values in an RGBA16F image (shaders/hdr_encode.comp)
 //    that FSR 1 or the blit scale into the swapchain. vk_hdr_ui_*: the in-game menu draws into an RGBA8 image and
 //    shaders/hdr_ui.frag blends it onto the swapchain at the HUD's white.
-// The tonemap's approach is RenoDX's NX2navi mod by souperman9 and Musa on ShortFuse's RenoDX (github.com/clshortfuse/renodx,
-// src/games/nx2navi, MIT); the code is ours.
+// The tonemap's approach: an "extended vanilla" curve (shaders/hdr_tonemap.frag).
 #include "vk.h"
 
 #include <math.h>

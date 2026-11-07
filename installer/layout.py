@@ -11,7 +11,7 @@ Release (docs/installer.md "Release layout"), root = the unpacked folder:
                             patches.c, ov_zstd.c) and nx2navi.ico; runtime/deps/ holds
                             include/ + lib/ of Vulkan, SDL3, Opus, libvpx and VMA (build_game.py --deps)
     bin/                    nx2navi_xlate.exe (+ nx2navi_xlate.id), hactool.exe, ninja.exe, SDL3.dll, libopus-0.dll
-    data/shader_list.tsv    the MacNativeGames shader list
+    data/shader_list.tsv    the shared shader list
     data/pgo-<v>.profdata   the execution profile the update's code is compiled with (tools/pgo.py; Windows only);
                             without one the game is built at -O1
     nx2navi.ini.example

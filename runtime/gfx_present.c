@@ -63,7 +63,7 @@ void gfx_window_focus_changed(int in) {
            t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
 }
 
-// The window was closed: the process ends with it, as in MNG, once a save Commit still running in the background is
+// The window was closed: the process ends with it, once a save Commit still running in the background is
 // done. After gfx_window_request_restart the executable then starts again with the same command line and environment
 // (plat_restart), and the new process waits until this one is gone (main.c) before it moves the log and opens the
 // RomFS and the saves.

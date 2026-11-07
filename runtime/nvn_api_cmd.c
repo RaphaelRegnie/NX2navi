@@ -246,9 +246,8 @@ static void copy_view(view_t *dst, uint8_t *has, const NVNtextureView *v) {
 // - the replay's current render targets carry over to later submissions and are compared by pointer (vk_exec.c set_rt),
 //   so a freed address reused by a new pin would read as the same target: nvn_pins_sweep runs between submissions on
 //   the thread that replays them and keeps the pins it is given.
-// MacNativeGames hit the same growth (3.16 million copies, 405 MB after 27 minutes) and marks pins by walking every live
-// recording each window (hle_nvn.c pin_scan); counting at copy and release walks each copy's ops once more, when it is
-// freed. NX2NAVI_PIN_SWEEP=0 keeps every copy.
+// Instead of marking pins by walking every live recording each window, counting at copy and release walks each
+// copy's ops once more, when it is freed. NX2NAVI_PIN_SWEEP=0 keeps every copy.
 typedef struct {
     tex_t t;              // first: ops hold pins as tex_t pointers
     uint64_t last_use;    // nsubmits at the last tex_pin or the last drop of refs
@@ -1036,7 +1035,7 @@ NVN_API(nvnCommandBufferDrawElementsInstanced) {
 }
 // void nvnCommandBufferDrawElementsIndirect(NVNcommandBuffer *cmd, NVNdrawPrimitive prim, NVNindexType type,
 // NVNbufferAddress indices, NVNbufferAddress indirect): the arguments at indirect are often GPU-written, so the replay
-// draws with vkCmdDrawIndexedIndirect from the pool buffer (nxnative hle_nvn.c, SavageWindRecomp cmdbuf.c)
+// draws with vkCmdDrawIndexedIndirect from the pool buffer
 NVN_API(nvnCommandBufferDrawElementsIndirect) {
     *REC(cmd_of(c), OP_DRAW_IDX_IND, p_draw_idx_ind) = (p_draw_idx_ind){(int)arg_x(c, 1), (int)arg_x(c, 2), arg_x(c, 3), arg_x(c, 4)};
 }
@@ -1133,8 +1132,8 @@ NVN_API(nvnCommandBufferCopyTextureToTexture) {
 }
 // void nvnCommandBufferDownsample(NVNcommandBuffer *cmd, const NVNtexture *src, const NVNtexture *dst): level 0 of src
 // into level 0 of dst, whole extents, filtered. Recorded as a linear-filter texture copy: copy_t2t resolves a
-// multisample source into an equal-size target and blits (2x2 average at half size) between sizes. As nxnative
-// hle_nvn.c and SavageWindRecomp cmdbuf.c record it; docs/maxwell.md 1.19.
+// multisample source into an equal-size target and blits (2x2 average at half size) between sizes
+// (docs/maxwell.md 1.19).
 NVN_API(nvnCommandBufferDownsample) {
     p_copy_t2t *o = REC(cmd_of(c), OP_COPY_T2T, p_copy_t2t);
     o->src = tex_pin(arg_p(c, 1));

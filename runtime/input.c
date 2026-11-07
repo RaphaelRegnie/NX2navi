@@ -1,5 +1,5 @@
 // Host input for nn::hid (runtime/ov_input.c): an SDL3 gamepad (no SDL window needed), the keyboard and the mouse,
-// merged into Switch npad button bits and stick axes. Button order follows libnx HidNpadButton (ISC). The key and pad
+// merged into Switch npad button bits and stick axes. Button order follows HidNpadButton. The key and pad
 // bindings are the tables in input_map.c (nx2navi.ini overrides them). The keyboard and the mouse come from the window
 // system's back end (input_wsys.h: input_win.c with Win32, input_sdl.c with SDL), which also owns the cursor capture.
 // Keys and their map: docs/controls.md.
@@ -277,7 +277,7 @@ static float mouse_sens_get(void) {
 // ---- walk key: the keyboard's stick samples scaled down while a key is held (NX2NAVI_WALK_KEY, NX2NAVI_WALK_SCALE)
 // A keyboard key is all or nothing, so every keyboard-driven stick sample is +/-32767 and the game only ever sees a
 // full tilt. Holding this key scales those two samples, which gives the half tilt a gamepad gets from its analog range,
-// so the keyboard can walk as well as run. the hardware and eden do the same with their modifier and modifier_scale settings.
+// so the keyboard can walk as well as run.
 // Only the keyboard is scaled: the gamepad's axes and the mouse camera sample their own values.
 static int walk_key = KEY_NONE;        // NX2NAVI_WALK_KEY as a KEY_*, KEY_NONE = off; live (cfg_version)
 static float walk_scale = 0.51f;       // NX2NAVI_WALK_SCALE, 0.2 to 0.9; live (cfg_version)
@@ -599,7 +599,7 @@ static void pick(int32_t *x, int32_t *y, int32_t kx, int32_t ky) {
     if (b > a) { *x = kx; *y = ky; }
 }
 
-// The shake key (B_SHAKE): the game detaches a part fused to what object holds when the right stick swings left and
+// The shake key (B_SHAKE): the game detaches a part fused to the held object when the right stick swings left and
 // right a few times. A press swings it for SHAKE_NS, holding keeps it swinging; each side lasts SHAKE_SIDE_NS, two
 // frames at the game's 30 fps, so every side is read even at 20 fps. Returns the stick x, 0 while not shaking.
 // Under lock.
@@ -933,7 +933,7 @@ int input_rumble(uint16_t low, uint16_t high, uint32_t ms) {
 // SDL gamepad sensor axes (SDL_sensor.h, a gamepad held in front of you): x to the right, y up out of the face (lying
 // flat face up, +y points at the ceiling), z toward the player (out of the bottom edge). The accelerometer reads the
 // push against gravity in m/s^2 (lying flat: y = +9.81); the gyro reads rad/s, counter-clockwise positive (right hand).
-// Switch six-axis axes (nn::hid, as MacNativeGames' GCMotion feed and its Pro Controller HID path use them): x to the
+// Switch six-axis axes (nn::hid): x to the
 // right, y toward the top edge (away from the player), z out of the face; acceleration as gravity reads (lying flat:
 // z = -1 G). So Switch x = SDL x, Switch y = -SDL z, Switch z = SDL y: a rotation (right-handed to right-handed), so the
 // gyro keeps its sense, while the acceleration is also negated (push -> gravity) and scaled to G.

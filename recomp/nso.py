@@ -1,4 +1,4 @@
-# Adapted from LAS Recomp tools/nso.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+# Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 """NSO loader: decompress segments, build the memory image, parse MOD0/dynamic info."""
 import struct
 import sys

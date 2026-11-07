@@ -253,8 +253,7 @@ static void parse_dynamic(Mod *m) {
     m->njmprel = pltsz / sizeof(Elf64Rela);
 }
 
-// The constructor state flag DT_INIT checks: ADRP xN at DT_INIT+16, LDR wM, [xN, #imm] at +20 or +24
-// (MNG scripts/prepare_runtime.py).
+// The constructor state flag DT_INIT checks: ADRP xN at DT_INIT+16, LDR wM, [xN, #imm] at +20 or +24.
 static uint64_t decode_ctor_flag(const Mod *m) {
     uint64_t init = m->pub.init;
     if (!init) return 0;
@@ -319,7 +318,7 @@ static void mark_used(int observers, const char *name) {
         if (!strcmp(hostfn_table_name(observers, i), name)) (observers ? obs_used : ovr_used)[i] = 1;
 }
 
-// Order (MNG loader.c:216-224): observer (JUMP_SLOT only), override by name, own definition, other modules in load
+// Order: observer (JUMP_SLOT only), override by name, own definition, other modules in load
 // order, weak -> 0, strong -> named fatal stub. Overrides also replace a module's own symbols.
 static Res resolve(Mod *m, uint32_t si, int jump) {
     Res *cache = jump ? &m->res_jump[si] : &m->res_plain[si];
@@ -412,7 +411,7 @@ static void count_imports(Mod *m) {
     }
 }
 
-// Every non-JUMP_SLOT reference to nnMain holds the real address (MNG loader.c:229-239).
+// Every non-JUMP_SLOT reference to nnMain holds the real address.
 static void verify_identity(void) {
     uint64_t real = ldr_symbol("nnMain");
     if (!real) rt_fatal("loader: nnMain is not defined");
@@ -552,8 +551,8 @@ uint64_t ldr_plt_stub(const char *module, const char *name) {
 }
 
 // ---- --probe-loader
-// Expected values, measured on the 1.1.0, 1.2.1 and 1.4.3 modules; the 1.4.3 relocation totals match the ones
-// MacNativeGames' port notes give for that version. 1.1.0 shares subsdk0 and sdk with 1.2.1 down to every count.
+// Expected values, measured on the 1.1.0, 1.2.1 and 1.4.3 modules.
+// 1.1.0 shares subsdk0 and sdk with 1.2.1 down to every count.
 typedef struct {
     const char *name;
     uint64_t kinds[K_COUNT], total, sym_import, sym_own;

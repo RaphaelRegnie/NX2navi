@@ -128,7 +128,7 @@
  "ui.pick_keys": "Выберите prod.keys",
  "ui.pick_firmware": "Выберите папку прошивки Switch (Contents/registered)",
  "ui.pick_dest": "Выберите папку установки",
- "ui.firmware_help": "Для текста на китайском и корейском: папка Contents/registered прошивки, например из Ryujinx или The hardware. Установка скопирует из неё системные шрифты Switch в папку установки.",
+ "ui.firmware_help": "Для текста на китайском и корейском: папка Contents/registered прошивки. Установка скопирует из неё системные шрифты Switch в папку установки.",
  "ui.dlss": "Загрузить NVIDIA DLSS (nvngx_dlss.dll) для видеокарт NVIDIA RTX",
  "ui.dlss_help": "Из DLSS SDK от NVIDIA на GitHub, по лицензии NVIDIA RTX SDK (github.com/NVIDIA/DLSS). Без него настройки dlaa и DLSS ничего не делают.",
  "ui.compressed_help": "Сжатые файлы NSZ и XCZ подходят как есть: установка сама их распакует (для этого, пока извлекаются данные игры, нужно столько свободного места, сколько занимают распакованные файлы).",

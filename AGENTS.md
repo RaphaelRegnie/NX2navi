@@ -13,11 +13,11 @@ This repository is public. Game data lives outside it and every derived file sta
 
 ## Reusing code
 
-`refs/` holds the upstream checkouts (`tools/fetch_refs.sh` recreates it). Read-only.
+`refs/` holds the pinned checkout the build reads (`tools/fetch_refs.sh` recreates it). Read-only.
 
 - Copy only MIT, BSD, ISC, zlib or Apache-2.0 code, keep its header, and add a row to `THIRD_PARTY_NOTICES.md`.
-- the hardware, suyu, OpenSmash-Ultimate and other GPL code: read for behaviour, write our own.
-- `tools/vendor/` stays byte-identical to upstream; Windows changes go in `tools/extract.py`.
+- GPL code is never copied: write our own.
+- `tools/vendor/` stays byte-identical to its source; Windows changes go in `tools/extract.py`.
 
 ## Code
 
@@ -26,8 +26,8 @@ This repository is public. Game data lives outside it and every derived file sta
 - Generated C is never edited by hand: change the generator (`recomp/`).
 - Every lifter change passes the differential tests against Unicorn ([docs/building.md](docs/building.md), "Checks"). After changing `recomp/jumptables.py`, `tests\jumptables_check.py` reports 0 disagreements on 1.2.1 and 1.4.3.
 - `recomp/layout.py` alone decides module bases.
-- Graphics bugs: [docs/maxwell.md](docs/maxwell.md) lists the Maxwell behaviour the Vulkan path must match and the NX2navi bugs other ports fixed.
-- Comments say what the code does and why, in words that stand on their own. Cite our code by file plus function (a line number may follow as a hint) and upstream code by project, file and function: `refs/` moves, so its line numbers rot. Commit hashes belong to the attribution of copied code.
+- Graphics bugs: [docs/maxwell.md](docs/maxwell.md) lists the Maxwell behaviour the Vulkan path must match, what goes wrong when it does not, and what our runtime does.
+- Comments say what the code does and why, in words that stand on their own. Cite our code by file plus function (a line number may follow as a hint). Comments and docs do not name other projects or say where code came from: the license header of copied code and its `THIRD_PARTY_NOTICES.md` row carry that.
 
 ## Writing
 

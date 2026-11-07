@@ -6,9 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Actions are the bit numbers of libnx HidNpadButton (input.h); 16..23 are the stick directions, which keys drive as
+// Actions are the bit numbers of HidNpadButton (input.h); 16..23 are the stick directions, which keys drive as
 // stick deflection. B_SHAKE is a key of its own, never a button bit: a press shakes the right stick left and right for
-// the game (input.c shake_stick), which detaches a fused part held with object. A pad shakes its own stick.
+// the game (input.c shake_stick), which detaches a fused part from the held object. A pad shakes its own stick.
 enum {
     B_A = 0, B_B, B_X, B_Y, B_STICK_L, B_STICK_R, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN,
     B_SL_LEFT = 16, B_SL_UP, B_SL_RIGHT, B_SL_DOWN, B_SR_LEFT, B_SR_UP, B_SR_RIGHT, B_SR_DOWN,

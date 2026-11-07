@@ -14,7 +14,7 @@
 // zeroed buffer for unbound ones) follow MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m:7409-7460,
 // 9365-9488, 9489-9921, 10013-10079 @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); the uniform-buffer spans, texture and
 // sampler descriptor lookups and the dispatch flow follow LAS Recomp runtime/nvn/vulkan/exec.c:1851-1908, 2300-2516
-// @ da35b83a (MIT, Copyright (c) 2026 Peiikai). The support buffer layout is Ryujinx's SupportBuffer.cs (MIT).
+// @ da35b83a (MIT, Copyright (c) 2026 Peiikai). The support buffer layout is the translator's SupportBuffer.
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -38,7 +38,7 @@
 #define MAX_DESC 1024
 #define CHUNK_BYTES (4u << 20)
 #define ZERO_BYTES 65536u
-#define SUPPORT_BYTES 1456u   // Ryujinx SupportBuffer (std140): alpha_test, is_bgra[8], viewport_inverse, viewport_size, ...;
+#define SUPPORT_BYTES 1456u   // the translator's SupportBuffer (std140): alpha_test, is_bgra[8], viewport_inverse, viewport_size, ...;
                               // 1408 pcss and 1424 shadow_spread (translator patches 0010, 0011), 1440 HDR (support_fill)
 #define NVN_STAGE_VS 0
 #define NVN_STAGE_FS 1
@@ -343,7 +343,7 @@ static void make_dummy(int i, VkFormat fmt, VkImage *image, VmaAllocation *alloc
     vk_upload_end();
 }
 
-// Storage image stand-ins in the format a shader declares (GfxShaderRes.format: Ryujinx TextureFormat order); Vulkan wants
+// Storage image stand-ins in the format a shader declares (GfxShaderRes.format: the translator's TextureFormat order); Vulkan wants
 // the view format to match the declaration. Created on first use.
 static const VkFormat tex_format[40] = {
     VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8_UNORM, VK_FORMAT_R8_SNORM, VK_FORMAT_R8_UINT, VK_FORMAT_R8_SINT,
@@ -485,8 +485,7 @@ static VkComponentSwizzle swz_of(uint8_t s) {
 }
 
 // A view in STENCIL mode samples the stencil plane (TextureViewSetDepthStencilMode); otherwise depth wins. The
-// translator declares every sampled image float and the shader takes the raw bits, as for integer formats (nxnative
-// nvn_mtl.m).
+// translator declares every sampled image float and the shader takes the raw bits, as for integer formats.
 VkImageAspectFlags vk_exec_view_aspect(const VkTexImage *img, const view_t *v, int hv) {
     if (hv && v->set_dsmode && v->dsmode == NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL && (img->aspect & VK_IMAGE_ASPECT_STENCIL_BIT))
         return VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -502,7 +501,7 @@ typedef struct ViewNode { struct ViewNode *next; ViewKey k; VkImageView view; } 
 static nvn_hmap view_of;                 // ViewKey -> VkImageView
 static nvn_hmap views_by_image;          // VkImage -> its first ViewNode
 
-// Integer formats a texture view may give an image (nvnTextureViewSetFormat): the Vulkan format and the Ryujinx
+// Integer formats a texture view may give an image (nvnTextureViewSetFormat): the Vulkan format and the translator's
 // TextureFormat code (gfx_shader.c fmt_names) the translator declares a storage image with. A shader that packs texels
 // itself writes raw words through such a view (Ocarina's last post-process pass stores R11G11B10 bits through an R32UI
 // view of an R11G11B10F target); through a view of the texture's own format the store converted them (a black picture
@@ -623,7 +622,7 @@ static VkImageView get_view(VkExec *ex, const VkTexImage *img, const view_t *v, 
     if (storage && cube) vt = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     uint32_t aspect = vk_exec_view_aspect(img, v, hv);
     uint8_t sw[4] = {NVN_TEXTURE_SWIZZLE_R, NVN_TEXTURE_SWIZZLE_G, NVN_TEXTURE_SWIZZLE_B, NVN_TEXTURE_SWIZZLE_A};
-    if (!storage) {   // MNG nvn_mtl.m tex_swizzle_sel: view selectors replace the texture's, then the format remap
+    if (!storage) {   // view selectors replace the texture's, then the format remap
         memcpy(sw, hv && v->set_swizzle ? v->swz : img->swz, 4);
         if (img->alpha_one || img->chan[0])
             for (int i = 0; i < 4; i++) {
@@ -980,13 +979,12 @@ static void c0_table(uint8_t *at, const p_bind_buf b[16]) {
 }
 
 // The driver constant bank c0 as GLSLC-compiled shaders read it. Storage-buffer tables {u64 address, u32 size} every
-// 16 bytes at 0x110 (vertex), 0x510 (fragment), 0x310 (compute): Ryujinx's GlobalToStorage fallback loads each
+// 16 bytes at 0x110 (vertex), 0x510 (fragment), 0x310 (compute): the translator's GlobalToStorage fallback loads each
 // candidate base from here and compares the global pointer against it. Compute: dispatch size at 0x200, the uniform
 // buffer table at 0x210 + 16 r. Graphics: the largest point size (Maxwell's limit, GLSLC clamps gl_PointSize to it) at
 // 0x610, the base instance at 0x644. NVN2 task and mesh stages: storage tables at 0x670 and 0x770 (the game binds
 // slots 0-2 there, and their programs read 0x670.. and 0x770..). Other stages: zeros. Unbound slots read zero, since the
 // replay keeps them zero.
-// Layout: nxnative dm/gfx/nvn/nvn_mtl.m (MIT).
 // Byte offset of a stage's storage buffer table in c0, -1 for none.
 static int c0_ssbo_base(int stage) {
     return stage == NVN_STAGE_VS ? 0x110 : stage == NVN_STAGE_FS ? 0x510 : stage == NVN_STAGE_CS ? 0x310
@@ -1110,7 +1108,7 @@ static VkDescriptorBufferInfo ubo_info(VkExec *ex, int st, int slot) {
     return zero_info(max);
 }
 
-// The NVN slot of a storage binding. Ryujinx numbers a shader's storage buffers in the order it meets them
+// The NVN slot of a storage binding. The translator numbers a shader's storage buffers in the order it meets them
 // (GfxShaderRes.slot); the NVN slot is the entry of the driver constant buffer c0 that holds the buffer's address
 // (cbuf_slot 0, handle = word offset): 16-byte entries at byte 0x110 (vertex), 0x510 (fragment) and 0x310 (compute).
 // A compute address at c0 0x210..0x30f is uniform block (offset - 0x210) / 16 read as storage: *ubo is set. -1: the
@@ -1128,9 +1126,8 @@ static int ssbo_slot(const GfxShaderRes *r, int st, int *ubo) {
 }
 
 // 1 when the shader loads the storage buffer's address from a user uniform block (cbuf_slot 3.., NVN uniform slot
-// cbuf_slot - 3, byte offset handle * 4). The Depths terrain reads its vertices through one, about 500 draws a frame;
-// with a zero buffer they collapse and the ground is missing. MacNativeGames resolves these the same way (NVN_RB_SBUFU,
-// games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m @ b75be8cf).
+// cbuf_slot - 3, byte offset handle * 4). Some terrain reads its vertices through one, about 500 draws a frame;
+// with a zero buffer they collapse and the ground is missing.
 static int ubo_ptr_res(const GfxShaderRes *r) {
     return r->cbuf_slot >= 3 && r->cbuf_slot - 3 < 18;
 }
@@ -1574,7 +1571,7 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
 
 // ---- texture and sampler pools (bindless)
 // Shaders that take texture handles from memory (TEX.B and kin) index the whole texture pool: the translator declares
-// arrays of VK_POOL_TEX images and VK_POOL_SAMP samplers (Ryujinx BindlessElimination GenerateBindlessAccess, index =
+// arrays of VK_POOL_TEX images and VK_POOL_SAMP samplers (index =
 // handle & 0xfffff and handle >> 20), which vk_pipeline.c spirv_pool_rebind moves to set 2, one image binding per view
 // kind (vk.h). One set serves every such pipeline: entry id of binding k holds texture slot id viewed as kind k (a
 // stand-in when the slot is empty or cannot be viewed so), entry id of binding VK_POOL_KINDS sampler slot id. pool_sync
@@ -1692,7 +1689,7 @@ VkDescriptorSetLayout vk_empty_set_layout(void) {
     return PL.empty;
 }
 
-// Ryujinx sampler type (GfxShaderRes.type) of pool kind k.
+// The translator's sampler type (GfxShaderRes.type) of pool kind k.
 static uint16_t pool_kind_type(int k) {
     static const uint16_t dim[4] = {1, 3, 4, 5};   // 1D, 2D, 3D, CUBE
     return (uint16_t)(dim[k >> 1 & 3] | (k & 1 ? 0x100 : 0) | (k & 8 ? 0x400 : 0));
@@ -1975,8 +1972,8 @@ static void pool_sync_entries(VkExec *ex) {
 // AMD's drivers do not give R32_SFLOAT, so the result there is undefined. Such an image gets a depth twin of the same
 // size and bits (R32_SFLOAT -> D32_SFLOAT, R16_UNORM -> D16_UNORM), copied through a buffer right before each dispatch
 // that samples it (a dispatch is outside any render pass), and the dispatch samples the twin. Draws keep the colour
-// image: a copy cannot go inside their pass. Design: Savage Wind Recomp runtime/nvn/vulkan/exec.c depth_twin_update
-// (https://github.com/Revivedx/SavageWindRecomp, MIT); the code is ours. NX2NAVI_DEPTH_TWIN=0: off.
+// image: a copy cannot go inside their pass.
+// NX2NAVI_DEPTH_TWIN=0: off.
 #define TWINS 8
 typedef struct { VkImage src, img; VmaAllocation mem; VkImageView view[2]; uint32_t w, h, layers; VkFormat fmt; } Twin;
 static Twin twins[TWINS];
@@ -3962,7 +3959,7 @@ static void op_draw_idx(VkExec *ex, const p_draw_idx *d) {
 }
 
 // DrawElementsIndirect: the arguments are read by the GPU from the pool buffer (they are often written by an earlier
-// dispatch), as nxnative nvn_mtl.m does. The base instance stays out of c0 (0x644): c0 cannot be patched by a transfer
+// dispatch). The base instance stays out of c0 (0x644): c0 cannot be patched by a transfer
 // inside a pass; gl_BaseInstance of the Vulkan draw is the argument's. Byte indices need the count to be widened: skipped.
 static void op_draw_idx_ind(VkExec *ex, const p_draw_idx_ind *d) {
     c0_binst = 0;
@@ -4131,7 +4128,7 @@ static void untranslated_dispatch_fallback(VkExec *ex) {
         dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && knob_tm_dispatch() != 2) {
         view_t nv;
         memset(&nv, 0, sizeof nv);
-        dst_view = get_view(ex, dst, &nv, 0, 3, 1);   // 3: Ryujinx Texture2D
+        dst_view = get_view(ex, dst, &nv, 0, 3, 1);   // 3: the translator's Texture2D
     }
     uint32_t sw = src ? src->width : 0, sh = src ? src->height : 0, dw = dst ? dst->width : 0, dh = dst ? dst->height : 0;
     VkFormat sf = src ? src->format : VK_FORMAT_UNDEFINED, df = dst ? dst->format : VK_FORMAT_UNDEFINED;
@@ -4368,7 +4365,7 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     case OP_BIND_VATTR: {
         const p_bind_vattr *b = payload;
         if (b->first < 0 || b->n < 0 || b->first + b->n > 16) break;
-        memset(ex->pipe.vattr, 0, sizeof ex->pipe.vattr);   // MNG: the new list replaces the old one
+        memset(ex->pipe.vattr, 0, sizeof ex->pipe.vattr);   // the new list replaces the old one
         memcpy(&ex->pipe.vattr[b->first], b->st, sizeof(uint32_t) * (size_t)b->n);
         break;
     }

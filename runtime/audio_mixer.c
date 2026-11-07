@@ -12,11 +12,11 @@
 // device; NX2NAVI_AUDIO_PREFILL_MS (0..500, default 20, 60 on Linux) is the queued audio the output waits for after start or underrun.
 // The device's clock paces the render thread, as the audio hardware paces the Switch's DSP (audio_mixer_pace_ns): a
 // frame is rendered when the ring holds less than the output target, max(prefill, two device periods), so the queue and
-// the delay from the game to the speakers stay there and the host and device clocks cannot drift apart. LASRecomp and
-// SavageWindRecomp pace their renderers by the SDL stream the same way. Without a device, while the renderer is
+// the delay from the game to the speakers stay there and the host and device clocks cannot drift apart.
+// Without a device, while the renderer is
 // stopped and while the device takes nothing (a stall), the render thread keeps real time on its own timer; what piled
 // up meanwhile is skipped on the SDL thread once the device resumes (more than QUEUE_SLACK_MS above the target plus the
-// device's request), as MacNativeGames' audio_mixer.c trims its ring after a device stall.
+// device's request), which trims the ring after a device stall.
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>

@@ -236,7 +236,7 @@ void binds_rows(float scale) {
     for (int a : kMove) row_action(a, m, layout);
     opt_group(UI_BINDS_GROUP_CAMERA);
     for (int a : kCamera) row_action(a, m, layout);
-    // No row for B_SHAKE: it shook NX2navi's object loose and Ocarina has no use for it (bind_shake still sets a key)
+    // No row for B_SHAKE: Ocarina has no use for it (bind_shake still sets a key)
     ImGui::Dummy(ImVec2(0, 6 * scale));
     g_reset_asked = opt_button("##binds_reset", UI_BINDS_RESET, UI_BINDS_RESET_DESC);
 }

@@ -305,7 +305,7 @@ static void test_arbiter(Cpu *c) {
     CHECK(sig(c, 2, 5, 0) == 0 && g_arb == 6, "signal type 2, no waiter, count 0: value %d (want 6)", (int32_t)g_arb);
     ArbJob jc = {.type = 2, .value = 6, .timeout = -1};
     h = arb_spawn(c, &jc);
-    // Waking all (count <= 0) with waiters subtracts 2 (mesosphere KAddressArbiter::SignalAndModifyByWaitingCountIfEqual).
+    // Waking all (count <= 0) with waiters subtracts 2 (Horizon's KAddressArbiter::SignalAndModifyByWaitingCountIfEqual).
     CHECK(sig(c, 2, 6, -1) == 0 && g_arb == 4, "signal type 2, 1 waiter, count -1: value %d (want 4)", (int32_t)g_arb);
     join(c, h);
     g_arb = 6;
@@ -390,7 +390,7 @@ static void test_events(Cpu *c) {
     join(c, h);
     CHECK(g.r == KERN_R_CANCELLED, "wait after a cancel: %#x", g.r);
 
-    // A pending cancel is for the next WaitSynchronization that would block (mesosphere KSynchronizationObject::Wait:
+    // A pending cancel is for the next WaitSynchronization that would block (Horizon's KSynchronizationObject::Wait:
     // signalled objects first, then timeout 0, then the cancel): a poll times out and a wait on a signalled object
     // succeeds, both leaving it pending; the next blocking wait ends cancelled. The blocking waits have a 500 ms
     // timeout, so a cancel used up too early shows as a timeout instead of a hang.

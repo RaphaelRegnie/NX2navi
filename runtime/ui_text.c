@@ -2117,7 +2117,7 @@ const char *ui_text_lang(const char *code) {
     return code;
 }
 
-// Every game language with the Mals file it reads: EUen/USen, USfr/EUfr, USes/EUes ship in both NX2navi builds; USpt only
+// Every game language with the Mals file it reads: EUen/USen, USfr/EUfr, USes/EUes ship in every version; USpt only
 // from 1.4.3; EUpl only in Ocarina (since 999: never by version, ui_text_game_langs_in finds it by its file).
 static const struct { const char *code; UiTextId name; int since; const char *mals; } all_langs[] = {
     {"en-US", UI_MENU_LANGNAME_EN, 0, "USen"}, {"en-GB", UI_MENU_LANGNAME_EN_GB, 0, "EUen"},

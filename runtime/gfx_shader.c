@@ -31,9 +31,9 @@
 // Reflection: every shader that enters the cache has its .res.json parsed into GfxShaderRes arrays and its SPIR-V
 // scanned for interface Locations and the workgroup size (gfx.h accessors at the end of the file).
 //
-// Provenance: the c2 handle ranges of handle_slot are those of MacNativeGames' nx2navi_xlate Service.cs (MIT).
+// The c2 handle ranges of handle_slot are the translator's handle layout.
 // The code layout the translator sees (graphics: code[0x30..], compute: code[0..]; c1 = code[c1..length]
-// with c1 and length at control+0x700) follows tools/shader_census.py, itself MacNativeGames' nx2navi shader tooling (MIT).
+// with c1 and length at control+0x700) follows tools/shader_census.py.
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -632,7 +632,7 @@ static GfxShader *disk_load(const uint8_t key[32], const uint8_t *iid) {
 
 static const char *const tex_names[] = {NULL, "1d", "1darray", "buffer", "2d", "2darray", "2dms", "2dmsarray", "3d",
                                         "cube", "cubearray"};   // GfxShaderAnswers tex_type / img_type codes
-static const char *const fmt_names[] = {   // img_format codes: Ryujinx TextureFormat enum order
+static const char *const fmt_names[] = {   // img_format codes: the translator's TextureFormat enum order
     NULL, "R8Unorm", "R8Snorm", "R8Uint", "R8Sint", "R16Float", "R16Unorm", "R16Snorm", "R16Uint", "R16Sint", "R32Float",
     "R32Uint", "R32Sint", "R8G8Unorm", "R8G8Snorm", "R8G8Uint", "R8G8Sint", "R16G16Float", "R16G16Unorm", "R16G16Snorm",
     "R16G16Uint", "R16G16Sint", "R32G32Float", "R32G32Uint", "R32G32Sint", "R8G8B8A8Unorm", "R8G8B8A8Snorm",
@@ -695,7 +695,7 @@ static int fmt_code(const char *name) {
     return 0;
 }
 
-// c2 slot of a texture or image handle (Service.cs of MNG's nx2navi_xlate: combined handles at 0x20, 32 slots; images at
+// c2 slot of a texture or image handle (the translator's layout: combined handles at 0x20, 32 slots; images at
 // 0x120; separate textures at 0x168), -1 outside those ranges or for a handle in another constant buffer.
 static int handle_slot(int kind, int cbuf_slot, int handle, int separate) {
     if (cbuf_slot >= 0 && cbuf_slot != 2) return -1;
@@ -740,7 +740,7 @@ enum { OP_ENTRY_POINT = 15, OP_EXECUTION_MODE = 16, OP_TYPE_INT = 21, OP_TYPE_FL
        OP_TYPE_ARRAY = 28, OP_TYPE_POINTER = 32, OP_VARIABLE = 59, OP_DECORATE = 71,
        DEC_BUILTIN = 11, DEC_LOCATION = 30, DEC_COMPONENT = 31, SC_INPUT = 1, SC_OUTPUT = 3, EM_LOCAL_SIZE = 17 };
 
-// Interface Locations and the compute workgroup size from the module. Ids beyond 2^20 are ignored (Ryujinx modules stay
+// Interface Locations and the compute workgroup size from the module. Ids beyond 2^20 are ignored (translated modules stay
 // far below).
 static void reflect_spirv(GfxShader *s) {
     const uint32_t *w = s->spirv;
@@ -792,9 +792,9 @@ out:
 // Every gradient sample (OpImageSampleExplicitLod with Grad) whose two gradients are each built from two components gets
 // them transposed, dx = (a, c) and dy = (b, d) from dx = (a, b) and dy = (c, d), by two new OpCompositeConstruct before
 // it. NX2navi's shaders fill a TXD's gradient registers per coordinate (du/dx, du/dy, dv/dx, dv/dy), and the translator
-// (Ryujinx, InstEmitTexture EmitTxd) builds dx = (first two registers), dy = (last two) = (du/dx, du/dy) and
+// builds dx = (first two registers), dy = (last two) = (du/dx, du/dy) and
 // (dv/dx, dv/dy): a mip level chosen from the wrong derivatives, too sharp on terrain faces turned across the screen,
-// which crawled in patches that followed the faces (1.4.3, the Depths). NX2NAVI_TXD_TRANSPOSE=0 turns it off.
+// which crawled in patches that followed the faces. NX2NAVI_TXD_TRANSPOSE=0 turns it off.
 // Applied to the SPIR-V after it is loaded, so the shader cache is untouched.
 enum { OP_COMPOSITE_CONSTRUCT = 80, OP_SAMPLE_EXPLICIT = 88, IO_GRAD = 4 };
 
@@ -1183,8 +1183,8 @@ static size_t build_request(char *o0, const char *hex, const char *stage, const 
         if (!(l[0] | l[1] | l[2])) l[0] = l[1] = l[2] = 1;   // NVN2 controls carry no workgroup size there
         o += sprintf(o, ",\"local\":[%u,%u,%u]", l[0], l[1], l[2]);
     }
-    /* Control byte +0x718 of a fragment shader: early fragment tests (the NVN driver's early-Z-force, MacNativeGames
-       ae8f4f4). Without it a shader that stores to memory is depth-tested late, and the G-buffer draws' EQUAL test
+    /* Control byte +0x718 of a fragment shader: early fragment tests (the NVN driver's early-Z-force).
+       Without it a shader that stores to memory is depth-tested late, and the G-buffer draws' EQUAL test
        after the depth prepass fails along contour lines. Already part of the code hash (the whole control section). */
     if (!strcmp(stage, "ps") && (control[0x718] & 1)) o += sprintf(o, ",\"early_fragment_tests\":true");
     int si = !strcmp(stage, "vs") ? 0 : !strcmp(stage, "cs") || !strcmp(stage, "ts") || !strcmp(stage, "ms") ? 2 : 1;   // gfx_shader_set_host answers
@@ -2079,7 +2079,7 @@ void gfx_shader_record_flush(int force) {
 }
 
 // ---- preparation from record files: the answers met in play (NX2NAVI_TEST_PREPARE_SHADERS=1) or the seed that
-// tools/prepare_shaders.py writes from the MacNativeGames shader list (nx2navi.exe --prepare-shaders). Both use the record
+// tools/prepare_shaders.py writes from its shader list (nx2navi.exe --prepare-shaders). Both use the record
 // layouts above; a seed record has a zero input id (the use mask, hence the id, is the translator's to find) and its
 // pad byte holds the list priority (0 title, 1 warm-up, 2 rest).
 typedef struct { const uint8_t *rec; } PrgIdx;

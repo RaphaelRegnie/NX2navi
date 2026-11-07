@@ -364,7 +364,7 @@ void vk_mem_stats(VkMemStats *s);
 void vk_mem_shutdown(void);                        // before vk_shutdown: waits idle, frees every memory and texture object
 
 // Textures. Images are keyed by storage GPU address plus descriptor and stay in VK_IMAGE_LAYOUT_GENERAL. A mirrored
-// texture (CPU-written pool storage, MNG tex_mirrored) is uploaded on first use and again when its storage pages were
+// texture (CPU-written pool storage) is uploaded on first use and again when its storage pages were
 // written; once the GPU wrote it (vk_texture_gpu_written) the image is its content. A returned pointer stays valid
 // until the next call that may drop textures (release, pool fini); copy what outlives that.
 typedef struct {
@@ -404,7 +404,7 @@ void vk_texture_unlock(void);
 const VkTexImage *vk_texture_by_id_locked(int id, view_t *view, int *has_view);
 VkSampler vk_sampler_by_id_locked(int id);
 // The slot's sampler with nearest filtering and no anisotropy: a depth texture read without a compare lands on one texel
-// on the Switch although the game binds a linear sampler, and MacNativeGames samples it the same way. VK_NULL_HANDLE
+// on the Switch although the game binds a linear sampler. VK_NULL_HANDLE
 // for an empty slot.
 VkSampler vk_sampler_point_by_id_locked(int id);
 uint32_t vk_texture_slots_gen(void);
@@ -503,7 +503,7 @@ void vk_backend_shutdown(void);            // presents, vk_sync_shutdown, vk_mem
 
 // ---- pipelines (vk_pipeline.c)
 // Binding model (comment block at the top of vk_pipeline.c): one descriptor set, set 0, per pipeline. Binding 0 is
-// Ryujinx's support buffer (a uniform buffer every stage shares); the vertex stage keeps its own bindings, the fragment
+// the translator's support buffer (a uniform buffer every stage shares); the vertex stage keeps its own bindings, the fragment
 // stage's follow them (its SPIR-V is renumbered). Set 0 is a push-descriptor set unless the pipeline needs more than
 // maxPushDescriptors (32 here) descriptors; VkPipeInfo.bindings says what goes where. No push constants.
 // Everything a graphics pipeline depends on, as the op stream carries it. Fields covered by dynamic state are read by

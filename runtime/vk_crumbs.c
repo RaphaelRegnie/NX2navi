@@ -6,9 +6,8 @@
 // writes per crumb, and crumbs mark submissions, upload batches, ASTC chunks and presents, not draws.
 //
 // Pass marks (vk.h vk_pass_mark_begin) use words 2 and 3 of the same buffer: the replay marks the start and the end of
-// every render pass and dispatch, and a ring of records says what each mark was. The design follows Savage Wind
-// Recomp's GPU checkpoints (refs/SavageWindRecomp runtime/nvn/vulkan/exec.c ck_mark and vk_checkpoints_report: a mark
-// per pass and dispatch, numbers in a ring of 4096, text only at the device loss); the code is ours.
+// every render pass and dispatch, and a ring of records says what each mark was. The design: a mark
+// per pass and dispatch, numbers in a ring of 4096, text only at the device loss.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

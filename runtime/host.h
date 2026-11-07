@@ -274,7 +274,7 @@ void res_fn_hit(uint64_t addr, uint64_t x0);               // main.c fnprof_hit:
 void res_present(Cpu *c);                                  // nvnQueuePresentTexture: applies a pending scene size
 void res_sizes(unsigned out[2], unsigned scene[2]);      // the output and scene sizes in effect (the game's own
                                                            // until res_init switched the sets on)
-int res_adjustable(void);                                  // the build has the output and scene patch sets (NX2navi)
+int res_adjustable(void);                                  // the build has the output and scene patch sets
 int res_is_16x9(unsigned w, unsigned h);                   // within 1% of 16:9 (the test res_init and romfs.c share)
 int res_wants_wide_overlay(const unsigned out[2]);         // not 16:9 on a game version with the camera aspect patch
 void res_wanted(unsigned out[2]);                          // the output size NX2NAVI_OUTPUT_RES asks for

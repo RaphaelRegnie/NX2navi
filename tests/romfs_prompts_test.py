@@ -228,11 +228,11 @@ def restbl_sizes(table):
     return dict(struct.unpack_from('<II', table, 22 + 8 * i) for i in range(count))
 
 
-MAGIC = 0x18029a7f   # MacNativeGames make_button_icons.py: a .bfotf's first word is its key XOR this
+MAGIC = 0x18029a7f   # a .bfotf's first word is its key XOR this
 
 
 def bfotf(otf, key):
-    """A .bfotf as MacNativeGames make_button_icons.py bfotf_encode writes it: 32-bit words XORed with the key."""
+    """A .bfotf as tools/button_icons.py bfotf_encode writes it: 32-bit words XORed with the key."""
     size = len(otf)
     out = struct.pack('<II', MAGIC ^ key, struct.unpack('<I', size.to_bytes(4, 'big'))[0] ^ key)
     out += b''.join(struct.pack('<I', struct.unpack_from('<I', otf, i)[0] ^ key) for i in range(0, size - size % 4, 4))

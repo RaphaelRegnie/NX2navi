@@ -2,12 +2,12 @@
 // collects NVN state into a VkPipeState and asks for the pipeline of each draw; this file maps that state to Vulkan,
 // numbers the descriptor bindings and keeps the caches.
 //
-// Binding model. The translator (tools/xlate/Program.cs, Ryujinx 1.3.2's SPIR-V back end) decorates every resource of a
+// Binding model. The translator (tools/xlate/Program.cs, a SPIR-V back end) decorates every resource of a
 // shader with DescriptorSet 0 and numbers the bindings of each shader from 1 in the order it meets them (Accessor
-// Create*Binding); binding 0 is Ryujinx's support buffer (ResourceManager: SupportBuffer.Binding, a std140 uniform
+// Create*Binding); binding 0 is its support buffer (ResourceManager: SupportBuffer.Binding, a std140 uniform
 // buffer every shader declares). The numbering is per shader, so the vertex and fragment stages of one program collide.
 // The scheme here:
-//   - one descriptor set, set 0, per pipeline; no push constants (Ryujinx's SPIR-V uses none);
+//   - one descriptor set, set 0, per pipeline; no push constants (the translator's SPIR-V uses none);
 //   - binding 0: the support buffer, one uniform buffer shared by all stages of the pipeline;
 //   - vertex stage: its own bindings 1..n unchanged; fragment stage: its bindings b >= 1 move to b + n (the SPIR-V
 //     Binding decorations are rewritten when the module is created); compute: its own bindings;
@@ -17,12 +17,12 @@
 //   - set 0 is a push-descriptor set (VK_KHR_push_descriptor) when its descriptors fit maxPushDescriptors (32 on the RX
 //     9070; a pipeline layout may hold one push set only, which rules out a set per stage); larger ones (a vertex and a
 //     fragment stage near the census maxima of 15 and 27) are ordinary sets the replay allocates (VkPipeInfo.push 0).
-// A fixed layout per stage combination (Ryujinx's own back end: a binding per constant buffer, storage buffer, texture
+// A fixed layout per stage combination (a binding per constant buffer, storage buffer, texture
 // and image slot per stage) would hold about 150 descriptors and could never be pushed, so layouts are made per distinct
 // binding list and shared by every pipeline with that list; VkPipeInfo.bindings tells the replay which NVN slot feeds
 // each binding.
 //
-// Fragment inputs the vertex stage does not write (stages are translated separately; MNG nvn_mtl.m msl_varyings) get
+// Fragment inputs the vertex stage does not write (stages are translated separately) get
 // outputs added to the vertex module, as Vulkan rejects such pairs, initialised to (0, 0, 0, 1) as Maxwell reads an
 // unwritten output (docs/maxwell.md 1.2). The unwritten components of an output the vertex stage does write
 // start at (0, 0, 0, 1) in the translator (tools/xlate/patches/0006).
@@ -40,8 +40,7 @@
 // runtime/nvn/vulkan/exec.c and device.c @ da35b83a (MIT, Copyright (c) 2026 Peiikai); the pipeline state the key holds
 // (program, target formats, blend and write masks, vertex layout, sample count) and the varying fix-up follow
 // MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m pso_key_fill / pso_desc / msl_varyings and its vfmt
-// table @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); the binding conventions are those of Ryujinx's shader translator
-// (MIT, tools/vendor/ryujinx).
+// table @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); the binding conventions are those of the shader translator.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -247,8 +246,8 @@ static int ensure_init(void) {
 #define PROC(field, name) (P.field = (void *)vkGetDeviceProcAddr(c->device, name))
     PROC(push, "vkCmdPushDescriptorSetKHR");
     // Descriptor update templates (core 1.1; the push variant comes with VK_KHR_push_descriptor on 1.1): the driver
-    // walks a layout prepared when the layout is made instead of parsing write structs every draw (DXVK does so for the
-    // same reason). NX2NAVI_DESC_TEMPLATE=0 keeps the write structs.
+    // walks a layout prepared when the layout is made instead of parsing write structs every draw.
+    // NX2NAVI_DESC_TEMPLATE=0 keeps the write structs.
     if (!cfg_bool("NX2NAVI_DESC_TEMPLATE")) {
         rt_log("vk_pipeline: descriptor update templates off (NX2NAVI_DESC_TEMPLATE=0)");
     } else if (c->props.apiVersion >= VK_API_VERSION_1_1 && PROC(tpl_create, "vkCreateDescriptorUpdateTemplate") &&
@@ -260,8 +259,7 @@ static int ensure_init(void) {
         rt_log("vk_pipeline: descriptor update templates unavailable: sets are written with write structs");
     }
     // NX2NAVI_VK_DYN_VERTEX=0/1 forces dynamic vertex input off or on. Default off on Intel's frozen Windows driver for its
-    // older integrated GPUs (UHD 630, Ice Lake: Vulkan 1.3.215 and older), which draws nothing with it; LAS Recomp
-    // turns it off there for the same reason.
+    // older integrated GPUs (UHD 630, Ice Lake: Vulkan 1.3.215 and older), which draws nothing with it.
     const char *dv = cfg_get("NX2NAVI_VK_DYN_VERTEX");   // no fixed default: it depends on the GPU, see above
     int intel_legacy = c->props.vendorID == 0x8086 && c->props.apiVersion <= VK_MAKE_API_VERSION(0, 1, 3, 215);
     int dv_on = dv && *dv ? strcmp(dv, "0") != 0 : !intel_legacy;
@@ -317,7 +315,7 @@ static int ensure_init(void) {
     return 1;
 }
 
-// ---- NVN -> Vulkan mappings (LAS Recomp exec.c blend_factor, blend_op, compare_fn, stencil_op)
+// ---- NVN -> Vulkan mappings
 
 static VkBlendFactor blend_factor(unsigned f) {
     switch (f) {
@@ -442,7 +440,7 @@ static VkFormatFeatureFlags format_features(VkFormat f, int optimal) {
     return r;
 }
 
-// Vertex attribute formats by NVNformat (LAS Recomp exec.c vertex_format; MNG nvn_mtl.m vfmt for the NX2navi additions).
+// Vertex attribute formats by NVNformat.
 typedef struct { VkFormat vk; uint8_t type; } VtxFmt;
 #define F(v) {VK_FORMAT_##v, GFX_TYPE_FLOAT}
 #define U(v) {VK_FORMAT_##v, GFX_TYPE_UINT}
@@ -569,8 +567,8 @@ typedef struct {
     VkVertexInputBindingDescription2EXT b[17];
 } VtxInput;
 
-// An attribute the game left without a format is a fixed one on Maxwell, a single 32-bit component of 0 (deko3d
-// gpu_3d_vbo.cpp binds unused attributes as IsFixed 1x32 float): it reads (0, 0, 0, 1), as Vulkan expands a
+// An attribute the game left without a format is a fixed one on Maxwell, a single 32-bit component of 0 (an unused
+// attribute is bound as IsFixed 1x32 float): it reads (0, 0, 0, 1), as Vulkan expands a
 // one-component format. NX2NAVI's foliage shaders scale wind sway by 1 - colour.w; shapes without a vertex colour
 // (Brightbloom stem and leaves) must not sway, or they bend away from the parts that have one (the bulb).
 static VkFormat zero_format(int type) {
@@ -659,7 +657,7 @@ static uint32_t *spirv_set(const uint32_t *w, uint64_t n, uint32_t set) {
 }
 
 // Dual-source blending (docs/maxwell.md 5.6): SRC1 blend factors read the fragment shader's colour output 1,
-// which Vulkan takes from Location 0, Index 1. The Output variable at Location 1 moves there, as Ryujinx declares it
+// which Vulkan takes from Location 0, Index 1. The Output variable at Location 1 moves there, as the translator declares it
 // with DualSourceBlendEnable (CodeGen/Spirv/Declarations.cs); the pipeline is keyed by GKey.dsb, so only pipelines
 // that blend with SRC1 get this module. NULL when the module has no Output at Location 1.
 static uint32_t *spirv_dual_source(const uint32_t *w, uint64_t n, uint64_t *out_n) {
@@ -781,10 +779,10 @@ static uint32_t *spirv_add_outputs(const uint32_t *w, uint64_t n, uint32_t missi
 }
 
 // Two fixes for what the translator declares but a shader does not use (NULL: nothing to change):
-//  - the fragment shader interlock capability and extension, which Ryujinx adds to every fragment shader when the host
+//  - the fragment shader interlock capability and extension, which the translator adds to every fragment shader when the host
 //    reports interlock support (SpirvGenerator.cs) and vk_device.c does not enable; kept when the shader interlocks;
 //  - the CullDistance[1] member of gl_PerVertex next to ClipDistance[8] (Declarations.cs CreatePerVertexStructType):
-//    9 distances exceed maxCombinedClipAndCullDistances (8 on the RX 9070). Ryujinx never accesses CullDistance; the
+//    9 distances exceed maxCombinedClipAndCullDistances (8 on the RX 9070). The translator never accesses CullDistance; the
 //    member goes when it is the struct's last and no access chain selects it.
 static uint32_t *spirv_fixup(const uint32_t *w, uint64_t n, uint64_t *out_n) {
     enum { OP_EXTENSION = 10, OP_CAPABILITY = 17, OP_MEMBER_NAME = 6, OP_EXECUTION_MODE = 16, OP_TYPE_ARRAY = 28,
@@ -1347,8 +1345,8 @@ static int uses_src1(const VkPipeState *s) {
 }
 
 // Colour write mask of target i: NVN's channel mask, zero for a target outside the fragment shader's output map (SPH
-// omap). Maxwell leaves such a target untouched (nxnative 04-graphics.md, "Targets the fragment shader does not
-// write"); Vulkan writes undefined values, and on AMD they lit grass in front of Link as flat lime. Zeros are wrong
+// omap). Maxwell leaves such a target untouched;
+// Vulkan writes undefined values, and on AMD they lit grass in front of Link as flat lime. Zeros are wrong
 // too: NX2NAVI's half-res transparency pass binds its linear depth (R32F) as target 7, samples it in the same draws and
 // writes only targets 0-2, 4 and 5; zeroed, the depth that later passes rebuild from it was 0 in tiles, and the fog
 // over distant geometry showed rectangles of clear sky.
@@ -3346,8 +3344,8 @@ void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
     const poly_st *pl = &s->poly;
     const ds_st *d = &s->ds;
     // The front face maps unchanged: NX2NAVI sets the upper-left window origin, and the y-flipped viewport (y_flip) puts
-    // NDC +y at row 0 as NVN does, so the framebuffer winding Vulkan tests is the one NVN tests (MacNativeGames passes
-    // it to Metal unchanged; LAS Recomp exec.c mirrors it only for the lower-left origin).
+    // NDC +y at row 0 as NVN does, so the framebuffer winding Vulkan tests is the one NVN tests
+    // (a lower-left origin would need it mirrored).
     int front_cw = pl->front == NVN_FRONT_FACE_CW;
     vkCmdSetCullMode(cb, (VkCullModeFlags)(pl->cull & 3));   // NVN_FACE_* has VkCullModeFlagBits' values
     vkCmdSetFrontFace(cb, front_cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);

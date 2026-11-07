@@ -27,14 +27,14 @@
 #include "platform/platform.h"
 
 #define SYM_INIT_START "_ZN2nn4init5StartEmmPFvvES2_S2_"
-// main: return addresses of nnMain's SetFocusHandlingMode call (1.1.0 and 1.2.1 from this port's analysis of main;
-// 1.4.3 from MacNativeGames' scripts/verify_boot.py) and of the first nvnBootstrapLoader call, per game version.
+// main: return addresses of nnMain's SetFocusHandlingMode call (from the analysis of each build's main)
+// and of the first nvnBootstrapLoader call, per game version.
 #define CHECKPOINT_RET (RT_V143 ? 0xbdb48cull : RT_V110 ? 0xeb8c14ull : 0xe7a954ull)
 #define NVN_RET (RT_V143 ? 0xbe0360ull : RT_V110 ? 0xebcdecull : 0xe7eb2cull)
 #define CTOR_DONE 2                      // a module's constructor flag after its DT_INIT ran the init_array
 
-// The init_array sizes (1.1.0 and 1.2.1: counted in the modules; 1.4.3: DT_INIT_ARRAYSZ); MacNativeGames' boot check
-// expects the same. The three tables carry the same rows, so cb_module_inits walks them by the size of one.
+// The init_array sizes (1.1.0 and 1.2.1: counted in the modules; 1.4.3: DT_INIT_ARRAYSZ).
+// The three tables carry the same rows, so cb_module_inits walks them by the size of one.
 typedef struct { const char *name; uint64_t entries; } InitCount;
 static const InitCount inits_110[] = {{"main", 10668}, {"subsdk0", 45}, {"sdk", 116}};
 static const InitCount inits_121[] = {{"main", 10673}, {"subsdk0", 45}, {"sdk", 116}};
@@ -78,7 +78,7 @@ static void cb_loader_ready(Cpu *c) {
 }
 
 // DT_INIT registers the module with musl (__nnmusl_init_dso) and runs its init_array; the constructor flag reads 2
-// afterwards (MacNativeGames loader.c:458-462).
+// afterwards.
 static void cb_module_inits(Cpu *c) {
     kern_seed_tls();   // the SDK clears the thread-local region during init; put the TLS back where it reads it
     {   // where the sdk's lock thunks actually land once the loader has resolved them

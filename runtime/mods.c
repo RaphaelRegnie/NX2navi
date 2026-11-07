@@ -1,7 +1,7 @@
 // Player mods: the scan of the mods folder, its order and switches (mods.h).
 //
-// One subfolder per mod, as emulators take them. The RomFS root is the first of <mod>/romfs, <mod>/romfslite (a mod manager's
-// name for it when it bypasses Atmosphere's RomFS build), <mod>/atmosphere/contents/<title>/romfs,
+// One subfolder per mod, as emulators take them. The RomFS root is the first of <mod>/romfs, <mod>/romfslite (a mod
+// manager's name for it when it bypasses Atmosphere's RomFS build), <mod>/atmosphere/contents/<title>/romfs,
 // <mod>/contents/<title>/romfs and <mod>/<title>/romfs that exists; the ExeFS and cheats folders likewise. A mod is
 // listed whatever it holds; what the port cannot use is its problem, shown in the menu and logged, and never stops the
 // start. romfs.c serves the RomFS files of the enabled mods, the top one winning a path.

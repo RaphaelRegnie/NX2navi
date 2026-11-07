@@ -1,5 +1,5 @@
 // Adapted from MacNativeGames games/<game>/runtime/audio_renderer.h and audio_mixer.h @ b75be8c (MIT, Copyright (c)
-// 2026 MacNativeGames contributors). Wire layouts follow the public libnx audren.h description.
+// 2026 MacNativeGames contributors). Wire layouts follow the public audren:u wire format.
 // audren:u, the audio renderer service: RequestUpdate wire formats, the server-side
 // renderer state, and the mixer interface (audio_mixer.c: the real mixer with SDL3 output).
 #pragma once
@@ -127,7 +127,7 @@ _Static_assert(__builtin_offsetof(AudrenAuxParam, send_info) == 64, "auxiliary e
 #define AUDREN_BEHAVIOR_OUT 0xb0u
 #define AUDREN_RENDER_INFO_OUT 0x10u
 
-// Server-side voice: the DSP's view of one client voice (Ryujinx.Audio VoiceInfo, as ported in MacNativeGames).
+// Server-side voice: the DSP's view of one client voice.
 typedef struct {
     AudrenVoiceIn in;
     AudrenBiquadFloat float_biquads[2];

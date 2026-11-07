@@ -1,7 +1,6 @@
-// NX2NAVI Vulkan adaptation of MacNativeGames games/<game>/tools/nx2navi_xlate/Program.cs (MIT, see LICENSE; MNG commit b75be8cf).
-// Provenance: that file is based on D2R Mobile dm/gfx/tools/dmsh_xlate/Program.cs. Changes here: SPIR-V for Vulkan is the final
-// output (no MSL service, no VertexCounterLowering, no NEAR_IS_MINUS_W rewrite), depth clip control reported as supported,
-// non-constant texture offsets reported as unsupported, --disasm dropped.
+// NX2NAVI runtime shader translator front end. Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
+// SPIR-V for Vulkan is the only output (no MSL, no vertex-counter lowering, no near-is-minus-w rewrite); depth clip control
+// is reported as supported and non-constant texture offsets as unsupported.
 // Protocol (stdout carries replies only; diagnostics go to stderr):
 //   nx2navi_xlate --serve              one request per stdin line: {"job": {...}, "out": "<dir>"}; one reply line per request:
 //                                   "ok <key>" or "fail <key> <message>"; a malformed line gets "fail ? <message>" and the loop continues.
@@ -51,7 +50,7 @@ static class SwshXlate
         public SetBindingPair CreateStorageBufferBinding(int index) => new(0, _binding++);
         public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += PoolArray(count) ? 1 : count; return new(0, b); }
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
-        // Bindless handles loaded from memory index the whole texture and sampler pools (Ryujinx BindlessElimination
+        // Bindless handles loaded from memory index the whole texture and sampler pools (the translator's BindlessElimination
         // GenerateBindlessAccess): arrays of TexturePoolLength textures (handle bits 0-19) and SamplerPoolLength samplers
         // (bits 20-31; NVN sampler ids are below 4096). res.json marks them "pool": 1 (textures) / 2 (samplers); the
         // runtime binds them from its global pool set (vk_exec_draw.c, texture and sampler pools).
@@ -105,7 +104,7 @@ static class SwshXlate
         public int QueryComputeLocalSizeX() => Local(0);
         public int QueryComputeLocalSizeY() => Local(1);
         public int QueryComputeLocalSizeZ() => Local(2);
-        // "local_mem": local memory bytes of a compute program (the lowering's spill area adds to it); else Ryujinx's 0x1000.
+        // "local_mem": local memory bytes of a compute program (the lowering's spill area adds to it); else the translator's 0x1000.
         public int QueryComputeLocalMemorySize() => _job["local_mem"] is JsonNode n ? (int)n : 0x1000;
         public int QueryComputeSharedMemorySize() => _job["shared"] is JsonNode n ? (int)n : 0;   // 配对 PC 的 groupshared 声明之和 | sum of the paired PC shader's groupshared declarations
         static AttributeType Attr(string s) => s switch { "sint" => AttributeType.Sint, "uint" => AttributeType.Uint, _ => AttributeType.Float };
@@ -116,30 +115,30 @@ static class SwshXlate
             if (_job["fout"] is JsonObject f) foreach (var kv in f) fout[int.Parse(kv.Key)] = Attr((string)kv.Value);
             // Vulkan: VK_EXT_depth_clip_control handles NEAR_IS_MINUS_W, so the shader is never rewritten ("depth_minus_w" in a job is ignored).
             const bool depthMinusW = false;
-            // "early_fragment_tests": the fragment shader's NVN control byte +0x718 (the driver's early-Z-force, Ryujinx's
-            // EarlyZForce); the SPIR-V then declares EarlyFragmentTests (MacNativeGames ae8f4f4).
+            // "early_fragment_tests": the fragment shader's NVN control byte +0x718 (the driver's early-Z-force, the
+            // translator's EarlyZForce); the SPIR-V then declares EarlyFragmentTests.
             bool earlyZ = _job["early_fragment_tests"] is JsonValue ez && ez.TryGetValue<bool>(out bool eb) && eb;
             return new GpuGraphicsState(earlyZ, InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
                 false, false, false, depthMinusW, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
                 false /* 不做 Y 取反 | no Y flip */, true /* 原点左上 | origin upper-left */, false);
         }
         public bool QueryHostSupportsDepthClipControl() => true;
-        // Vulkan: the ConstOffset / ConstOffsets image operands Ryujinx emits must be constants. A TLD4.PTP whose offsets
+        // Vulkan: the ConstOffset / ConstOffsets image operands the translator emits must be constants. A TLD4.PTP whose offsets
         // come from registers (agl_technique_pfx compute b940aa86, dfe7662f) otherwise becomes an OpConstantComposite over
         // computed ids, which spirv-val rejects; false makes TexturePass emulate only non-constant offsets.
         public bool QueryHostSupportsNonConstantTextureOffset() => false;
-        // "softfloat64": true lowers FP64 operations to FP32 (Ryujinx's DoubleToFloat pass), for a host without shaderFloat64.
+        // "softfloat64": true lowers FP64 operations to FP32 (the translator's DoubleToFloat pass), for a host without shaderFloat64.
         public bool QueryHostSupportsShaderFloat64() => _job["softfloat64"] is not JsonValue v || !(v.TryGetValue<bool>(out bool b) && b);
         public bool QueryHostSupportsTextureShadowLod() => true;
-        // Sub-texel precision bits of a host whose gathers round differently from Maxwell (AMD, Intel): Ryujinx then
+        // Sub-texel precision bits of a host whose gathers round differently from Maxwell (AMD, Intel): the translator then
         // biases gather coordinates so the same texels are picked (TexturePass.InsertCoordGatherBias). 0: no bias.
         public int QueryHostGatherBiasPrecision() => _job["gather_bias"] is JsonNode n ? (int)n : 0;
         // 作业 reduced = true：放宽精度——翻译器只给强制精确的运算打 NoContraction（缺省全部打：保持 Maxwell 分开舍入的逐位结果，代价是 MSL 里大量禁优化的 spvFMul 等）
         // Job reduced = true: relaxed precision - the translator marks NoContraction only on operations that must be exact (the default marks all: keeps the bit-exact results of Maxwell's separate rounding, at the cost of many optimization-disabled spvFMul etc. in the MSL)
         public bool QueryHostReducedPrecision() => _job["reduced"] is JsonNode n && (bool)n;
-        // Host answers for GPUs other than the RX 9070 (runtime/vk_caps.c); absent from the job they keep Ryujinx's defaults.
+        // Host answers for GPUs other than the RX 9070 (runtime/vk_caps.c); absent from the job they keep the translator's defaults.
         // "sbuf_align": n: the host binds each storage buffer at its guest address rounded down to n (minStorageBufferOffsetAlignment
-        // above 4), so storage offsets count from there (Ryujinx's unaligned path; the multi-target path uses n too).
+        // above 4), so storage offsets count from there (the translator's unaligned path; the multi-target path uses n too).
         public bool QueryHasUnalignedStorageBuffer() => _job["sbuf_align"] is JsonNode;
         public int QueryHostStorageBufferOffsetAlignment() => _job["sbuf_align"] is JsonNode n ? (int)n : 16;
         // "subgroup": n: lanes per subgroup when the host cannot pin 32 (AMD GCN/Vega run 64): ballots and votes span n lanes.

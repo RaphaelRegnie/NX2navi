@@ -39,10 +39,10 @@ PATH:
 
 ### hactool
 
-`tools/build_hactool.py` fetches SciresM/hactool at `1d64a83` into `toolchain\src\hactool`, applies the three patches in
+`tools/build_hactool.py` fetches hactool at `1d64a83` into `toolchain\src\hactool`, applies the three patches in
 `tools/hactool/` and builds a static `toolchain\hactool\hactool.exe` with MSYS2 UCRT64 gcc (a few seconds):
 
-- `portable.patch`: the parts of MacNativeGames' `build_hactool()` that run on Windows, the `MNG_TITLE_KEYS` variable and
+- `portable.patch`: the changes a portable Windows build needs, the `MNG_TITLE_KEYS` variable and
   the two BKTR fixes in `nca.c` for the subsection table padding and the subsection layout of newer cumulative updates;
 - `unicode.patch`: a manifest with `<activeCodePage>UTF-8</activeCodePage>`, so paths under a non-ASCII user profile
   reach it intact;
@@ -167,7 +167,7 @@ $llvm = "toolchain\llvm-mingw-<date>\llvm-mingw-<date>-ucrt-x86_64"
 .venv\Scripts\python tools\build_game.py --version v143 --out build\v143-pgogen --toolchain $llvm --pgo gen
 ```
 
-Play `build\v143-pgogen\nx2navi.exe` through varied scenes (fights, towns, riding, building, the Depths, menus) for 20-30
+Play `build\v143-pgogen\nx2navi.exe` through varied scenes (fights, towns, riding, building, underground, menus) for 20-30
 minutes; it is slower than a normal build. It writes `build\v143-pgogen\pgo\*.profraw` every minute and at exit.
 Scripted runs from saves (`tools/run_game.py`) add to the same file. Then:
 
@@ -259,10 +259,9 @@ to `build\<ver>\shaders\` and runs it through the translator and `spirv-val`; fa
 
 A change to the SM86 tensor lowering (`tools/xlate/AmpereLowering.cs` Hmma, Ldsm, Movm, Half) passes
 `python tests\tensor_lowering_check.py`: it lowers GPU-captured vectors with `nx2navi_xlate --lower` and runs them on
-`tests\maxwell_warp_emu.py`, a model of what the Ryujinx translator makes of Maxwell code (the docstring names the
+`tests\maxwell_warp_emu.py`, a model of what the shader translator makes of Maxwell code (the docstring names the
 vector file and what is checked). `tests\maxwell_warp_emu_selftest.py` checks the emulator itself. No game files.
 
 ## Reverse engineering (optional)
 
-- Ghidra 12.1.2 with Adubbz's Ghidra-Switch-Loader in `toolchain\ghidra\` (JDK 21) opens the game modules (NSO).
-- `tools\fetch_refs.sh` clones the upstream projects this port builds on into `refs\`, read-only.
+- Ghidra 12.1.2 with the Ghidra-Switch-Loader extension in `toolchain\ghidra\` (JDK 21) opens the game modules (NSO).

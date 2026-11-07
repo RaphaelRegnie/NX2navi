@@ -83,7 +83,7 @@ keeps per-core data without locks and relies on that, so the host models it (`ru
 - Bindless textures: the texture and sampler pools are descriptor arrays kept in step with the game's pool writes
   (`vk_exec_draw.c pool_sync`); slots that resolve alike share one lookup.
 - Shaders: Ampere (SM86) code is lowered to Maxwell (`tools/xlate/AmpereLowering.cs`) and translated to SPIR-V by the
-  Ryujinx shader translator 1.3.2 with our patches (`tools/xlate/patches/`), built with .NET 10 NativeAOT as
+  pinned shader translator (`tools/vendor/ryujinx`, 1.3.2) with our patches (`tools/xlate/patches/`), built with .NET 10 NativeAOT as
   `nx2navi_xlate.exe` and run as separate processes. Translations are cached on disk; shaders and pipelines seen in
   play are prepared at the next boot, which waits for them at most `NX2NAVI_PREWARM_WAIT_MS` and then lets them finish
   in the background.

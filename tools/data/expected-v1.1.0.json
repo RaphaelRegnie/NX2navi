@@ -1,5 +1,5 @@
 {
-  "_comment": "Written locally for the player's own 1.1.0 update (version value 0x20000). RomFS hashes filled in after the first merge; no game data here. No rewritten_sha256: this dump was not run through MacNativeGames' NSO rewriter, so the three digests of the other versions have no reference here and none of the tools read them.",
+  "_comment": "Written locally for the player's own 1.1.0 update (version value 0x20000). RomFS hashes filled in after the first merge; no game data here. No rewritten_sha256: this dump was not run through the NSO rewriter, so the three digests of the other versions have no reference here and none of the tools read them.",
   "title_id": "0100F2C0115B6000",
   "version": 131072,
   "display_version": "1.1.0",

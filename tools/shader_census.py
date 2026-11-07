@@ -1,8 +1,8 @@
 """Census of every Maxwell shader in the extracted NX2navi RomFS and ExeFS, and an offline translation pass.
 
-Port of MacNativeGames games/<game>/scripts/prepare_shader_seed.py (inventory, bnsh_shaders, sharcb_shaders, sarc) and the
-package walk of locate_shaders.py @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames contributors). Differences: no
-shared shader list, no spirv-cross, no bind-state variants; the module scan reads the NSO files under exefs/ directly;
+The inventory, the bnsh, sharcb and sarc readers and the package walk: Copyright (c) 2026 MacNativeGames contributors
+(MIT; see THIRD_PARTY_NOTICES.md). This pass reads no shared shader list, runs no spirv-cross and makes no bind-state
+variants; the module scan reads the NSO files under exefs/ directly;
 a control section must start with CONTROL_MAGIC (sharcb_shaders says why).
 
 Reads build/extracted/<version>/ (RomFS image plus index.json as tools/romfs_index.py reads them, and exefs/). Writes under
@@ -12,7 +12,7 @@ build/<version>/shaders/ only:
     spv/<key>.spv       with --translate
     failures.txt        with --translate, when something failed: groups by message
 
-The key is sha256(control[:0x880] + code), as in MNG. Needs Python 3.14 (compression.zstd), so run in .venv-py314:
+The key is sha256(control[:0x880] + code), the shared shader list's key. Needs Python 3.14 (compression.zstd), so run in .venv-py314:
 
     .venv-py314\\Scripts\\python tools\\shader_census.py --version v121 --translate
 """
@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 XLATE = ROOT / 'build' / 'xlate' / ('nx2navi_xlate.exe' if os.name == 'nt' else 'nx2navi_xlate')
 SPIRV_VAL = Path(r'C:\msys64\ucrt64\bin\spirv-val.exe') if os.name == 'nt' else Path(shutil.which('spirv-val') or '/usr/bin/spirv-val')
 ZSTD = b'\x28\xb5\x2f\xfd'
-# NVN program control section magic, u32 0x98761234 (d2r-mobile dm/gfx/tools/shader_map.py)
+# NVN program control section magic, u32 0x98761234
 CONTROL_MAGIC = b'\x34\x12\x76\x98'
 STAGE_IDS = {0: 'vs', 1: 'ps', 5: 'cs'}
 MAX_WORKERS = 20
@@ -117,8 +117,8 @@ def sharcb_shaders(data, rejected):
     first 8 bytes are the code offset) and no CONTROL_MAGIC. The game hands NVN real control sections and the runtime
     key hashes those, so no draw can ever produce these keys. Their code is cut from the wrong place: they were all 67
     translation failures of 1.2.1 (IndexOutOfRange in ShaderHeader.ctor and ArgumentOutOfRange in Decoder.FillBlock,
-    on 0 to 4,718 bytes of code). MNG's scan (prepare_shader_seed.py @ b75be8cf) keeps them; the 7 that translate are
-    V rows in MNG's list only because shader_list.py add_cache() folds the seed's own .variants files back in. A
+    on 0 to 4,718 bytes of code). A scan without the magic check keeps them; the 7 that translate are
+    V rows in the shared shader list only because shader_list.py add_cache() folds the seed's own .variants files back in. A
     candidate without CONTROL_MAGIC is skipped and counted in rejected[0]."""
     if len(data) < 32 or data[:4] != b'BAHS':
         raise ValueError('expected an agl shader package')
@@ -167,7 +167,7 @@ def nso_image(path):
 
 
 def startup_package(name):
-    """The RomFS files MNG's startup shaders come from; effects and UI layouts carry more."""
+    """The RomFS files the shared shader list's startup shaders come from; effects and UI layouts carry more."""
     return (name == 'Lib/NintendoSDK/TextureShader.bnsh' or name == 'Pack/Bootup.Nin_NX_NVN.pack.zs' or
             name.startswith('Shader/') and name.endswith('.zs'))
 
@@ -179,9 +179,9 @@ SHADER_DIRS = ('Shader/', 'Effect/', 'Lib/agl/', 'Lib/Terrain/', 'Lib/gsys/', 'U
 
 
 def inventory(romfs, exefs, everything=True):
-    """Every unique shader: key -> dict(stage, control, code, source, origin, startup). As in MNG, a shader is a startup
-    shader when it comes from an agl package, a game module, or a startup_package() RomFS file; the others come from
-    effect and UI layout resources, which MNG translates only for bind states players have met. Also returns the number
+    """Every unique shader: key -> dict(stage, control, code, source, origin, startup). As in the shared shader list, a shader is a
+    startup shader when it comes from an agl package, a game module, or a startup_package() RomFS file; the others come
+    from effect and UI layout resources, which the list covers only for bind states players have met. Also returns the number
     of .sharcb record candidates rejected for a missing control magic (see sharcb_shaders)."""
     index = json.loads((romfs / 'index.json').read_text(encoding='utf-8'))
     if index.get('status') != 'pass':

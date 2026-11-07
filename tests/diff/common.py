@@ -1,6 +1,6 @@
 """Shared parts of the differential tests: Unicorn reference, operand generators, build and run of harness.c.
 
-Adapted from LAS Recomp tools/test_lift.py and tools/test_simd.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 """
 import os
 import shutil

@@ -1,5 +1,5 @@
 {
-  "_comment": "Hashes of what the build produces from a genuine v1.0.0 game card image (no game data). build_app.py checks every step against them; a mismatch stops the build.",
+  "_comment": "Hashes of what the build produces from a genuine v1.0.0 game card image (no game data). The build checks every step against them; a mismatch stops the build.",
   "title_id": "0100F2C0115B6000",
   "version": 0,
   "display_version": "1.0.0",

@@ -1,6 +1,6 @@
 // Game resolution: the size the game composes its frame in (its output: canvas, UI and swapchain) and the size of its
 // 3D scene, above the shipped 1920x1080 and 1600x900. The game does the rendering itself, as with the community
-// resolution mods (UltraCam, Visual Fixes): the patch sets output and scene (recomp/patches-v121.txt,
+// resolution mods: the patch sets output and scene (recomp/patches-v121.txt,
 // patches-v143.txt; MacNativeGames games/<game>/runtime/game_patches.c and game_patches_v143.c, MIT, Copyright (c) 2026
 // MacNativeGames contributors) make the game read both sizes from the patch page, and the texture heap that holds the
 // output- and scene-sized render targets grows with them.
@@ -14,15 +14,15 @@
 // 64-bit word, +40 the renderer (1.2.1) or display configuration (1.4.3) the patched code stores there.
 // +56 the camera's aspect ratio as a float when the output is not 16:9 (set aspect), +60 the field-of-view factor
 // (set fov, res_fov_live).
-// 1.4.3 scales the scene it reads by output width / 1920 (a 2560x1440 output renders its 1600x900 scene at 2128x1200;
-// MacNativeGames measured the same), so its page holds the wanted size divided by that factor and the game's 5/6 needs
+// 1.4.3 scales the scene it reads by output width / 1920 (a 2560x1440 output renders its 1600x900 scene at 2128x1200),
+// so its page holds the wanted size divided by that factor and the game's 5/6 needs
 // no scene patch. 1.2.1 renders the size it reads (1600x900 on a 2560x1440 output): its page holds the wanted size, and
 // the scene set is on whenever the output differs from 1920x1080.
 //
 // Heap: agl's DynamicTextureAllocator is one fixed heap, "DynamicTextureAllocatorMem" in
 // System/HeapSize/Product.Nin_NX_NVN.HeapDef.byml.zs (113664 KiB, carved from "Graphics", 201728 KiB). At 2560x1440
 // the shipped size runs out at the title screen. Both heaps grow by the same amount: the shipped size times the output's
-// pixel ratio above 1920x1080 plus the scene's above 1600x900 (MacNativeGames' measurement: a 3440x1440 canvas with a
+// pixel ratio above 1920x1080 plus the scene's above 1600x900 (measured: a 3440x1440 canvas with a
 // 4620x1935 scene crashed at +258 MiB and loaded at +400 MiB; this formula gives +750 MiB there). romfs.c serves the
 // rewritten table (res_heapdef_build) in place of the original; memory.c adds the amount to the application pool, so
 // no other heap shrinks. Without the rewritten table (a RomFS that lacks it, a format this code does not know) the
@@ -46,7 +46,7 @@
 #define SCENE_W 1600
 #define SCENE_H 900
 #define DTA_KIB 113664u      // DynamicTextureAllocatorMem, shipped
-#define SCENE_MAX 4096       // per side, as MacNativeGames' NX2NAVI_RENDER_RES
+#define SCENE_MAX 4096       // per side
 #define SHADOW_BASE 960      // the sun shadow map's base size (its cascades: a D16 array of 4 layers)
 
 static struct {
@@ -174,7 +174,7 @@ static uint64_t shadow_kib(void) {
     return R.shadow > SHADOW_BASE ? ((uint64_t)R.shadow * R.shadow - SHADOW_BASE * SHADOW_BASE) * 8 * 3 / 1024 : 0;
 }
 
-// The generated C carries the output and scene patch sets (NX2navi's builds). Without them (Ocarina) the game draws at its
+// The generated C carries the output and scene patch sets for the builds that have them. Without them (Ocarina) the game draws at its
 // own sizes whatever the settings say, so nothing grows for them: no larger pool or HeapDef, no grown sizes reported.
 int res_adjustable(void) { return rt_patch_set("output") >= 0 && rt_patch_set("scene") >= 0; }
 

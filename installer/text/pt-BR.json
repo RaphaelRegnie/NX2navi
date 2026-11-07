@@ -128,7 +128,7 @@
  "ui.pick_keys": "Escolha o prod.keys",
  "ui.pick_firmware": "Escolha a pasta de firmware do Switch (Contents/registered)",
  "ui.pick_dest": "Escolha a pasta de instalação",
- "ui.firmware_help": "Para textos em chinês, coreano e chinês tradicional: a pasta Contents/registered do firmware, por exemplo do Ryujinx ou do The hardware. A instalação copia dela as fontes do sistema do Switch para a pasta de instalação.",
+ "ui.firmware_help": "Para textos em chinês, coreano e chinês tradicional: a pasta Contents/registered do firmware. A instalação copia dela as fontes do sistema do Switch para a pasta de instalação.",
  "ui.dlss": "Baixar o NVIDIA DLSS (nvngx_dlss.dll) para placas de vídeo NVIDIA RTX",
  "ui.dlss_help": "Do DLSS SDK da NVIDIA no GitHub, sob a licença NVIDIA RTX SDK (github.com/NVIDIA/DLSS). Sem ele as opções dlaa e DLSS não fazem nada.",
  "ui.compressed_help": "Arquivos compactados NSZ e XCZ funcionam do jeito que estão: a instalação os descompacta sozinha (para isso, até os dados do jogo serem extraídos, ela precisa de tanto espaço livre quanto ocupam os arquivos descompactados).",

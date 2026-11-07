@@ -4,8 +4,6 @@
 // it is. A packet never wraps: one that does not fit before the end is preceded by a pad. The producer publishes head
 // after each packet; the recorder makes the calls and advances tail, which the producer waits on when the ring is
 // full and in rec_drain. While a part is recorded the recorder spins on head; idle, it sleeps on an event.
-// Design: Savage Wind Recomp #189 and LAS Recomp runtime/nvn/vulkan/record.c (https://github.com/peiikai/LASRecomp
-// @ a4b53a3, MIT, Copyright (c) 2026 Peiikai); the code is ours.
 #define VK_REC_IMPL
 #include <immintrin.h>
 #include <stdlib.h>

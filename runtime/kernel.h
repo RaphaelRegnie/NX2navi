@@ -36,6 +36,6 @@ int kern_thread_state(uint32_t handle);               // KERN_WAIT_*, KERN_THREA
 void kern_core_stats(int *held_now, int *held_max);   // virtual-core holders now and the most ever at once
 void kern_core_stats_reset(void);
 extern volatile int kern_test_cv_old_order;           // WaitProcessWideKeyAtomic: release the lock before setting
-                                                      // the key (MNG's pre-fix order, the negative control)
+                                                      // the key (the old order, the negative control)
 extern void (*volatile kern_test_cv_hook)(void);      // called right after the lock release, holding the kernel lock
 extern void (*volatile svc_test_exit_hook)(unsigned code);   // svc 0x07 calls it instead of ExitProcess (probes)

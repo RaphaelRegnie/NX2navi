@@ -2,7 +2,7 @@
 // contributors), lines 304-382.
 // The SVC entry of the lifted code: preemption checkpoint, trace, then the thread and
 // synchronization SVCs (kernel.c), IPC (ipc.c), memory (memory.c), Break, OutputDebugString, GetInfo and ExitProcess. The 21 SVCs
-// NX2navi has but never reaches on MNG's boot path stop with a named fatal, the caller and the guest backtrace.
+// NX2navi has but never reaches on its boot path stop with a named fatal, the caller and the guest backtrace.
 #include <stdio.h>
 #include <string.h>
 

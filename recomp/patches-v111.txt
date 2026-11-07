@@ -6,11 +6,9 @@
 # the four screen vtables that keep it, +176 the UI's horizontal squeeze (16:9 over the picture's ratio) in four lanes, +192 the
 # movie's margin on each side as a share of the width.
 #
-# The matrix-update, UI and movie sites and what each does there come from oot-mod by Ivan0xFF
-# (https://github.com/craftycorvid/oot-mod @ c5ccd1cd57e8219aea3be1e758221795fa5b7ec8, build.py hooks; MIT,
-# Copyright (c) 2026 Ivan0xFF). Its hooks branch to code caves; here each is rewritten without branches or flags, as
-# the generator's patch sites need. The set names differ from NX2navi's (output, scene, aspect), whose page layout
-# runtime/resolution.c owns.
+# The matrix-update, UI and movie sites: Copyright (c) 2026 Ivan0xFF (MIT; see THIRD_PARTY_NOTICES.md). Each is
+# written without branches or flags, as the generator's patch sites need. The set names differ from the other patch
+# files' (output, scene, aspect), whose page layout runtime/resolution.c owns.
 
 set wide_out    NX2NAVI_PATCH_WIDE_OUT    0
 set wide_scene  NX2NAVI_PATCH_WIDE_SCENE  0
@@ -31,12 +29,12 @@ site wide_out main 31f39f8 f2c0b408 f9403108   # movk x8, #0x5a0, lsl #32 -> ldr
 site wide_scene main 31f3a00 d280f008 @page:x8  # mov x8, #0x780 -> adrp x8, page
 site wide_scene main 31f3a04 f2c08708 f9403508  # movk x8, #0x438, lsl #32 -> ldr x8, [x8, #104]
 
-# Camera aspect ratio: the camera update (main+0x4c48c0, the same code as NX2navi's camera update site in
+# Camera aspect ratio: the camera update (main+0x4c48c0, the same code as the camera update site in
 # recomp/patches-v143.txt) copies the camera's near, far, vertical angle and ratio (camera +0x134..+0x140) into the
 # sead perspective projection the renderer reads (+0x98..+0xb0; the projection's own matrix update, main+0x3485cc0, does
 # not run in play: the renderer builds its matrices from these fields). The replacement loads the ratio as before and
 # puts the page's ratio in its place when it is within the page's tolerance of 16:9 (the camera's value is not the bit
-# pattern of the 16/9 constant, and the tolerance is oot-mod's 0.01); other ratios stay the camera's. fabd + fcmge + bit
+# pattern of the 16/9 constant, and the tolerance is 0.01); other ratios stay the camera's. fabd + fcmge + bit
 # write no flags, so the alternatives agree. s1..s4 and x9 are free there: nothing reads them before the call at
 # main+0x4c534c.
 site wide_aspect main 4c5334 bd414260 bd414260 @page:x9 2d4e0921 bd407923 7ea1d404 7e24e464 2ea41c40   # ldr s0, [x19, #0x140]; ldp s1, s2, [x9, #112]; ldr s3, [x9, #120]; fabd s4, s0, s1; fcmge s4, s3, s4; bit v0, v2, v4
@@ -55,7 +53,7 @@ site wide_aspect main 33b82c 2d558440 2d558440 @page:x9 2d4e1123 bd407922 7ea3d4
 # ratio, so the UI keeps its shape in the middle 16:9 of the picture, its edge elements at that area's edges, and the
 # markers that follow the 3D world stay on their targets. Screens whose canvas (+0x1b8 into the screen object) belongs
 # to the item-wheel background (vtable main+0x4bed098) or the pause and system menu backgrounds (main+0x4be4fb0) keep
-# it, as in oot-mod: they redraw a capture of the whole picture. So do the event and loading fades (UIEventFadeScreen
+# it: they redraw a capture of the whole picture. So do the event and loading fades (UIEventFadeScreen
 # main+0x4be61c8, UILoadingFadeScreen main+0x4be7b30; the vtables that hold those names at +0x378): a fade is one colour,
 # and in the middle 16:9 alone it would leave the picture showing at the sides. Without branches: the two projection
 # words are compared in vector lanes, the screen's vtable is read from the canvas' screen only when they match (else from

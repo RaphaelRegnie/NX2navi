@@ -1,5 +1,5 @@
-<!-- NX2NAVI runtime shader translator: Switch Maxwell code -> SPIR-V (Vulkan) via the Ryujinx 1.3.2 shader translator.
-     Adapted from MacNativeGames games/<game>/tools/nx2navi_xlate/nx2navi_xlate.csproj (MIT). -->
+<!-- NX2NAVI runtime shader translator: Switch Maxwell code -> SPIR-V (Vulkan) via the vendored 1.3.2 shader translator.
+     Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md). -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>

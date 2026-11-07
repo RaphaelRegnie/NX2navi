@@ -1,10 +1,10 @@
 """A 32-lane Maxwell warp emulator for checking the SM86 tensor lowering on the CPU.
 
-tools/xlate/AmpereLowering.cs rewrites SM86 instructions as Maxwell (64-bit) instructions, and the patched Ryujinx shader
+tools/xlate/AmpereLowering.cs rewrites SM86 instructions as Maxwell (64-bit) instructions, and the patched shader
 translator (build/xlate/ryujinx/src/Ryujinx.Graphics.Shader) turns those into SPIR-V. This file executes the Maxwell
-words the way that translator does: fields are decoded exactly as Ryujinx's Decoders/InstDecoders.cs, opcodes are
-matched with the bit patterns of Decoders/InstTable.cs, and each instruction does what Ryujinx's Instructions/*.cs
-emit for it (not what a real Maxwell GPU does where the two differ; see "Ryujinx semantics" below). With it, the result
+words the way that translator does: fields are decoded exactly as its Decoders/InstDecoders.cs, opcodes are
+matched with the bit patterns of Decoders/InstTable.cs, and each instruction does what its Instructions/*.cs
+emit for it (not what a real Maxwell GPU does where the two differ; see "Translator semantics" below). With it, the result
 of one lowered SM86 instruction (HMMA, LDSM, MOVM, HFMA2.RELU, ...) can be compared with vectors captured on real
 hardware without running the game.
 
@@ -12,21 +12,21 @@ State per lane: R0-R254 (RZ = R255 reads 0, writes are dropped), P0-P6 (PT = P7 
 local memory; per warp: shared memory. Every lane is active at the start; a guard (bits 16-19: predicate 16-18, inverted
 19) masks the writes of one instruction, EXIT retires lanes. Branches must be uniform across the active lanes.
 
-Ryujinx semantics this follows (and real hardware may not):
+Translator semantics this follows (and real hardware may not):
   * Half-precision arithmetic (HADD2, HMUL2, HFMA2) works in F32 on the unpacked halves and rounds to F16 once at the
-    end (Ryujinx InstEmitFloatArithmetic EmitHadd2Hmul2 / EmitHfma2, InstEmitHelper GetHalfPacked: PackHalf2x16).
+    end (InstEmitFloatArithmetic EmitHadd2Hmul2 / EmitHfma2, InstEmitHelper GetHalfPacked: PackHalf2x16).
     HFMA2 is therefore an F32 fused multiply-add rounded to F32, then to F16.
-  * That rounding is skipped when the packed value goes straight into another unpack: Ryujinx Optimizer.PropagatePack
+  * That rounding is skipped when the packed value goes straight into another unpack: Optimizer.PropagatePack
     turns UnpackHalf2x16(PackHalf2x16(a, b)) into a (or b). So F2F.F16.F32 then F2F.F32.F16 of the same register, or
     HFMA2 feeding HFMA2, passes the F32 value on unrounded; an integer instruction (SHFL, LOP, ISCADD, ...) in between
     keeps the rounding, a MOV does not. Modelled per register (Warp.halves); a guarded write and a branch end it.
-  * FTZ, FMZ and rounding-mode fields of FFMA / FMUL / FADD / HFMA2 / HMUL2 are ignored, as Ryujinx ignores them.
+  * FTZ, FMZ and rounding-mode fields of FFMA / FMUL / FADD / HFMA2 / HMUL2 are ignored, as the translator ignores them.
     Denormals are kept (IEEE), saturation is clamp(x, 0, 1) with NaN giving 0 (GLSL FClamp as min(max(x, 0), 1) on
     a GPU whose min/max return the non-NaN operand).
-  * PRMT is not implemented in Ryujinx 1.3.2: InstEmit.PrmtR/PrmtI/PrmtC/PrmtRc only log "not implemented", so the
+  * PRMT is not implemented in the translator (1.3.2): InstEmit.PrmtR/PrmtI/PrmtC/PrmtRc only log "not implemented", so the
     destination keeps its old value. That is the default here (prmt="ryujinx"); prmt="maxwell" gives the hardware
     byte permute instead, to see what the lowering intended.
-  * SHFL follows Ryujinx's HelperFunctionManager GenerateShuffle* helpers (clamp and segment mask from operand C, the
+  * SHFL follows the translator's HelperFunctionManager GenerateShuffle* helpers (clamp and segment mask from operand C, the
     lane's own value where the source lane is out of range).
   * LDS / LDL read the 32-bit word at (address >> 2) and extract a sub-word at (address & 3) * 8 (InstEmitMemory
     EmitLoad); STS of 8 and 16 bits stores those bytes at the address.
@@ -218,10 +218,10 @@ class Warp:
         self.prmt = prmt
         self.trace = trace
         self.warnings: list[str] = []
-        # Ryujinx Optimizer.PropagatePack turns an UnpackHalf2x16 of a PackHalf2x16 result into the pack's F32
+        # The translator's Optimizer.PropagatePack turns an UnpackHalf2x16 of a PackHalf2x16 result into the pack's F32
         # operand, so that half is never rounded to F16. Per lane and register: the F32 halves of the pack that wrote
         # the register (sh_ok), kept until the register is written otherwise. A write under a guard ends it in every
-        # lane: Ryujinx puts the instruction in an if-block and merges old and new value in a phi, which is no pack.
+        # lane: the translator puts the instruction in an if-block and merges old and new value in a phi, which is no pack.
         self.sh_lo = np.zeros((LANES, 256), dtype=F32)
         self.sh_hi = np.zeros((LANES, 256), dtype=F32)
         self.sh_ok = np.zeros((LANES, 256), dtype=bool)
@@ -479,7 +479,7 @@ def op_lop3_i(w, i, m):
 
 def _prmt(w, i, m, a, sel, c):
     if w.prmt == "ryujinx":
-        # Ryujinx InstEmit.PrmtR / PrmtI: "not implemented", nothing is emitted, the destination keeps its value.
+        # The translator's InstEmit.PrmtR / PrmtI: "not implemented", nothing is emitted, the destination keeps its value.
         w.warnings.append(f"PRMT at {i} is a no-op in Ryujinx 1.3.2 (destination R{i.rd} unchanged)")
         return
     if i.bits(48, 4):
@@ -882,7 +882,7 @@ def op_exit(w, i, m):
 
 OP_BRA = "bra"
 
-# The decoder: patterns as Ryujinx Decoders/InstTable.cs writes them (bit 63 first, x = any). The most specific
+# The decoder: patterns as the translator's Decoders/InstTable.cs writes them (bit 63 first, x = any). The most specific
 # matching pattern wins, as InstTable's XBits ordering does.
 TABLE = [
     ("0101000010110xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "NOP", op_nop),
@@ -993,7 +993,7 @@ def run_warp(words, regs_in=None, smem=None, max_steps: int = 200000, **opts) ->
             elif kind == "P" and n != PT:
                 w.p[lane, n] = bool(val)
     addr_to_index = {slot_address(k): k for k in range(len(words) + 1)}
-    # Where control flow joins (branch targets) Ryujinx merges registers in phis, and an UnpackHalf2x16 of a phi is
+    # Where control flow joins (branch targets) the translator merges registers in phis, and an UnpackHalf2x16 of a phi is
     # not folded: the PropagatePack state (Warp.sh_ok) is dropped there and at every BRA (conservative: a register no
     # path writes needs no phi).
     joins = set()

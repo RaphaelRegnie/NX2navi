@@ -96,7 +96,7 @@ static void update_voice(AudioRenderer *r, const AudrenVoiceIn *in) {
     v->use_float_biquads = 0;
     if (!in->in_use) return;
     need(in->wave_buffer_index < 4, "wave buffer index");
-    // The play state as the DSP keeps it (Ryujinx VoiceInfo.UpdatePlayState): Stop on a voice that is not stopped
+    // The play state as the DSP keeps it: Stop on a voice that is not stopped
     // becomes Stopping, which the next render frame turns into Stopped after giving back every queued buffer.
     if (in->play_state == PLAY_STARTED) v->state = SV_STARTED;
     else if (in->play_state == PLAY_PAUSED) v->state = SV_PAUSED;
@@ -134,7 +134,7 @@ static void skip_empty(AudioRenderer *r, ServerVoice *v) {
     }
 }
 
-// Each render frame, before mixing (Ryujinx VoiceInfo.UpdateParametersForCommandGeneration): flush, stop, start.
+// Each render frame, before mixing: flush, stop, start.
 static void voices_prepare(AudioRenderer *r) {
     for (int k = 0; k < r->param.voice_count; k++) {
         ServerVoice *v = &r->voices[k];

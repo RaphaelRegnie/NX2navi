@@ -1,4 +1,4 @@
-# Reference checkouts of upstream projects (cloned locally, never committed)
+# Pinned read-only checkouts (tools/fetch_refs.sh; cloned locally, never committed)
 /refs/
 
 # Downloaded toolchain binaries and Python environments

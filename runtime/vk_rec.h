@@ -11,8 +11,7 @@
 // extension commands called through function pointers have rec_* wrappers of their own. NX2NAVI_VK_RECORDER=0 makes every
 // call at once (the same calls in the same order), =ab switches it with the A/B blocks (rt_ab), per submission part.
 //
-// The design follows Savage Wind Recomp's and LAS Recomp's recorder threads (LAS Recomp runtime/nvn/vulkan/record.c,
-// MIT, Copyright (c) 2026 Peiikai): the driver's work behind the commands depends on nothing the replay decides next.
+// A recorder thread makes the Vulkan calls: the driver's work behind the commands depends on nothing the replay decides next.
 #pragma once
 
 void rec_begin(VkCommandBuffer cb, uint64_t fence);   // the submitting thread, sub_lock held; fence: the part's value

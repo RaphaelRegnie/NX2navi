@@ -1,7 +1,6 @@
 """Build the RomFS index the runtime binary-searches (runtime/romfs.c) and its romfs_config.h.
 
-Adapted from MacNativeGames games/<game>/scripts/prepare_romfs_backend.py @ b75be8cf (MIT, Copyright (c) 2026
-MacNativeGames contributors).
+Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 
 Input: <romfs>/index.json ({status, romfs_size, romfs_sha256, files: [{path, offset, size}]}) as tools/extract.py
 writes it, and <romfs>/romfs.bin, whose size must match. Output, both in the build directory (never in the repo):

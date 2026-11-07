@@ -45,8 +45,8 @@ static void null_sampler_register(int id, const samp_par *s) { (void)id, (void)s
 static void null_texture_release(const tex_t *t) { (void)t; }
 static void null_program_release(const prog_t *p) { (void)p; }
 
-// The CPU-visible side effects of one op stream, in stream order (MNG nvn_mtl.m mtl_exec and the commit handler:
-// 10618-10642, 1677-1678, 1960-1985). Everything else (draws, dispatches, clears, texture copies) has no effect here.
+// The CPU-visible side effects of one op stream, in stream order.
+// Everything else (draws, dispatches, clears, texture copies) has no effect here.
 // Addresses of CPU-invisible pools (the GPU window) hold no host memory, so those writes are dropped.
 static void *null_cpu_addr(uint64_t addr, uint64_t size, const char *what) {
     if (nvn_gpu_only(addr)) return NULL;

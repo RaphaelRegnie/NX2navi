@@ -128,7 +128,7 @@
  "ui.pick_keys": "Choose prod.keys",
  "ui.pick_firmware": "Choose the Switch firmware folder (Contents/registered)",
  "ui.pick_dest": "Choose the install folder",
- "ui.firmware_help": "For Chinese, Korean and Traditional Chinese text: the firmware's Contents/registered folder, for example from Ryujinx or The hardware. The setup copies the Switch system fonts from it into the install folder.",
+ "ui.firmware_help": "For Chinese, Korean and Traditional Chinese text: the firmware's Contents/registered folder. The setup copies the Switch system fonts from it into the install folder.",
  "ui.dlss": "Download NVIDIA DLSS (nvngx_dlss.dll) for NVIDIA RTX graphics cards",
  "ui.dlss_help": "From NVIDIA's DLSS SDK on GitHub, under NVIDIA's RTX SDK license (github.com/NVIDIA/DLSS). It makes the dlaa and DLSS settings work; without it they do nothing.",
  "ui.compressed_help": "Compressed NSZ and XCZ files work as they are: the setup unpacks them by itself (until the game data is extracted, that needs as much free space as the unpacked files take).",

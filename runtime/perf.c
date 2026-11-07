@@ -237,8 +237,8 @@ int rt_knob(const char *name, const char *def) {
 
 // NX2NAVI_ONE_PER_CORE=1: the process keeps the first logical processor of each physical core, so busy threads (the
 // render thread, the guest cores, the job workers) never share a core's execution units with another; "ab" switches
-// it with the A/B blocks. Off by default until measured here; Savage Wind Recomp
-// reported +4-10% from the same rule on an 8-core SMT CPU.
+// it with the A/B blocks. Off by default until measured here; the same rule
+// is reported to give +4-10% on an 8-core SMT CPU.
 static void cpu_placement(void) {
     static int mode = -1, applied = -1;
     static uint64_t all, one;

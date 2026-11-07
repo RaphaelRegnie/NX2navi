@@ -1,7 +1,7 @@
 // Tegra X1 block-linear <-> linear copies.
 // Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.c @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); comments translated, the copy loop split out as tex_bl_copy.
 //
-// Layout (public descriptions: deko3d, Ryujinx BlockLinearLayout):
+// Layout (from public descriptions):
 //   GOB = 64 bytes x 8 rows = 512 bytes; offset of (x byte, y row) within a GOB =
 //     (x%64/32)*256 + (y%8/2)*64 + (x%32/16)*32 + (y%2)*16 + x%16
 //   block = 1 GOB wide x 2^th GOBs high x 2^td GOBs deep, ordered y first then z inside a block; blocks fill the level

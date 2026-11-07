@@ -1,6 +1,6 @@
 """Check of recomp/jumptables.py on every `br` in the game's modules against an emulation oracle.
 
-The oracle is LAS Recomp's jump-table method: find `cmp #N; b.hi/b.hs` before the br (or a `b.ls/b.lo` to the
+The oracle is an emulated jump-table resolver: find `cmp #N; b.hi/b.hs` before the br (or a `b.ls/b.lo` to the
 dispatch block), replay ADRP/ADR/ADD-imm from the function entry, then single-step Unicorn from the bounds check to
 the br once per index. Functions are [seed, next seed) over the module's seeds plus BL targets.
 
@@ -11,7 +11,7 @@ as 'oracle wrong' only with independent evidence (oracle_wrong). Samples of ever
 unresolved computed site are printed with disassembly. Output also goes to build/logs/jumptables-check.log, and one
 row per table-like br to build/logs/jumptables-<module>.tsv.
 
-The oracle is adapted from LAS Recomp tools/gen.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+The oracle: Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 
 Exits with 1 if any disagreement is unexplained, a hoisted base is not verified, or a PLT stub counts as computed.
 
@@ -44,7 +44,7 @@ _md = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
 
 
 class Oracle:
-    """LAS Recomp's Unicorn jump-table resolver (`Module.jump_table` and helpers in tools/gen.py)."""
+    """The Unicorn jump-table resolver: bounds check, table base replay and one single-step run per index."""
 
     def __init__(self, mod):
         self.m = mod

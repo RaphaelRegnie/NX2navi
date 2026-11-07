@@ -1,6 +1,5 @@
-# Code patches for NX2navi 1.2.1 main (recomp/patches.py). Ported from MacNativeGames games/<game>/runtime/game_patches.c
-# (MIT, Copyright (c) 2026 MacNativeGames contributors) at upstream ebe621d; 1.2.1 sites from its game_version.h
-# (2db612b), each original word checked against the 1.2.1 main. The patch page holds two floats the runtime writes at
+# Code patches for NX2navi 1.2.1 main (recomp/patches.py). Copyright (c) 2026 MacNativeGames contributors (MIT; see
+# THIRD_PARTY_NOTICES.md). Each original word is checked against the 1.2.1 main. The patch page holds two floats the runtime writes at
 # every present (frame_rate.c): +0 the 30 Hz ratio (seconds * 30), +4 the frame step in seconds.
 
 set fps60    NX2NAVI_FPS60          1
@@ -11,7 +10,7 @@ set output   NX2NAVI_PATCH_OUTPUT   0
 set scene    NX2NAVI_PATCH_SCENE    0
 set shadow   NX2NAVI_PATCH_SHADOW   0
 
-# 60 fps: the adaptive present-interval controller (main+0x8f26c8, 1.0.0 0x8f6bec) gets the minimum interval 1.
+# 60 fps: the adaptive present-interval controller (main+0x8f26c8) gets the minimum interval 1.
 site fps60 main 8f273c 6b08015f 7100055f   # clamp: cmp w10, #1 (was cmp w10, w8 = minimum)
 site fps60 main 8f2740 1a89b10a 1a9fa52a   # clamp: csinc w10, w9, wzr, ge (desired = max(desired, 1))
 site fps60 main 8f2764 b9401a8a d503201f   # lower trigger: nop the stored-candidate load
@@ -20,8 +19,8 @@ site fps60 main 8f2804 1a88c1ac 1a9fc5ac   # raise path: csinc w12, w13, wzr, gt
 site fps60 main 8f2858 b9400288 52800028   # lower path: mov w8, #1 (minimum interval 1)
 site fps60 main 8f2874 2a0a03f5 1a9fa555   # lower path: csinc w21, w10, wzr, ge (result never below 1)
 
-# Real-time step: the VFR step (main+0x7ede6c, 1.0.0 0x7a83e4) and the global ratio after the controller call
-# (main+0x8f2394, 1.0.0 0x8f68b8) read ratio and seconds from the patch page instead of interval * 0.5 and interval / 60.
+# Real-time step: the VFR step (main+0x7ede6c) and the global ratio after the controller call
+# (main+0x8f2394) read ratio and seconds from the patch page instead of interval * 0.5 and interval / 60.
 site realtime main 7ede7c 1e220020 @page:x9   # scvtf s0, w1 -> adrp x9, page
 site realtime main 7ede80 52a84e08 bd400120   # mov w8, #60.0 -> ldr s0, [x9] (ratio)
 site realtime main 7ede84 1e270101 bd400521   # fmov s1, w8 -> ldr s1, [x9, #4] (seconds)
@@ -33,16 +32,16 @@ site realtime main 8f2398 1e2c1001 bd400120   # fmov s1, #0.5 -> ldr s0, [x9] (g
 site realtime main 8f23a8 5e21d800 d503201f   # scvtf s0, s0 -> nop
 site realtime main 8f23ac 1e210800 d503201f   # fmul s0, s0, s1 -> nop
 
-# Equipment-switch cooldown (issue #18, found by JieML1100 on 1.4.3): the player update (main+0x852d24) steps the
+# Equipment-switch cooldown (issue #18): the player update (main+0x852d24) steps the
 # countdown at player state +0x109c through the timer step (main+0xec98cc) only while it is above FLT_EPSILON, but the
 # equipment gate (main+0xcae6f8) blocks weapon, shield and bow changes while it is above 0. A measured ratio can leave
 # a remainder in (0, FLT_EPSILON] that is never stepped again; stepping while above 0 takes it below 0.
 site realtime main 852d28 1e270101 1e2703e1   # fmov s1, w8 (FLT_EPSILON) -> fmov s1, wzr
 
-# Hair and cloth (upstream 290ec9f, 8f8022f): the actor animation update builds a second clock {seconds = factor / 30,
+# Hair and cloth: the actor animation update builds a second clock {seconds = factor / 30,
 # ratio = factor} per rendered frame. Three inlined places: at the fmul, seconds = measured seconds * factor; at the
 # store of the factor into the ratio slot, measured ratio * factor. The call of the shared update (main+0x89822c)
-# scales s2 (seconds) and s3 (ratio) by the measured ratio. Upstream's veneer bodies, inlined at the site.
+# scales s2 (seconds) and s3 (ratio) by the measured ratio. The replacement bodies are inlined at the site.
 site cloth main 82192c 1e200900 f81f0fe9 @page:x9 bd400520 1e200900 f84107e9   # fmul s0, s8, s0
 site cloth main 821928 bd0127e8 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f091f bd0147ff 3dc007ff f94003e9 910083ff   # str s8, [sp, #0x124]
 site cloth main 822a64 1e200900 f81f0fe9 @page:x9 bd400520 1e200900 f84107e9   # fmul s0, s8, s0
@@ -51,21 +50,21 @@ site cloth main 83182c 1e210801 f81f0fe9 @page:x9 bd400521 1e210801 f84107e9   #
 site cloth main 831830 bd0137e0 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f081f bd0157ff 3dc007ff f94003e9 910083ff   # str s0, [sp, #0x134]
 site cloth main 8222f0 9401d7cf @page:x8 bd400104 1e240842 1e240863 9401d7cf   # bl 0x89822c
 
-# Trampolines (upstream 27c3b43): the slow-motion check compares time object +0x28 (30 / (ratio * time scale)) with
+# Trampolines: the slow-motion check compares time object +0x28 (30 / (ratio * time scale)) with
 # 100; compare +0x28 * +0x38 (30 / time scale) instead, the same value at 30 Hz and independent of the frame rate.
 site bounce main bda798 bd402900 bd402900 bd403901 1e210800   # ldr s0, [x8, #0x28]; ldr s1, [x8, #0x38]; fmul s0, s0, s1
 
-# Cursor and aim steps (upstream game_patches.c patch_cursor_speed, 363a6eb). These updates read the game's 30 Hz frame
-# ratio for their smoothing but leave it out of the step itself, so the map cursor and the vertical object aim moved
+# Cursor and aim steps. These updates read the game's 30 Hz frame
+# ratio for their smoothing but leave it out of the step itself, so the map cursor and the vertical aim moved
 # 2x as fast at 60 fps and 4x at 120 as at the shipping 30 fps (issue #44). Each site multiplies the step by that ratio,
 # so the speed is the shipping one at any frame rate. x9 and s16 are free: the next read of x9 follows a write, the
 # function does not touch s16, and x20 keeps the update's frame object for the whole function.
 set cursor   NX2NAVI_HIGHFPS_FIX    1
 site cursor main ec3d9c bd400361 f94002e9 bd400930 1e300800 bd400361   # map pan speed s0 *= [[x23] + 8], then ldr s1, [x27]
-site cursor main 1d48d64 1e2a198c 1e2a198c bd400a90 1e30098c   # fdiv s12, s12, s10, then s12 *= [x20 + 8]: vertical object aim
-site cursor main 1d484e4 1e200923 1e200923 bd400a90 1e300863   # fmul s3, s9, s0, then s3 *= [x20 + 8]: vertical gyro aim (Recall)
+site cursor main 1d48d64 1e2a198c 1e2a198c bd400a90 1e30098c   # fdiv s12, s12, s10, then s12 *= [x20 + 8]: vertical aim
+site cursor main 1d484e4 1e200923 1e200923 bd400a90 1e300863   # fmul s3, s9, s0, then s3 *= [x20 + 8]: vertical gyro aim
 
-# Output size (upstream games/<game>/runtime/game_patches.c patch_output_res; runtime/resolution.c switches the set on).
+# Output size (runtime/resolution.c switches the set on).
 # The swapchain size nnMain writes before NvInitializeGraphics comes from page +48 ({w, h} as one 64-bit value), and
 # the output size the renderer lays out its canvas, crop and UI in (main+0xcc3f00, read from the graphics parameters
 # through main+0xcc4160) from page +32; the renderer itself goes to page +40.
@@ -75,14 +74,14 @@ site output main cc3f50 aa1403e0 @page:x21  # mov x0, x20 -> adrp x21, page
 site output main cc3f54 94000083 f90016b3   # bl 0xcc4160 -> str x19, [x21, #40]
 site output main cc3f58 f9400015 f94012b5   # ldr x21, [x0] -> ldr x21, [x21, #32]
 
-# Scene render size (upstream patch_render_res): the renderer's +0xcc4 / +0xcc8, which size every scene render target,
+# Scene render size: the renderer's +0xcc4 / +0xcc8, which size every scene render target,
 # take two floats from page +16 instead of the graphics parameters' docked 1600x900.
 site scene main cc3f68 5e21d900 @page:x9    # scvtf s0, s8 -> adrp x9, page
 site scene main cc3f70 bd0cc660 2d420520    # str s0, [x19, #0xcc4] -> ldp s0, s1, [x9, #16]
 site scene main cc3f74 5e21d921 bd0cc660    # scvtf s1, s9 -> str s0, [x19, #0xcc4]
 
-# Camera aspect ratio for a game resolution that is not 16:9 (upstream game_patches.c, the 1.2.1 sites of aspect_install;
-# runtime/resolution.c res_init writes the output's width / height to page +56 and switches the set on). The same four
+# Camera aspect ratio for a game resolution that is not 16:9
+# (runtime/resolution.c res_init writes the output's width / height to page +56 and switches the set on). The same four
 # sites as patches-v143.txt, with the same original words: two camera sites (update and setup) load the camera's copy of
 # DefaultAspect 1.777778, two viewport routines divide width by height. The replacement loads the ratio from the page
 # instead (Hor+). x10 is kept on the stack, so no register liveness is assumed.
@@ -92,11 +91,11 @@ site aspect main 12521cc bd414260 f81f0fea @page:x10 bd403940 f84107ea  # ldr s0
 site aspect main 19b36f0 1e211800 f81f0fea @page:x10 bd403940 f84107ea  # fdiv s0, s0, s1 (viewport)
 site aspect main 1ecdf68 1e211800 f81f0fea @page:x10 bd403940 f84107ea  # fdiv s0, s0, s1 (viewport)
 
-# Texture pool offsets past 2 GiB (MacNativeGames ca311e2d). The texture loader keeps a texture's place in its pool as a
+# Texture pool offsets past 2 GiB. The texture loader keeps a texture's place in its pool as a
 # 32-bit offset (main+0xad4294: sub x25, x9, x10, stored as the word w25) and widens it as a signed number for
 # nvnTextureBuilderSetStorage's offset and for SetPackagedTextureData's source (the pool's CPU address + offset). The
 # shipped heap table keeps every pool far below 2 GiB; a texture pack's heap table with NX2NAVI_APP_POOL raised can make
-# one larger (MacNativeGames saw a 3.58 GiB pool), and every texture past 2 GiB then got storage 4 GiB below its pool.
+# one larger (a 3.58 GiB pool has been seen), and every texture past 2 GiB then got storage 4 GiB below its pool.
 # The offset is widened unsigned instead, the same value below 2 GiB, right up to 4 GiB. 1.4.3 needs no patch: its
 # loaders (main+0x583c34, main+0x27ed214) keep the offset in 64 bits.
 set pooloff  NX2NAVI_POOL_OFFSET_PATCH 1
@@ -975,6 +974,5 @@ spin sdk 3d3250 3d3270   # 9 instructions; loads
 # cover is, rounded up to 8 at main+0xcec22c and stored as the width (+0x3d8 of the cascade set) and, through the packed
 # store at +0xe4, the height (+0x3f8). Near the ground it falls to about 400, which draws foliage shadows blocky, and
 # every change of size moves the shadow texels, so leaf shadows jump instead of sliding. The page's fixed size (+92)
-# goes in just before the rounding, as the community's shadow resolution mods do (1.1.0: mov w11, #1024 over the
-# computation). Found by a write watch on the size field (the writer was this function, and no other).
+# goes in just before the rounding. Found by a write watch on the size field (the writer was this function, and no other).
 site shadow main cec22c 11001d6b @page:x11 b9405d6b 11001d6b   # add w11, w11, #7 -> adrp x11, page; ldr w11, [x11, #92]; add w11, w11, #7

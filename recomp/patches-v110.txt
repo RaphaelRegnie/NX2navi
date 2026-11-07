@@ -1,7 +1,6 @@
-# Code patches for NX2navi 1.1.0 main (recomp/patches.py). The sites come from MacNativeGames
-# games/<game>/runtime/game_patches.c (MIT, Copyright (c) 2026 MacNativeGames contributors) at upstream ebe621d, through
-# its 1.2.1 addresses in game_version.h (2db612b); each one was located again in 1.1.0 by instruction-window matching
-# and its original words checked against this build's main. The patch page holds two floats the runtime writes at every
+# Code patches for NX2navi 1.1.0 main (recomp/patches.py). Copyright (c) 2026 MacNativeGames contributors (MIT; see
+# THIRD_PARTY_NOTICES.md). Each site was located in 1.1.0 from its 1.2.1 address by instruction-window matching and
+# its original words checked against this build's main. The patch page holds two floats the runtime writes at every
 # present (frame_rate.c): +0 the 30 Hz ratio (seconds * 30), +4 the frame step in seconds.
 
 set fps60    NX2NAVI_FPS60          1
@@ -11,7 +10,7 @@ set bounce   NX2NAVI_HIGHFPS_FIX    1
 set output   NX2NAVI_PATCH_OUTPUT   0
 set scene    NX2NAVI_PATCH_SCENE    0
 
-# 60 fps: the adaptive present-interval controller (main+0x8f26c8, 1.0.0 0x8f6bec) gets the minimum interval 1.
+# 60 fps: the adaptive present-interval controller (main+0x8f26c8) gets the minimum interval 1.
 site fps60 main 90e978 6b08015f 7100055f  # clamp: cmp w10, #1 (was cmp w10, w8 = minimum)
 site fps60 main 90e97c 1a89b10a 1a9fa52a  # clamp: csinc w10, w9, wzr, ge (desired = max(desired, 1))
 site fps60 main 90e9a0 b9401a8a d503201f  # lower trigger: nop the stored-candidate load
@@ -20,8 +19,8 @@ site fps60 main 90ea40 1a88c1ac 1a9fc5ac  # raise path: csinc w12, w13, wzr, gt 
 site fps60 main 90ea94 b9400288 52800028  # lower path: mov w8, #1 (minimum interval 1)
 site fps60 main 90eab0 2a0a03f5 1a9fa555  # lower path: csinc w21, w10, wzr, ge (result never below 1)
 
-# Real-time step: the VFR step (main+0x7ede6c, 1.0.0 0x7a83e4) and the global ratio after the controller call
-# (main+0x8f2394, 1.0.0 0x8f68b8) read ratio and seconds from the patch page instead of interval * 0.5 and interval / 60.
+# Real-time step: the VFR step (main+0x7ede6c) and the global ratio after the controller call
+# (main+0x8f2394) read ratio and seconds from the patch page instead of interval * 0.5 and interval / 60.
 site realtime main 833e4c 1e220020 @page:x9  # scvtf s0, w1 -> adrp x9, page
 site realtime main 833e50 52a84e08 bd400120  # mov w8, #60.0 -> ldr s0, [x9] (ratio)
 site realtime main 833e54 1e270101 bd400521  # fmov s1, w8 -> ldr s1, [x9, #4] (seconds)
@@ -33,11 +32,11 @@ site realtime main 90e5d4 1e2c1001 bd400120  # fmov s1, #0.5 -> ldr s0, [x9] (gl
 site realtime main 90e5e4 5e21d800 d503201f  # scvtf s0, s0 -> nop
 site realtime main 90e5e8 1e210800 d503201f  # fmul s0, s0, s1 -> nop
 
-# Hair and cloth (upstream 290ec9f, 8f8022f): the actor animation update builds a second clock {seconds = factor / 30,
+# Hair and cloth: the actor animation update builds a second clock {seconds = factor / 30,
 # ratio = factor} per rendered frame. Three inlined places: at the fmul, seconds = measured seconds * factor; at the
 # store of the factor into the ratio slot, measured ratio * factor. The call of the shared update (1.1.0
-# main+0x8ecb40, 1.2.1 main+0x89822c) scales s2 (seconds) and s3 (ratio) by the measured ratio. Upstream's
-# veneer bodies, inlined at the site.
+# main+0x8ecb40, 1.2.1 main+0x89822c) scales s2 (seconds) and s3 (ratio) by the measured ratio. The
+# replacement bodies are inlined at the site.
 site cloth main 9efc20 1e200900 f81f0fe9 @page:x9 bd400520 1e200900 f84107e9  # fmul s0, s8, s0
 site cloth main 9efc1c bd0117e8 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f091f bd0137ff 3dc007ff f94003e9 910083ff  # str s8, [sp, #0x114]
 site cloth main 9f0bcc 1e200900 f81f0fe9 @page:x9 bd400520 1e200900 f84107e9  # fmul s0, s8, s0
@@ -46,11 +45,11 @@ site cloth main a05a04 1e210801 f81f0fe9 @page:x9 bd400521 1e210801 f84107e9  # 
 site cloth main a05a08 bd0137e0 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f081f bd0157ff 3dc007ff f94003e9 910083ff  # str s0, [sp, #0x134]
 site cloth main 9f044c 97fbf1bd @page:x8 bd400104 1e240842 1e240863 97fbf1bd  # bl 0x8ecb40
 
-# Trampolines (upstream 27c3b43): the slow-motion check compares time object +0x28 (30 / (ratio * time scale)) with
+# Trampolines: the slow-motion check compares time object +0x28 (30 / (ratio * time scale)) with
 # 100; compare +0x28 * +0x38 (30 / time scale) instead, the same value at 30 Hz and independent of the frame rate.
 site bounce main bee7e0 bd402900 bd402900 bd403901 1e210800  # ldr s0, [x8, #0x28]; ldr s1, [x8, #0x38]; fmul s0, s0, s1
 
-# Output size (upstream games/<game>/runtime/game_patches.c patch_output_res; runtime/resolution.c switches the set on).
+# Output size (runtime/resolution.c switches the set on).
 # The swapchain size nnMain writes before NvInitializeGraphics comes from page +48 ({w, h} as one 64-bit value), and
 # the output size the renderer lays out its canvas, crop and UI in (main+0xcc3f00, read from the graphics parameters
 # through main+0xcc4160) from page +32; the renderer itself goes to page +40.
@@ -60,7 +59,7 @@ site output main cea5c8 aa1403e0 @page:x21  # mov x0, x20 -> adrp x21, page
 site output main cea5cc 94000081 f90016b3  # bl 0xcc4160 -> str x19, [x21, #40]
 site output main cea5d0 f9400015 f94012b5  # ldr x21, [x0] -> ldr x21, [x21, #32]
 
-# Scene render size (upstream patch_render_res): the renderer's +0xcc4 / +0xcc8, which size every scene render target,
+# Scene render size: the renderer's +0xcc4 / +0xcc8, which size every scene render target,
 # take two floats from page +16 instead of the graphics parameters' docked 1600x900.
 site scene main cea5e0 5e21d900 @page:x9  # scvtf s0, s8 -> adrp x9, page
 site scene main cea5e8 bd0cc660 2d420520  # str s0, [x19, #0xcc4] -> ldp s0, s1, [x9, #16]

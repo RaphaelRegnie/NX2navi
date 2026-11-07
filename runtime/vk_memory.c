@@ -7,9 +7,9 @@
 // generation newer than its upload), @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile); and from LAS
 // Recomp runtime/nvn/vulkan/exec.c:2094-2131 (vk_pages_changed: every write-watch query resets the OS bits, so each
 // query stamps the pages it saw with a new generation shared by all users) and textures.c:240-270 (deferred
-// destruction) @ da35b83a (MIT, Copyright (c) 2026 Peiikai). MNG aliases host VM (mach_vm_remap) and protects pages
-// (fault handler); here virtual pools are a GPU-side page table over device-local memory and dirty pages come from
-// GetWriteWatch (mem_written_pages), so neither is needed.
+// destruction) @ da35b83a (MIT, Copyright (c) 2026 Peiikai). Virtual pools are a GPU-side page table
+// over device-local memory and dirty pages come from GetWriteWatch (mem_written_pages), so neither host VM aliasing
+// nor page protection (a fault handler) is needed.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -339,7 +339,7 @@ void vk_pool_fini(pool_t *p) {
     else destroy_rec(c, r);
 }
 
-// Requests were checked by the front end (nvn_api_core.c, MNG nx2navi_vpool.c); apply them in order.
+// Requests were checked by the front end (nvn_api_core.c); apply them in order.
 int vk_pool_map_virtual(pool_t *v, int n, const void *requests) {
     const nvn_mapping_t *rq = requests;
     plat_mutex_lock(&pool_lock);
@@ -2300,8 +2300,8 @@ static void defer(int kind, uint64_t handle, VmaAllocation alloc) {
     // slot_resolve hands a draw a released entry, and entry_of destroys released entries at that address later in
     // the same submission. Stamped with the last submitted value, the object went as soon as the GPU reached it,
     // before the submission that names it ran, and with the recorder thread (vk_rec.c) behind, before the recorder
-    // made the call that names it. LAS Recomp and Savage Wind Recomp stamp every deferral with the submission being
-    // recorded (runtime/nvn/vulkan/textures.c defer: vk_pending_seq). NX2NAVI_DEFER_STAMP=0 brings back the old stamp.
+    // made the call that names it. So every deferral is stamped with the submission being
+    // recorded. NX2NAVI_DEFER_STAMP=0 brings back the old stamp.
     static int stamp = -1;
     if (stamp < 0) stamp = rt_knob("DEFER_STAMP", "1") != 0;
     uint64_t tl = tl_noted, rf = stamp ? vk_exec_recording_fence() : 0;

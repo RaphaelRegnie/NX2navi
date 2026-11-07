@@ -7,7 +7,7 @@ operands (NaNs, infinities, denormals, +-0, saturation edges, random FPCR.DN/FZ/
 and, for stores, memory must match. FPSR is not compared; the lowering does not model the cumulative exception bits
 or QC.
 
-Adapted from LAS Recomp tools/test_simd.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 
 Usage: simd.py [--encodings N] [--cases K] [--seed S] [--jobs J] [--no-validity] [--filter HEX/MASK]
 """

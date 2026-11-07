@@ -4,7 +4,7 @@
 //   - no shaderFloat64 (NX2NAVI_VK_NO_FLOAT64=1 clears the feature before vkCreateDevice): the translator lowers FP64 to
 //     FP32 ("softfloat64"), so no shader declares Float64.
 //   - minStorageBufferOffsetAlignment above 4 (NX2NAVI_VK_SSBO_ALIGN=<power of two> raises it): the translator computes
-//     storage offsets from the guest address rounded down to that alignment (Ryujinx's unaligned storage path), and
+//     storage offsets from the guest address rounded down to that alignment (the translator's unaligned storage path), and
 //     vk_exec_draw.c ssbo_info binds the rounded-down address, so shader writes reach guest memory instead of a copy.
 //   - no graphics pipeline library with fast linking (NX2NAVI_GPL=0 forces it): vk_caps.gpl = 0, the extension stays disabled, and pipelines are built whole.
 //   - no 32-lane pin (no subgroupSizeControl, 32 outside min..max, or NX2NAVI_VK_SUBGROUP_PIN=0): stages run at the
@@ -51,8 +51,8 @@ void vk_caps_driver(VkPhysicalDevice p) {
 // driver branch had them off for a while: its device losses at boot (issue #5) came with a cold pipeline cache, but
 // their cause was GPU writes past 3D BC images (vk_exec.c, "3D BC render targets"). With that fixed, the RDNA 1/2
 // driver boots with GPL from a cold cache and fast-links without a failure, while with GPL off every new pipeline is
-// built whole on the draw's path (frames of 0.5-1.2 s on an RX 6600, issue #381). Savage Wind Recomp turns GPL off on
-// RDNA 4 under RADV for a GPU hang at the title screen.
+// built whole on the draw's path (frames of 0.5-1.2 s on an RX 6600, issue #381). RDNA 4 under RADV is reported to
+// hang the GPU at the title screen with GPL.
 int vk_caps_gpl(const VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT *f,
                 const VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT *p) {
     gpl_lib = f->graphicsPipelineLibrary;
@@ -113,7 +113,7 @@ void vk_caps_init(VkCtx *c) {
     for (int i = 0; i < 3; i++) told[i] = vk_caps.sg_pin_stages & stage[i] ? want : sg.subgroupSize;
     // Gathers (TLD4) pick their four texels with Maxwell's rounding; AMD and Intel round a coordinate that sits between
     // two texels the other way, which draws dark lines along object edges in shadow-map filtering (docs/maxwell.md 2.10;
-    // BotW and NX2navi on AMD). The translator biases gather coordinates by the host's sub-texel precision; NVIDIA rounds
+    // seen on AMD). The translator biases gather coordinates by the host's sub-texel precision; NVIDIA rounds
     // as Maxwell does. NX2NAVI_GATHER_BIAS=<bits> forces it (0: off).
     uint32_t gather = env_u32("NX2NAVI_GATHER_BIAS", c->props.vendorID == 0x10de ? 0 : l->subTexelPrecisionBits);
     // A register read before any write is an undefined load in SPIR-V, so function-local variables start at 0

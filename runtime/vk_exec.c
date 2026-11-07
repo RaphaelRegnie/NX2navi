@@ -362,8 +362,8 @@ static void resolve_target(const tex_t *t, const view_t *v, int has_v, int depth
     if (!o->aspect) o->image = VK_NULL_HANDLE;
 }
 
-/* The size of a pass without attachments: the far corner of viewport 0, else of the scissor, 1..16384, as
-   MacNativeGames and nxnative size it. NX2navi draws a fragment shader that only writes a storage buffer into a 1x1
+/* The size of a pass without attachments: the far corner of viewport 0, else of the scissor, 1..16384.
+   NX2navi draws a fragment shader that only writes a storage buffer into a 1x1
    viewport; a pass sized by the viewport's width alone puts an offset viewport outside the scissor, and the cave rock
    loses its ambient light. */
 void vk_exec_noatt_dims(const VkExec *ex, uint32_t *w, uint32_t *h) {
@@ -499,7 +499,7 @@ static int tfr_first(const VkExecTarget *t, uint64_t stamp) {
 }
 
 // With any, a recent depth target alone does not make the pass per-frame when a colour target is rendered for the
-// first time: the game's item icon capture (an inventory or Fuse icon) draws into a new colour target with the
+// first time: the game's item icon capture (an inventory icon) draws into a new colour target with the
 // per-frame depth buffer, once. Its draws skipped there stay missing from the icon until the item is captured again.
 int vk_exec_targets_recent(VkExec *ex, int any) {
     resolve_rt(ex);
@@ -838,7 +838,7 @@ static void set_rt(VkExec *ex, const p_set_rt *r) {
 // command-buffer state is lost there (bindings and dynamic state: vk_exec_draw_new_cb, ex->dirty); barriers, layouts and
 // queries are not: a barrier's first scope is everything earlier in submission order, image layouts belong to the image,
 // and occlusion queries end with their pass. Fences, completion callbacks and reports stay per submission: only the last
-// part signals the value. nxnative commits every 64 draws between passes; MacNativeGames after 30, then every 40.
+// part signals the value.
 // A part also spans at least NX2NAVI_SPLIT_US (1000) of replay time: a split costs about 40 us of the render thread
 // (vkQueueSubmit2, a command buffer, the mirror prologue), and a fight frame of 2,000 draws made 15 parts on the 7900X;
 // a millisecond of recording is a fraction of a millisecond of GPU work, so the GPU still starts early.

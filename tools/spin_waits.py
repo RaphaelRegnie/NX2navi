@@ -1,4 +1,4 @@
-# Adapted from nxnative dm/tools/patch_nso.py @ 6d34984 (MIT, Copyright (c) 2026 seedds): the spin wait search
+# Copyright (c) 2026 seedds (MIT; see THIRD_PARTY_NOTICES.md): the spin wait search
 # ("Spin waits": spin_rw, spin_kind, spin_rmw, spin_lock, spin_store, spin_quick, spin_region, spin_region1).
 """Find the spin waits of the ExeFS modules and print them as `spin` lines of a patch table (recomp/patches.py).
 
@@ -7,8 +7,8 @@ Usage: spin_waits.py --exefs build/extracted/v143/exefs --patches recomp/patches
 A guest loop that polls memory until another thread changes it fills only its own core on the Switch, where a better
 thread pinned there preempts it. Here it holds one of the three virtual cores (runtime/kernel.c) and a host core, and
 when the poll takes and releases a lock on every pass, two pollers hand the lock's cache line between their cores so
-that the thread whose item it is rarely wins its exclusive store (nxnative 6d34984: Breath of the Wild's job queue,
-main+0xef62dc, CPU frames of 30-210 ms every 1-10 s). The generator sends the back-edges of such loops through
+that the thread whose item it is rarely wins its exclusive store (a job queue
+polled this way gave CPU frames of 30-210 ms every 1-10 s). The generator sends the back-edges of such loops through
 rt_spin_gate (runtime/kernel.c kern_spin_gate), which slows the poll down and hands the virtual core to a waiting
 thread once the loop has polled for a while.
 

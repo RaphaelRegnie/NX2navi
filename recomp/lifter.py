@@ -1,4 +1,4 @@
-# Adapted from LAS Recomp tools/lifter.py @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+# Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 """AArch64 -> C static recompiler.
 
 Integer, memory, and control flow are translated to C. FP/SIMD instructions (and CRC32) are

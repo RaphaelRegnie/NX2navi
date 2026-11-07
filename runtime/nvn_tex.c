@@ -1,5 +1,4 @@
 // NVN texture storage size / alignment / per-level offsets (Tegra X1 block-linear layout).
-// Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_tex.c @ b75be8cf; Apple parts dropped, layout math unchanged.
 // Based on deko3d source/dk_image.cpp (zlib license, Copyright (C) 2018-2020 fincs), reproduced below as in MNG's LICENSE.deko3d.
 //
 // Copyright (C) 2018-2020 fincs

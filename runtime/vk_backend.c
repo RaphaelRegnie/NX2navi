@@ -169,7 +169,7 @@ int vk_replay_async(void) {
     static int on = -1;
     if (on < 0) {
         // Off by default. Where the game waits for the GPU it overlaps the replay with the game threads (a GTX 1650 in
-        // the Depths went from 450-686 frames over 50 ms a minute to 10-13, issue #88), the only place a gain was
+        // one scene went from 450-686 frames over 50 ms a minute to 10-13, issue #88), the only place a gain was
         // measured. While it was the default, a GTX 1660 Ti at the 60 fps cap with the GPU at 26 % reported uneven
         // motion that 0.3.4 did not have (#659). It adds up to a frame of latency.
         on = cfg_bool("NX2NAVI_REPLAY_ASYNC");

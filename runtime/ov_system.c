@@ -27,7 +27,7 @@
 #include "platform/platform.h"
 
 #define NFP_R_DEVICE_NOT_FOUND 0x8073u     // nfp: no NFC reader on the host
-#define ACCOUNT_R_INVALID 0x7c67u          // MacNativeGames' result for an unknown user handle or uid
+#define ACCOUNT_R_INVALID 0x7c67u          // the result for an unknown user handle or uid
 #define TIME_R_INVALID 0x74u
 #define TIME_R_SOURCE_MISMATCH 0x18074u
 
@@ -180,7 +180,7 @@ static void ov_focus_mode(Cpu *c) {
 // mode 2: on a Switch the system then suspends the whole process while it is out of focus and sends Resume when it
 // returns. Here only the game's main thread stops (it waits in PopNotificationMessage for the next message) while its
 // loader threads, audio and clocks run on, and a load interrupted that way was seen to never finish (Linux, 1.4.3).
-// So NX2NAVI_ASSUME_FOCUS=1, the default, keeps it at 1, as MacNativeGames does; with 0 it follows the window through
+// So NX2NAVI_ASSUME_FOCUS=1, the default, keeps it at 1; with 0 it follows the window through
 // oe_set_focus. The caller of oe_set_focus also pushes OE_MSG_FOCUS_STATE_CHANGED.
 //
 // The setting is read on every focus change rather than once at start: a focus change is rare, the lookup is a short
@@ -439,7 +439,7 @@ static void ov_show_error(Cpu *c) {
 // ==== SDK-internal initialisation (services.c)
 static void ov_diag_startup(Cpu *c) { (void)c; rt_log("diag: host diagnostics"); }
 static void ov_aoc_initialize(Cpu *c) { (void)c; rt_log("aoc: no add-on content"); }
-// 1.4.3's main lists add-on content (MNG services.c host_aoc_list): there is none.
+// 1.4.3's main lists add-on content: there is none.
 // int ListAddOnContent(AddOnContentIndex *out, int offset, int count)
 static void ov_aoc_list(Cpu *c) {
     int offset = (int)arg_x(c, 1), count = (int)arg_x(c, 2);
@@ -853,8 +853,8 @@ static void ov_user_difference(Cpu *c) {
 // ==== nn::pl shared fonts (shared_font.c). NX2navi asks for them only from its font loader, only with Simplified Chinese,
 // Korean or Traditional Chinese text, and only for type 0; tools/extract_fonts.py writes
 // them from the user's firmware. Each type is read on first use into guest-visible memory as the BFTTF file the pl
-// shared memory holds; Address is 8 bytes past the file start (after the BFTTF header) and Size the decoded font size,
-// as in MNG. The load state is always Loaded: the game spins until it is, so missing files stop with a named fatal at
+// shared memory holds; Address is 8 bytes past the file start (after the BFTTF header) and Size the decoded font size.
+// The load state is always Loaded: the game spins until it is, so missing files stop with a named fatal at
 // Address/Size instead of a hang. NX2NAVI_SHARED_FONTS=<dir> overrides <romfs>/../../firmware/shared-fonts.
 #define SHARED_FONT_TYPES 6
 #define BFTTF_MAGIC 0x7f9a0218u
@@ -881,7 +881,7 @@ const char *ov_shared_font_dir(char *buf, size_t n) {
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 
 // The decoded font size of a BFTTF image, 0 if it is not one: big-endian words XORed with key = word0 ^ BFTTF_MAGIC,
-// word1 = font size, then an sfnt (TrueType or OpenType) font (MNG extract_shared_fonts.py bfttf_size).
+// word1 = font size, then an sfnt (TrueType or OpenType) font.
 uint64_t ov_bfttf_size(const uint8_t *p, uint64_t len) {
     if (len < 12) return 0;
     uint32_t key = be32(p) ^ BFTTF_MAGIC, size = be32(p + 4) ^ key, first = be32(p + 8) ^ key;

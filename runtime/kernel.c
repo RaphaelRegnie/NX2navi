@@ -34,7 +34,7 @@
 #define CORE_MASK_ALL ((1ull << NCORE) - 1)
 #define HOST_STACK (256ull << 20)        // reserved, committed on demand
 #define TLR_SIZE 0x200
-#define THREAD_OBJ_SIZE 0x400            // "current thread object" at TLR+0x1F8 (d2r-mobile thread.c)
+#define THREAD_OBJ_SIZE 0x400            // "current thread object" at TLR+0x1F8
 #define TLS_SIZE 0x2000
 #define MAIN_STACK (1ull << 20)          // main.npdm META+0x1C
 #define MAIN_PRIO 44                     // META+0xE
@@ -354,19 +354,19 @@ static int core_allowed(const RtThread *t, int c) {
 // MacNativeGames contributors): Horizon gives a core to a strictly better thread the moment that thread is ready.
 // Here a better waiter only marks the owner, which gives the core up at its next SVC or indirect call; an owner in a
 // stretch of game code with neither keeps it (NX2NAVI_CORE_DIAG: 0.5-1.1 ms of thread-time per frame, waits to 16 ms and
-// more). With it on, three parts, all of which MacNativeGames found necessary:
+// more). With it on, three parts, all of them necessary:
 // - The waiter interrupts the owner (plat_intr_stop) when it has waited AP_FIRST_NS, then every
 //   millisecond: if the owner's host rip is in the lifted modules' code (g_gen_lo..g_gen_hi) and its host depth is 0
 //   (not in a host call or SVC, nor in game code a host call made), it holds no host lock, so its rip is moved to
 //   kern_ap_stub, which saves every volatile register, gives the core up like a checkpoint (kern_ap_yield) and jumps
 //   back. Otherwise it is only marked, as before.
 // - Priority inheritance (eff_prio): a thread owning a guest mutex counts at the priority of the best thread blocked on
-//   it, for granting, kicking, preempting and yielding. Without it MacNativeGames' game stopped at its first
+//   it, for granting, kicking, preempting and yielding. Without it the game stopped at its first
 //   "Continue" (a better thread took the core of the low-priority owner of a mutex it then waited for).
 // - Horizon's preemption disable: the SDK's spin locks (1.2.1 sdk f_70051242a8, f_7005124360 and siblings) count
 //   TLR+0x100 (disable_count) while they try or hold the lock, and after clearing it call SVC 0x36 when TLR+0x102
 //   (interrupt_flag) is set. Such an owner is not preempted, at a checkpoint either: interrupt_flag is set and the
-//   switch happens at that SVC. Preempting it anyway hung MacNativeGames' game at "Continue" (the lock holder lost its
+//   switch happens at that SVC. Preempting it anyway hung the game at "Continue" (the lock holder lost its
 //   core to a thread that then spun on that lock).
 // NX2NAVI_ASYNC_PREEMPT=0 keeps the old scheduling exactly: raw priorities, no interruption, no disable_count; =2 keeps
 // inheritance and the preemption disable without interrupting owners.
@@ -1078,11 +1078,11 @@ void kern_core_back(int *away) {
 // A pass of a guest loop that polls memory until another thread changes it. On the Switch it fills only its own core,
 // where a better thread pinned there preempts it; here it holds a virtual core and a host core, and pollers that take a
 // lock on every pass hand its cache line between their host cores so the thread whose item it is rarely gets it
-// (nxnative found this in Breath of the Wild's job queue). Every pass pauses the host core once. A wait is a run of
+// (a job queue's pollers do this). Every pass pauses the host core once. A wait is a run of
 // passes through the same loop at most SPIN_GAP_NS apart; once one has lasted NX2NAVI_SPIN_HANDOFF_US (default 50) and a
 // thread waits for a virtual core, each pass gives the core to the waiter, whatever its priority, yields the host CPU
 // and takes a core again. Shorter waits keep the core: a lock held for a moment would otherwise make the next pass wait
-// for another thread's next SVC (MacNativeGames). NX2NAVI_SPIN=0 keeps the core always (the gate's own cost only).
+// for another thread's next SVC. NX2NAVI_SPIN=0 keeps the core always (the gate's own cost only).
 #define SPIN_GAP_NS 20000ull
 static int g_spin_on = -1;
 static uint64_t g_spin_handoff_ns;
@@ -1863,8 +1863,8 @@ int kern_svc(Cpu *c, uint32_t imm) {
     case 0x1C: {   // WaitProcessWideKeyAtomic(x0 lock, x1 key, w2 tag, x3 timeout)
         // The key is set before the lock is released. The SDK's Signal reads the key in user mode and skips svc 0x1D
         // when it is 0, and user mode takes the lock without G: releasing first lets another thread take the lock,
-        // change the condition, read key 0 and wake nobody, after which this thread waits forever (MNG threads.c
-        // 439-446). Linking into the wait list happens in block, still holding G, so svc 0x1D cannot come between.
+        // change the condition, read key 0 and wake nobody, after which this thread waits forever.
+        // Linking into the wait list happens in block, still holding G, so svc 0x1D cannot come between.
         RtThread *t = cur(imm);
         uint64_t addr = x[0], key = x[1];
         lock();
@@ -1875,7 +1875,7 @@ int kern_svc(Cpu *c, uint32_t imm) {
             t->wtag = (uint32_t)x[2];
             lock_handoff(addr);
             cv_hook();
-        } else {   // the probe's negative control: MNG's pre-fix order
+        } else {   // the probe's negative control: the old order (release, then set the key)
             lock_handoff(addr);
             cv_hook();
             st32(key, 1);
@@ -1949,8 +1949,8 @@ int kern_svc(Cpu *c, uint32_t imm) {
         if (type != 0) {
             int32_t nv = val + 1;
             if (type == 2) {
-                // Waking all (count <= 0) with waiters subtracts 2, not 1 (mesosphere
-                // KAddressArbiter::SignalAndModifyByWaitingCountIfEqual; the hardware, LAS Recomp and nxnative agree).
+                // Waking all (count <= 0) with waiters subtracts 2, not 1 (Horizon's
+                // KAddressArbiter::SignalAndModifyByWaitingCountIfEqual).
                 if (cnt <= 0) nv = nw > 0 ? val - 2 : val + 1;
                 else nv = nw == 0 ? val + 1 : nw <= cnt ? val - 1 : val;
             }
@@ -2015,7 +2015,7 @@ int kern_svc(Cpu *c, uint32_t imm) {
         int idx = -1;
         lock();
         g_sync_calls++;
-        // Horizon's order (mesosphere KSynchronizationObject::Wait): a signalled object, then timeout 0, then a pending
+        // Horizon's order (KSynchronizationObject::Wait): a signalled object, then timeout 0, then a pending
         // CancelSynchronization. The cancel is for the next wait that would block: a poll or a wait on a signalled
         // object leaves it pending. A cancel that wakes this wait (CancelSynchronization wakes it with R_CANCELLED; a
         // signal wakes it with -1 to look again) ends it cancelled, signalled objects or not.

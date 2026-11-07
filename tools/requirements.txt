@@ -1,4 +1,4 @@
-# Python 3.12.15 (uv) venv at .venv: LASRecomp-style lifter/generator tools + MacNativeGames build deps + oead/evfl/quicktex.
+# Python 3.12.15 (uv) venv at .venv: lifter/generator tools + build deps + oead/evfl/quicktex.
 # Recreate: uv venv --python 3.12 .venv && uv pip install --python .venv/Scripts/python.exe -r tools/requirements.txt
 altgraph==0.17.5
 ansicon==1.89.0

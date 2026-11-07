@@ -1,7 +1,6 @@
-Applied by tools/build_hactool.py to SciresM/hactool (ISC) at 1d64a83450e025622f3468c28fc4164dad2c5ef6.
-From MacNativeGames build_app.py build_hactool() (MIT, Copyright (c) 2026 MacNativeGames contributors), the parts
-that run on Windows: MNG_TITLE_KEYS names the title-key file, and the BKTR checks accept the subsection table
-padding and the subsection layout of newer cumulative updates. Its funopen base-range hook is macOS-only and left out.
+Applied by tools/build_hactool.py to hactool (ISC) at 1d64a83450e025622f3468c28fc4164dad2c5ef6.
+Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md). MNG_TITLE_KEYS names the title-key
+file, and the BKTR checks accept the subsection table padding and the subsection layout of newer cumulative updates.
 
 diff --git a/main.c b/main.c
 index 07f53cb..7921cc4 100644

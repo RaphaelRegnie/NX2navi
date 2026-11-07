@@ -1,5 +1,4 @@
-# Adapted from MacNativeGames games/<game>/scripts/make_romfs_patches.py @ ebe621d (MIT, Copyright (c) 2026
-# MacNativeGames contributors).
+# Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 """Build the 60 fps RomFS overlay for NX2navi 1.1.0, 1.2.1 or 1.4.3 (runtime/romfs.c, NX2NAVI_ROMFS_PATCHES).
 
 UI/LayoutArchive/Common.Product.<110 or 140>.Nin_NX_NVN.blarc.zs: the weapon / shield / material quick menus capture the game
@@ -7,9 +6,7 @@ picture for their background when the panes C_CaptureBG_00, C_CaptureClearBG_00 
 visible at animation frame 1.0 (anim/ShortCutBG_00_In.bflan), AutoBuilder the same with C_CaptureBG_00
 (anim/AutoBuilder_00_In.bflan). UI animations advance 0.5 frames per game frame at 60 fps, so the capture lands after
 the world stopped drawing and the background can be black. The visibility keys move to frame 0.0: the live world is
-captured at once (upstream checked weapon, shield, material and ability wheel at 60 fps, and 30 fps).
-The game-over flow fix of the same upstream script is 1.0.0 only (1.1.0, 1.2.1 and 1.4.3 run DmF_SY_GameOver.110) and is
-left out.
+captured at once (the weapon, shield, material and ability wheels were checked at 60 fps and 30 fps).
 
 --aspect <w>x<h> (a game resolution of another shape than 16:9, such as 3440x1440 or 1280x800) also lays the UI out
 for that shape (tools/ultrawide_layout.py): menus keep their 16:9 proportions in the middle, full-screen backgrounds
@@ -233,8 +230,8 @@ for p in files:
         MALS[m[1]] = (int(m[2]), p)
 MALS = sorted(p for _, p in MALS.values())
 LAYOUT_MSG = 'LayoutMsg/DoCommand_00.msbt'
-# The resource size table (System/Resource/ResourceSizeTable.Product.<n>...rsizetable.zs, matched as loosely as
-# MacNativeGames make_button_icons.py does), likewise the newest version in the RomFS.
+# The resource size table (System/Resource/ResourceSizeTable.Product.<n>...rsizetable.zs, any <n>), likewise the
+# newest version in the RomFS.
 RESTBL = max((p for p in files if p.startswith('System/Resource/ResourceSizeTable.') and p.endswith('.rsizetable.zs')),
              key=lambda p: int((re.search(r'\.(\d+)\.', p) or [0, 0])[1]), default=None)
 by_position = args.prompts == 'xbox'   # the face buttons' prompts swapped to the labels (pad_layout = nintendo)

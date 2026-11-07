@@ -102,7 +102,7 @@ int nvn_handle_live(uint64_t handle);                      // 1 while the handle
 uint64_t nvn_handle_bytes(uint64_t handle);                // bytes of the copy, OP_BEGIN to OP_END; 0 if not live
 uint64_t nvn_submit_count(void);                           // QueueSubmitCommands calls so far
 // Submits a texture pin outlives its last tex_pin and the release of the last recording copy naming it: about 20 s at
-// one submit a frame (MacNativeGames frees after two 600-submit windows).
+// one submit a frame.
 #define NVN_PIN_AGE 1200
 // Frees the texture pins no recording copy has named for NVN_PIN_AGE submits (nvn_api_cmd.c, "texture pins"), except keep[0..nkeep):
 // the replay's current render targets, which carry over to the next submission. Called between submissions by the

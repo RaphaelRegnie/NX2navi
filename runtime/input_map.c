@@ -18,7 +18,7 @@
 // the ocarina (left), puts the accessory on (up), calls Navi (right) and changes boots (down); the right stick's press
 // resets the camera. So E acts and Left Shift, held, dashes (both A); Space jumps; Left Ctrl and Backspace put away; the
 // mouse buttons attack (left), target (right) and reset the camera (middle); O and N are the ocarina and Navi besides 1
-// to 4. SHAKE (NX2navi's object shake) has no key: Ocarina has no use for it, and bind_shake still sets one.
+// to 4. SHAKE (the right-stick shake) has no key: Ocarina has no use for it, and bind_shake still sets one.
 #define DEFAULT_KEYS \
     {KEY_W, B_SL_UP}, {KEY_A, B_SL_LEFT}, {KEY_S, B_SL_DOWN}, {KEY_D, B_SL_RIGHT},                  /* move */ \
     {KEY_UP, B_SR_UP}, {KEY_LEFT, B_SR_LEFT}, {KEY_DOWN, B_SR_DOWN}, {KEY_RIGHT, B_SR_RIGHT},       /* camera, second source */ \

@@ -3,7 +3,7 @@
 tools/xlate/AmpereLowering.cs rewrites the SM86 instructions of the game's neural-network passes as Maxwell code:
 Lowerer.Hmma (HMMA.1688 / HMMA.16816, .F16 and .F32), Lowerer.Ldsm (LDSM.16.M88 / MT88 .1/.2/.4), Lowerer.Movm
 (MOVM.16.MT88) and Lowerer.Half (HFMA2, HFMA2.RELU). This script lowers every case of the vector file with
-`nx2navi_xlate --lower`, runs the Maxwell words on tests/maxwell_warp_emu.py (which executes them as the Ryujinx
+`nx2navi_xlate --lower`, runs the Maxwell words on tests/maxwell_warp_emu.py (which executes them as the shader
 translator does) and compares with the registers the GPU wrote. Exit status 1 on any failure. The vector file names
 the GPU that produced it ("device"). So far that is an RTX 5090 running the compute_86 PTX through the driver's JIT,
 as no SM86 part was at hand: the results follow the PTX semantics but need not show SM86's internal precision.

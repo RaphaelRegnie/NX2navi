@@ -421,7 +421,7 @@ class CleanupTest(unittest.TestCase):
 
 
 class BaseGameCheckTest(unittest.TestCase):
-    """Issue #261: an update NSP chosen as the base game was reported as "not Ocarina of Time"."""
+    """Issue #261: an update NSP chosen as the base game was reported as not being the game."""
     BASE, UPDATE = '0100F2C0115B6000', '0100F2C0115B6800'
 
     @staticmethod

@@ -1,16 +1,15 @@
-// Switch 2 (NVN2) shader programs are SM86 (Ampere) code; the Ryujinx translator decodes Maxwell (SM5x) only. This file
-// rewrites each SM86 instruction as one or more Maxwell instructions with the same meaning, so Ryujinx's Maxwell decoder,
+// Switch 2 (NVN2) shader programs are SM86 (Ampere) code; the shader translator decodes Maxwell (SM5x) only. This file
+// rewrites each SM86 instruction as one or more Maxwell instructions with the same meaning, so its Maxwell decoder,
 // IR and SPIR-V backend run unchanged. Instructions this file does not know make the whole program fail with the opcode
 // and the reason, so coverage grows by census (python nvn2_shaders.py over a NX2NAVI_SHADER_DUMP directory).
 //
-// Encoding facts: SM70+ instruction fields as in Mesa NAK's sm70_encode.rs (MIT); the Maxwell side is Ryujinx's
-// Decoders/InstTable.cs and InstDecoders.cs. Behaviour where SM86 and the translator's Maxwell model differ (MUFU.SIN/COS
-// take turns, BSSY/BSYNC are reconvergence hints, bank 24 is never bound) was cross-checked against the system's
-// shader_recompiler/frontend/ampere/lower_to_maxwell.h (GPL-3.0, read for behaviour only; no code taken).
+// Encoding facts: the SM70+ instruction field layouts; the Maxwell side is the translator's Decoders/InstTable.cs and
+// InstDecoders.cs. Where SM86 and the translator's Maxwell model differ: MUFU.SIN/COS take turns, BSSY/BSYNC are
+// reconvergence hints, bank 24 is never bound.
 //
 // Layout: graphics programs keep the first 0x50 bytes of the 0x80-byte Turing+ header (the same fields as Maxwell's
 // header), then the instructions; Maxwell puts a scheduling word first in every 32 bytes counted from the first
-// instruction (Ryujinx's Decoder skips them), written as 0. Compute programs start at address 0.
+// instruction (the translator's Decoder skips them), written as 0. Compute programs start at address 0.
 //
 // Registers: guest registers keep their numbers. Uniform registers live just above the highest register the program
 // uses (UrBase, even so pairs stay aligned; URZ is RZ) and must end below R239. R239-R254 are this file's scratch
@@ -985,8 +984,8 @@ static class AmpereLowering
         // index above) from a uniform register in bits 40-45 (0xf60) or, with bit 59 (.B) set, as one more operand
         // right after the coordinates (0x361; with bit 60 clear Ra holds all coordinates and Rb the handle and the
         // rest). Bindless becomes Maxwell TEX.B, the handle first among the meta registers (offsets bit 36, LOD mode 37):
-        // the translator then indexes its texture-pool arrays with it (Ryujinx BindlessElimination GenerateBindlessAccess,
-        // the handle being loaded from memory). Operand packing as the system's lower_to_maxwell.h describes (behaviour only).
+        // the translator then indexes its texture-pool arrays with it (BindlessElimination GenerateBindlessAccess,
+        // the handle being loaded from memory).
         void Tex(uint op)
         {
             bool bindless = op != 0xb60;
@@ -1311,7 +1310,7 @@ static class AmpereLowering
 
         // SURED.D.op U32 (bound descriptor): data 32-39, coordinates 24-31, operation 87-89 (ADD MIN MAX INC DEC AND OR
         // XOR, as Maxwell's), dimension 61-63 (1D buffer or 2D), descriptor offset 40-53 in bank 54-58. Maxwell's SURED
-        // is 1110101101011 in the top bits (0xeb58, Ryujinx InstTable Sured); 0xeb48 matched no instruction, so the
+        // is 1110101101011 in the top bits (0xeb58, InstTable Sured); 0xeb48 matched no instruction, so the
         // translator skipped every SURED: Ocarina's edge AA (the blend-weight pass ORs its weights into an image) never
         // wrote anything.
         void Sured()
@@ -1519,7 +1518,7 @@ static class AmpereLowering
         // on an NVIDIA GPU (tests/tensor_lowering_check.py): a negative result or -0 becomes +0, +inf stays, -inf
         // becomes 0, a NaN result stays NaN (0x7fff). The sum goes to TexOut and integer operations build the mask of
         // the half lanes to clear. Maxwell PRMT would be the obvious tool, but the translator emits nothing for it
-        // (Ryujinx 1.3.2, Instructions/InstEmit.cs, PrmtR only logs "not implemented").
+        // (Instructions/InstEmit.cs: PrmtR only logs "not implemented").
         // F32 results (78), the H0_NH1 source (86) and absolute values where Maxwell has none are not lowered. HADD2's
         // second operand is B, or C for forms 2/3.
         void Half(ulong maxwell)
@@ -1832,10 +1831,9 @@ static class AmpereLowering
         //   W2 0x000004ff: bits 78-79 = 0, round to nearest even. The compiler uses this form for unorm values it has
         //                  already multiplied by 255.
         // Each byte goes through NaN -> 0, a float clamp to [0, 255], then F2I.U32.F32 with that rounding. The clamp
-        // has to be explicit. The translator's F2I (Ryujinx Instructions/InstEmitConversion.cs, EmitF2I) clamps only
+        // has to be explicit. The translator's F2I (Instructions/InstEmitConversion.cs, EmitF2I) clamps only
         // U16/S16 destinations, and IDstFmt has no U8, so a plain F2I.U8 lets values above 255 through. It also feeds
-        // NaN to FMax, whose SPIR-V result is undefined. Behaviour as read from the system (lower_to_maxwell.h,
-        // LowerToMaxwellWith; GPL-3.0, read for behaviour only).
+        // NaN to FMax, whose SPIR-V result is undefined.
         void F2ipByte()
         {
             if ((_i.W1 & ~0xffu) != 0 || (_i.W2 != 0x0000c4ff && _i.W2 != 0x000004ff)) throw Fail("packed float-to-byte mode");
@@ -1878,7 +1876,7 @@ static class AmpereLowering
         // interleaved: dx.x, dy.x, dx.y, dy.y), descriptor word offset 40-53 in bank 54-58, dimension 61-63, second
         // destination 64-71, mask 72-75, bit 90 no-dependency. Offsets (76), FP16 results (79) and the bindless forms
         // (59-60) are not lowered. Bits 81-84 are set in every TXD seen (81-83: no sparse predicate).
-        // Maxwell TXD (0xde00) takes the coordinates and the layer the same way in Ra.., but Ryujinx's EmitTxd reads Rb..
+        // Maxwell TXD (0xde00) takes the coordinates and the layer the same way in Ra.., but the translator's EmitTxd reads Rb..
         // as dPdx (2 values) then dPdy (2 values), so the derivatives are reordered on the way into TexMeta.
         // With no second destination the third and fourth channels are dropped (SM70+ register pairs), so the mask
         // handed to Maxwell keeps only its two lowest channels and TexResults writes Rd, Rd+1; otherwise TexResults
@@ -1902,7 +1900,7 @@ static class AmpereLowering
             int ra = (int)_i.Bits(24, 8), rb = (int)_i.Bits(32, 8);
             int coords = dim == 5 ? 3 : 2;
             for (int k = 0; k < coords; k++) Mov(TexCoord + k, ra == RZ ? RZ : Gpr((uint)(ra + k)), false);
-            // SM86 order dx.x, dy.x, dx.y, dy.y; Ryujinx's Maxwell order dx.x, dx.y, dy.x, dy.y.
+            // SM86 order dx.x, dy.x, dx.y, dy.y; the translator's Maxwell order dx.x, dx.y, dy.x, dy.y.
             int[] order = { 0, 2, 1, 3 };
             for (int k = 0; k < 4; k++) Mov(TexMeta + k, rb == RZ ? RZ : Gpr((uint)(rb + order[k])), false);
             EmitG(0xde00000000000000UL | TexOut | ((ulong)TexCoord << 8) | ((ulong)TexMeta << 20) | ((ulong)TexMaxwellDim[dim] << 28)
@@ -2286,7 +2284,7 @@ static class AmpereLowering
                 Emit(0xe24000000000000fUL | ((ulong)(_i.Bits(12, 4) ^ 8) << 16));
             }
             _branches.Add((_out.Count, (int)(target / 16)));
-            // Predicate field 0, as Maxwell CAL encodes it (it has no predicate): Ryujinx's Decoder reads a CAL whose
+            // Predicate field 0, as Maxwell CAL encodes it (it has no predicate): the translator's Decoder reads a CAL whose
             // field says PT as an unconditional branch and decodes nothing after it (Decoder.IsUnconditionalBranch).
             Emit(0xe260000000000000UL);
         }
@@ -2383,7 +2381,7 @@ static class AmpereLowering
         try { lowered = new Lowerer(insns, sph, !graphics, table, mesh) { C1 = C1Bytes }.Run(out branches, out first); }
         catch (RegisterPressureException)
         {
-            // Local memory after the program's own: the header's sizes (Ryujinx: low + high + CRS / 32), or the
+            // Local memory after the program's own: the header's sizes (translator: low + high + CRS / 32), or the
             // translator's compute default (0x1000) for compute programs.
             spillAt = 0x1000;
             if (header != 0)

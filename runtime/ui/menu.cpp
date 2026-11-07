@@ -953,8 +953,8 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
 static int g_save_pending;   // a changed setting still waits for its write to nx2navi.ini (opt_save_tick)
 
 // ---- the performance overlay (NX2NAVI_PERF_OVERLAY), in the top right corner. "fps": the frame rate over the presents of
-// the last half second. "full": a panel of perfmon.c's numbers, in the style of SavageWindRecomp's perf_overlay_draw
-// (menu.mm): the machine's load and temperatures, the frame rate and frame times with a graph, the render thread's waits.
+// the last half second. "full": a panel of perfmon.c's numbers:
+// the machine's load and temperatures, the frame rate and frame times with a graph, the render thread's waits.
 // Off, it costs a cfg_version load per present.
 static unsigned g_perf_ver = ~0u;
 static int g_perf_mode;                  // 0 off, 1 fps, 2 full
@@ -1097,8 +1097,8 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     snprintf(v[5], sizeof v[5], "%s", pm ? pm : menu_text(UI_MENU_OV_NONE));
     static const UiTextId labels[6] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE,
                                        UI_MENU_OV_SCALING, UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT};
-    // The 3D scene's size is known only where resolution.c sets it (NX2navi's patch sets); Ocarina sizes its own scene
-    // dynamically and res_sizes would report NX2navi's fixed 1600x900, so the line is left out
+    // The 3D scene's size is known only where resolution.c sets it (the builds with its patch sets); Ocarina sizes its own scene
+    // dynamically and res_sizes would report a fixed 1600x900, so the line is left out
     bool scene_known = res_adjustable() != 0;
     if (!ImGui::BeginTable("##perfp", 2, ImGuiTableFlags_SizingFixedFit)) return;
     float vw = 0;

@@ -1,8 +1,8 @@
-"""The MacNativeGames shared shader list (refs/MacNativeGames games/<game>/assets/shader_list.tsv, MIT; docs/shader-list.md
-there) as our tools read it: every row of one revision, plus the V rows of every older revision that it dropped.
+"""The shared shader list (PATH in the refs/MacNativeGames checkout; MIT, see THIRD_PARTY_NOTICES.md) as our tools
+read it: every row of one revision, plus the V rows of every older revision that it dropped.
 
-MacNativeGames prunes V rows its own runtime no longer needs: default variants, which its seed translates for every
-shader (1.4.3 on 2026-10-22, 1.0.0 to 1.2.1 on 2026-10-25), and variants that differ only in vertex input or colour
+The list drops V rows its producer's runtime no longer needs: default variants, which that runtime translates for every
+shader (dropped 2026-10-22 to 2026-10-25), and variants that differ only in vertex input or colour
 output types (2026-10-26). Our answers (runtime/gfx_shader.c) still tell those apart, so a dropped row names a variant
 our play meets: at 1340bee the list alone has 134 rows of 1.4.3 shaders, its history 24,839, and of 1.2.1 6,771 and
 25,238. A row no draw asks for costs one translation. No copy of the list goes into the repository.

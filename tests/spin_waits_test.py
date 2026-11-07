@@ -1,4 +1,4 @@
-# Adapted from nxnative dm/tools/tests/test_spin_waits.py @ 6d34984 (MIT, Copyright (c) 2026 seedds).
+# Copyright (c) 2026 seedds (MIT; see THIRD_PARTY_NOTICES.md).
 """tools/spin_waits.py on hand-assembled AArch64 loops, without game files.
 
 Run: .venv/Scripts/python tests/spin_waits_test.py
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 
 from spin_waits import Search  # noqa: E402
 
-# A job queue poll (the shape of Breath of the Wild's main+0xef6354): take the queue's spin lock, look whether the wait
+# A job queue poll: take the queue's spin lock, look whether the wait
 # is over, release the lock, again.
 #   0x00 T:  cbz x20, X                 0x2c     str w12, [x20, #0x100]     0x50     ldr w13, [x21, #0x90]
 #   0x04     str w11, [x20, #0x100]     0x30     ldrb w14, [x21, #0x98]     0x54     sub w8, w13, w25

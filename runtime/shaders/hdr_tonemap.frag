@@ -9,9 +9,8 @@
 // Hue correction (hdr.z, NX2NAVI_HDR_HUE): the game's SDR clamp turns bright saturated colours towards white (a torch flame
 // clips red, then green, and reads yellow-white, the colour its emitted light was tuned to); the extended curve keeps
 // their ratios, so they stay saturated. From the picture's white upwards the colour moves towards the game's own SDR
-// result at the HDR luminance, by up to hdr.z (RenoDX's NX2navi mod has the same control).
-// Approach after RenoDX's NX2navi mod by souperman9 and Musa (github.com/clshortfuse/renodx, src/games/nx2navi, MIT): its
-// "extended vanilla" curve.
+// result at the HDR luminance, by up to hdr.z.
+// The approach: an "extended vanilla" curve.
 // Bindings are those of the game's translated shader: vk_hdr.c rewrites them from the original's names.
 layout(location = 0) in vec4 uv;
 layout(location = 0) out vec4 color;

@@ -1,8 +1,8 @@
 """Write runtime/nvn_procs.inc: the NVN proc names NX2navi 1.2.1 loads.
 
-Source names come from the MacNativeGames checkout in refs/ (MIT, Copyright (c) 2026 MacNativeGames contributors):
-NVN/names.txt plus the NVN_EXTRA definitions of nx2navi_nvn_ext.c, minus the two names 1.2.1 does not load. The file
-list format follows d2r-mobile dm/gfx/tools/gen_protos.py (MIT). No game data is read.
+Source names come from NVN_DIR in refs/ (MIT, Copyright (c) 2026 MacNativeGames contributors; see
+THIRD_PARTY_NOTICES.md): names.txt plus the NVN_EXTRA definitions of nx2navi_nvn_ext.c, minus the two names 1.2.1 does
+not load. No game data is read.
 
 Run with .venv: python tools/gen_nvn_procs.py
 """

@@ -21,7 +21,7 @@ Links to game files, keys or firmware in issues or pull requests get the issue c
 
 Code may be copied only from projects under MIT, BSD, ISC, zlib or Apache-2.0. Each copy keeps its original header and gets a row in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) with the source commit.
 
-GPL projects (the hardware, suyu, OpenSmash-Ultimate, Unicorn inside the game binary) can be read to understand behaviour, but their code is not copied. Unicorn is fine as a separate test tool.
+GPL code is never copied, and none goes into the game binary. Unicorn (GPL) is fine as a separate test tool.
 
 ## Reporting bugs
 

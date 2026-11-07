@@ -1,11 +1,11 @@
 """Self-test of tests/maxwell_warp_emu.py: hand-encoded Maxwell sequences against hand-computed results.
 
-Part 1 runs Maxwell words encoded here from the field layouts of Ryujinx Decoders/InstDecoders.cs (integer and logic
+Part 1 runs Maxwell words encoded here from the field layouts of the translator's Decoders/InstDecoders.cs (integer and logic
 ops, SHFL.IDX with clamp and segment masks, LDS/STS sizes, F2F, HFMA2, FFMA rounding, PRMT, predicates, EXIT, BRA).
 Part 2, when build/xlate/nx2navi_xlate.exe exists, lowers SM86 HMMA.1688 / HMMA.16816, LDSM and MOVM with
 nx2navi_xlate --lower and checks the emulated result against exactly representable reference values (small
 integers, so every F16 rounding is exact and only the fragment layout can be wrong), and HFMA2.RELU as the translator
-runs it (Ryujinx 1.3.2 drops PRMT, so AmpereLowering.cs Half must not use it). tests/tensor_lowering_check.py checks
+runs it (the translator drops PRMT, so AmpereLowering.cs Half must not use it). tests/tensor_lowering_check.py checks
 the same lowerings against hardware results.
 
   python tests/maxwell_warp_emu_selftest.py
@@ -195,7 +195,7 @@ def part1():
     # (1 + 2^-10)^2 = 1 + 2^-9 + 2^-20 -> F16 1 + 2^-9; 1 + 2^-11 is an F16 tie -> 1.0.
     check("HFMA2 rounding", r[:, 10], hpair(1 + 2 ** -9, 1.0))
 
-    # Ryujinx Optimizer.PropagatePack: an F16 result unpacked again without an integer operation in between is the
+    # The translator's Optimizer.PropagatePack: an F16 result unpacked again without an integer operation in between is the
     # unrounded F32 value (directly or through a MOV); LOP in between, or a guarded pack, keeps the F16 rounding.
     third, third16 = f32bits(1 / 3), f32bits(float(np.float16(1 / 3)))
     seq = [mov32i(1, third), f2f(2, 1, 1, 2), f2f(3, 2, 2, 1),               # pack, unpack: folded
@@ -222,7 +222,7 @@ def part1():
     check("FFMA single rounding at a tie", r[:, 4], 0x3F800001)
     check("FFMA", r[:, 7], f32bits(4.5))
 
-    # PRMT: a no-op as Ryujinx translates it, the Maxwell byte permute otherwise (0xbb99: sign of bytes 1 and 3).
+    # PRMT: a no-op as the translator translates it, the Maxwell byte permute otherwise (0xbb99: sign of bytes 1 and 3).
     seq = [mov32i(1, 0x7F80C000), mov32i(2, 0xBB99), mov32i(3, 0x11111111), prmt(3, 1, 2, 255),
            mov32i(4, 0x3210), mov32i(5, 0x22222222), prmt(5, 1, 4, 255), EXIT]
     r = emu.run(seq, {}, prmt="ryujinx")

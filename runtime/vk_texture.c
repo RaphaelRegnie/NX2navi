@@ -223,7 +223,7 @@ static int same_but_swizzle(const TexKey *a, const TexKey *b) {
     return !memcmp(&x, &y, sizeof x);
 }
 
-// MNG nvn_mtl.m tex_mirrored: textures whose content the CPU provides in pool memory. Display, compressible, zcull,
+// Textures whose content the CPU provides in pool memory. Display, compressible, zcull,
 // depth, multisample and GPU-only storage stays GPU-owned.
 static int tex_mirrored(const tex_t *t) {
     if (!t->mem || nvn_gpu_only((uintptr_t)t->mem)) return 0;
@@ -298,8 +298,8 @@ static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img, uint64_t guest_size) 
     return 1;
 }
 
-// agl's BC4 encoder draws a BC texture's blocks through an RGBA16UI view, one texel per 8-byte block (refs/nxnative
-// docs/agents/04-graphics.md, Breath of the Wild and Ocarina of Time sections). Vulkan does it with an uncompressed
+// agl's BC4 encoder draws a BC texture's blocks through an RGBA16UI view, one texel per 8-byte block.
+// Vulkan does it with an uncompressed
 // view of a BLOCK_TEXEL_VIEW_COMPATIBLE image; EXTENDED_USAGE lets the BC image carry the COLOR_ATTACHMENT usage that
 // only such views support. Whether the device takes that combination for this format and shape:
 static int block_views_ok(const VkImageCreateInfo *ci) {
@@ -434,7 +434,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     // Cube compatible only for cube targets: the replay makes cube views of nothing else (vk_exec_draw.c get_view checks
     // the image's own view type). The flag on every square array of 6+ layers changed how AMD's Windows driver lays such
     // an image out, and terrain material arrays sampled through it came out in rainbow blocks that moved with the mip
-    // level (Savage Wind Recomp issue #59, BotW on an RX 580 and a 7800 XT).
+    // level (seen on an RX 580 and a 7800 XT).
     if (type == VK_IMAGE_TYPE_2D && layers >= 6 && w == h && samples == 1 &&
         (d->target == NVN_TEXTURE_TARGET_CUBEMAP || d->target == NVN_TEXTURE_TARGET_CUBEMAP_ARRAY))
         flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
@@ -1267,7 +1267,7 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
     make_key(&s->t, &k);
     Tex *e = nvn_hm_get(&by_key, &k);
     int stale = 0;
-    if (!e || e->released) {   // MNG hle_nvn.c: a finalized slot follows the live texture at its storage
+    if (!e || e->released) {   // a finalized slot follows the live texture at its storage
         // Prefer the live entry that differs from the slot descriptor only in its swizzle: transient render targets
         // share storage, and the newest one at the address is usually another size. The map screen samples its
         // 2250x1080 map target through an (R,G,B,1) descriptor and followed a 960x60 target at the same address.
@@ -1466,8 +1466,8 @@ static int region_of(const tex_t *t, const view_t *v, const NVNcopyRegion *r, ui
     return 1;
 }
 
-// Pool bytes <-> caller rows of the region alone (nvn_texels_box). MacNativeGames' nvn_mtl.m goes through a
-// linear copy of the whole level; for a small region of a large texture that cost tens of milliseconds while the guest
+// Pool bytes <-> caller rows of the region alone (nvn_texels_box), not through a
+// linear copy of the whole level: for a small region of a large texture that cost tens of milliseconds while the guest
 // thread held its virtual core and the caller the texture lock (monsters2 replay, frames 765-790).
 static int storage_texels(const tex_t *t, const Region *g, const NVNcopyRegion *r, uint8_t *mem, int write) {
     for (int z = 0; z < g->nz; z++) {

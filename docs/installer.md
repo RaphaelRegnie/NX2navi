@@ -51,7 +51,7 @@ loads the saves 1.4.3 wrote.
    first install, 20 GiB after it), the CPU is at least x86-64-v2 (SSE4.2; with AVX2/FMA the faster `v3` build is used,
    otherwise the `v2` one), a Vulkan 1.3 GPU exists. Each failure is one clear message.
 2. **Fonts** with Chinese, Korean or Traditional Chinese text and a firmware folder: extract the Switch system fonts
-   from the firmware into `shared-fonts/` (MacNativeGames' `extract_shared_fonts.py`, which verifies every NCA layer
+   from the firmware into `shared-fonts/` (`tools/vendor/macnativegames/extract_shared_fonts.py`, which verifies every NCA layer
    and BFTTF header). Without a firmware folder the setup warns and goes on; the game then lacks those glyphs.
 3. **Extract** ExeFS and RomFS into the install folder and verify the hashes.
 4. **Lift** the ExeFS to C (`recomp/gen.py`, `recomp/patches-v121.txt` or `patches-v143.txt`) into a temp folder next
@@ -148,7 +148,7 @@ llvm/                 llvm-mingw, x86_64-only subset (Apache-2.0 with LLVM excep
 runtime/              libnx2navirt.a, libnx2navirt-v2.a and the headers the generated code and modules.c/romfs.c/patches.c
                       include
 bin/                  nx2navi_xlate.exe, hactool.exe, SDL3.dll, libopus-0.dll, ninja.exe
-data/                 shader_list.tsv (MacNativeGames, MIT); pgo-<ver>.profdata + .json, the execution profile an
+data/                 shader_list.tsv (MIT, THIRD_PARTY_NOTICES.md); pgo-<ver>.profdata + .json, the execution profile an
                       update's code and the runtime libraries compile with (building.md, "Profile-guided build")
 THIRD_PARTY_NOTICES.md
 nx2navi.ini.example, VERSION  the default ini; the release string (the repository's VERSION plus the commit)
