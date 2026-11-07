@@ -108,6 +108,31 @@ static void count_stack(const uint64_t *rip, uint32_t depth) {
     stacks_dropped++;
 }
 
+// Modules the unwinder walks through freely: the exe and system DLLs that stay loaded for the process's life. Any other
+// module (a driver or vendor DLL, which may load and unload while the game starts) is pinned while its frame unwinds,
+// and a module being unloaded ends the chain: unwinding one read its freed unwind tables and crashed the sampler
+// (NX2NAVI_PROFILE_SLOW at start). The unwind runs after ResumeThread, so taking the loader lock here is safe.
+static struct { uintptr_t lo, hi; } walk_mods[8];
+static int n_walk_mods;
+
+static void walk_mods_init(void) {
+    static const wchar_t *const sys[] = {L"ntdll.dll", L"KERNELBASE.dll", L"kernel32.dll", L"win32u.dll", L"ucrtbase.dll"};
+    HMODULE h[6] = {GetModuleHandleW(NULL)};
+    for (int i = 0; i < 5; i++) h[i + 1] = GetModuleHandleW(sys[i]);
+    for (int i = 0; i < 6; i++) {
+        MODULEINFO mi;
+        if (h[i] && GetModuleInformation(GetCurrentProcess(), h[i], &mi, sizeof mi))
+            walk_mods[n_walk_mods].lo = (uintptr_t)mi.lpBaseOfDll,
+            walk_mods[n_walk_mods++].hi = (uintptr_t)mi.lpBaseOfDll + mi.SizeOfImage;
+    }
+}
+
+static int walkable(uint64_t rip) {
+    for (int i = 0; i < n_walk_mods; i++)
+        if (rip >= walk_mods[i].lo && rip < walk_mods[i].hi) return 1;
+    return 0;
+}
+
 // Unwinds the stack copied to stk_buf from real address lo (n bytes). Registers that point into the copied range are
 // moved into the copy, so frame-pointer frames read the copy too. Returns the number of frames.
 static uint32_t unwind_copy(CONTEXT *c, uintptr_t lo, size_t n, uint64_t *rip) {
@@ -119,6 +144,9 @@ static uint32_t unwind_copy(CONTEXT *c, uintptr_t lo, size_t n, uint64_t *rip) {
     uint32_t d = 0;
     while (d < PROF_DEPTH && c->Rip && c->Rsp >= buf && c->Rsp + 8 <= end) {
         rip[d++] = c->Rip;
+        HMODULE pin = NULL;
+        if (!walkable(c->Rip) && !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)(uintptr_t)c->Rip, &pin))
+            break;   // in no loaded module (or one being unloaded): the frame is kept, its callers are not
         DWORD64 base;
         PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c->Rip, &base, NULL);
         if (f) {
@@ -129,6 +157,7 @@ static uint32_t unwind_copy(CONTEXT *c, uintptr_t lo, size_t n, uint64_t *rip) {
             c->Rip = *(DWORD64 *)c->Rsp;
             c->Rsp += 8;
         }
+        if (pin) FreeLibrary(pin);
     }
     return d;
 }
@@ -350,6 +379,7 @@ int prof_sampler_start(void) {
         exe_lo = (uintptr_t)mi.lpBaseOfDll;
         exe_hi = exe_lo + mi.SizeOfImage;
     }
+    walk_mods_init();
     sampler = CreateThread(NULL, 0, sampler_main, NULL, 0, NULL);
     if (!sampler) {
         rt_log("prof: cannot start the sampler (error %lu)", GetLastError());

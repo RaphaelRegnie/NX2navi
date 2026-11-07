@@ -86,6 +86,9 @@ static int test_deswizzle(void) {
     for (unsigned td = 1; td <= 3; td++)                                  // 3D: depth 5 against block depths 2, 4, 8
         for (unsigned th = 0; th <= 2; th++)
             if (check_swizzle(23 * 4, 19, 5, th, td, 4)) return 1;
+    // levels of 256 KiB and more
+    if (check_swizzle(1000 * 4, 300, 1, 4, 0, 4)) return 1;
+    if (check_swizzle(97 * 16, 70, 9, 2, 2, 16)) return 1;
 
     // Through a descriptor: RGBA8 2D with mip levels, level 1 and 2, layer 0, against the reference on the same geometry.
     nvn_texdesc d = {.target = 1, .format = 0x25, .width = 200, .height = 150, .depth = 1, .levels = 4};
