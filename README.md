@@ -15,11 +15,6 @@ version 1.1.1) into a native x86-64 application for Windows, with a Vulkan rende
 Early development. Kokiri Forest and the areas around it play at 60 fps and above; visual bugs and crashes are still
 expected.
 
-## Screenshots
-
-<!-- Screenshots are attached through GitHub (drag the PNG files into this section when editing the README on
-github.com); no image file is committed. -->
-
 Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Features
