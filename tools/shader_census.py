@@ -17,7 +17,7 @@ The key is sha256(control[:0x880] + code), the shared shader list's key. Needs P
     .venv-py314\\Scripts\\python tools\\shader_census.py --version v121 --translate
 """
 import argparse
-import compression.zstd as zstd
+import zstd_compat as zstd   # compression.zstd on 3.14, the zstandard package before
 import concurrent.futures
 import hashlib
 import json
@@ -73,9 +73,53 @@ def sarc(data):
             raise ValueError('invalid SARC member')
         name = data[off:data.index(0, off, start)].decode('utf-8')
         if name.startswith('/') or '\\' in name or any(p in ('', '.', '..') for p in name.split('/')) or name in result:
-            raise ValueError('unsafe or duplicate SARC name')
+            continue   # names only key the members here, nothing is written under them: an odd or repeated one is skipped
         result[name] = checked(data, start + lo, hi - lo)
     return result
+
+
+NVN2_STAGES = {0: 'vs', 1: 'ps', 5: 'cs', 6: 'ts', 7: 'ms'}   # the stage number in bits 16+ of control +0x54
+NVN2_CONTROL = 0xe0   # the part of an NVN2 control section the runtime keeps (runtime/gfx_shader.c, "NVN2")
+NVN2_SLOTS = range(8, 96, 8)   # program slots that may point at a stage record: fragment +40, task +64, mesh +72 seen
+
+
+def nvn2_record(data, offset):
+    """(control, code) of the stage record at offset when it is an NVN2 one: {u64, control offset, code offset,
+    u32 code size, u32 control size}, the control shorter than NVN1's 0x880 and starting with the magic. Else None."""
+    if not offset or offset + 32 > len(data):
+        return None
+    control_off, code_off, code_size, control_size = struct.unpack_from('<QQII', data, offset + 8)
+    if not NVN2_CONTROL <= control_size < 0x880 or control_off + control_size > len(data) or code_off + code_size > len(data):
+        return None
+    control = data[control_off:control_off + control_size]
+    return (control, data[code_off:code_off + code_size]) if control[:4] == CONTROL_MAGIC else None
+
+
+def nvn2_program(data, program):
+    return any(nvn2_record(data, struct.unpack_from('<Q', data, program + r)[0]) for r in NVN2_SLOTS
+               if program + r + 8 <= len(data))
+
+
+def nvn2_stages(data, program):
+    """The stages of an NVN2 (Switch 2) program as the runtime keys them: the control section's first 0xe0 bytes in a
+    zeroed 0x880 one, and the code from its first byte up to the end of its c1 constants (+0x40 to +0x44, after the
+    code of +0x38 bytes), the c1 part included."""
+    for r in NVN2_SLOTS:
+        if program + r + 8 > len(data):
+            break
+        rec = nvn2_record(data, struct.unpack_from('<Q', data, program + r)[0])
+        if not rec:
+            continue
+        control, code = rec
+        stage = NVN2_STAGES.get(struct.unpack_from('<I', control, 0x54)[0] >> 16)
+        if not stage:
+            continue
+        control = control[:NVN2_CONTROL] + bytes(0x880 - NVN2_CONTROL)
+        size, c1_start, c1_end = struct.unpack_from('<I', control, 0x38)[0], *struct.unpack_from('<II', control, 0x40)
+        length = c1_end if c1_start >= size and c1_end >= c1_start and c1_end <= len(code) else size
+        if not 0 < length <= len(code):
+            continue
+        yield digest(control + code[:length]), stage, control, code[:length]
 
 
 def bnsh_shaders(data):
@@ -89,6 +133,9 @@ def bnsh_shaders(data):
     for i in range(count):
         program = struct.unpack_from('<Q', data, variations + i * 64 + 16)[0]
         checked(data, program, 56)
+        if nvn2_program(data, program):
+            yield from nvn2_stages(data, program)
+            continue
         for stage, relative in [('vs', 8), ('ps', 40), ('cs', 48)]:
             offset = struct.unpack_from('<Q', data, program + relative)[0]
             if not offset:

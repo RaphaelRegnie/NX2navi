@@ -46,7 +46,9 @@ With extracted folders instead, use `--exefs "C:\path\exefs" --romfs "C:\path\ro
 check that your dump is the right version, add `--check` (it builds nothing).
 
 The build checks the version, unpacks the program files, packs the 26 GB RomFS image (every file is checked against
-the dump's own checksums), turns the game's code into C and compiles it (about 6 minutes on a 16-thread Ryzen 7; longer on fewer cores).
+the dump's own checksums), turns the game's code into C and compiles it (about 6 minutes on a 16-thread Ryzen 7; longer on fewer cores),
+then prepares every one of the game's shaders for your graphics card (about 5 more minutes), so the game does not stop
+to compile shaders while you play.
 You can use your PC meanwhile. If it stops,
 run the same command again: finished steps are skipped.
 

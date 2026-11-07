@@ -13,6 +13,8 @@ Steps, each skipped when a run before finished it for the same input (state in <
   4. lift     recomp/gen.py with recomp/patches-v111.txt -> <out>/build-cache/lift, plus the two SDK bring-up fixes
   5. compile  the lifted C and runtime/ with MSYS2's clang, linked into <out>/ocarina.exe; the MSYS2 DLLs it loads,
               the shader translator and romfs-index.bin beside it
+  6. shaders  every shader in the game files (tools/prepare_shaders.py, default bind state) translated, and each one's
+              GPU driver build done once, so play does not stop to compile them (`ocarina.exe --prepare-shaders`)
 
 Nothing is written outside --out. The game folder then holds only what this PC built from the player's files: never
 share it. Needs Python 3.10+ with numpy, lz4, zstandard and zbic (pip), and MSYS2 UCRT64's clang and libraries
@@ -397,6 +399,17 @@ def step_compile(out, cache, msys, jobs):
 
 # ---------------------------------------------------------------- main
 
+def step_shaders(out):
+    """Every shader of the game files into the game's shader cache and the driver's own cache, before the first start."""
+    cmd = [sys.executable, str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
+           '--exefs', str(out / 'exefs'), '--no-list', '--exe', 'ocarina.exe']
+    if subprocess.run(cmd).returncode:
+        fail('preparing the shaders failed (the lines above say why); the game still runs, compiling shaders as it '
+             'meets them. Run the build again to retry this step')
+    for seed in ('seed-programs.bin', 'seed-answers.bin'):   # translated now: the shader cache holds them
+        (out / seed).unlink(missing_ok=True)
+
+
 def keep_awake():
     """Hold off sleep for this process's life (Windows): the build runs for many minutes with no input, and a PC that
     sleeps in the middle stops the compiles. The hold ends with the process."""
@@ -448,7 +461,8 @@ def main():
     keep_awake()
     t0 = time.time()
     for name, run in (('exefs', lambda: step_exefs(src, out)), ('romfs', lambda: step_romfs(src, out, min(a.jobs, 8))),
-                      ('lift', lambda: step_lift(out, cache)), ('compile', lambda: step_compile(out, cache, msys, a.jobs))):
+                      ('lift', lambda: step_lift(out, cache)), ('compile', lambda: step_compile(out, cache, msys, a.jobs)),
+                      ('shaders', lambda: step_shaders(out))):
         if name in state['done']:
             say(f'{name}: done before')
             continue

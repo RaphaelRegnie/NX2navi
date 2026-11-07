@@ -47,7 +47,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 import shader_list  # noqa: E402
 from shader_census import inventory  # noqa: E402
 
-STAGES = {'vs': 0, 'ps': 4, 'cs': 5}                       # runtime/gfx.h GFX_STAGE_*
+STAGES = {'vs': 0, 'ps': 4, 'cs': 5, 'ts': 6, 'ms': 7}     # runtime/gfx.h GFX_STAGE_*
 TEX = [None, '1d', '1darray', 'buffer', '2d', '2darray', '2dms', '2dmsarray', '3d', 'cube', 'cubearray']
 FMT = [None, 'R8Unorm', 'R8Snorm', 'R8Uint', 'R8Sint', 'R16Float', 'R16Unorm', 'R16Snorm', 'R16Uint', 'R16Sint',
        'R32Float', 'R32Uint', 'R32Sint', 'R8G8Unorm', 'R8G8Snorm', 'R8G8Uint', 'R8G8Sint', 'R16G16Float', 'R16G16Unorm',
@@ -122,11 +122,26 @@ def answers(deps, stage, control):
     for idx, t in deps.get('fout', {}).items():
         fout[int(idx)] = TYPES[t]
     local = [0, 0, 0]   # vk_exec_draw.c answers_for: zero for graphics stages (they are in the input id)
-    if stage == 5:      # compute: the control section's local size, 0 read as 1
-        local = [v or 1 for v in struct.unpack_from('<III', control, 0x748)]
+    if stage == 5:      # compute: the control section's local size (NVN2 at +0x58), 0 read as 1
+        local = struct.unpack_from('<III', control, 0x58 if nvn2(control) else 0x748)
+        local = [1, 1, 1] if not any(local) else [v or 1 for v in local]
     packed = bytes(tex + img + fmt + attr + fout) + struct.pack('<HHHIB', *local, 0, 0)
     assert len(packed) == 147
     return packed
+
+
+def nvn2(control):
+    """An NVN2 (Switch 2) control section as shader_census.nvn2_stages keeps it: 0xe0 bytes, zeros to 0x880."""
+    return control[:4] == bytes.fromhex('34127698') and not any(control[0xe0:0x880])
+
+
+def bounds(control, code):
+    """(c1 offset, length) as runtime/gfx_shader.c req_init takes them."""
+    if nvn2(control):
+        size, c1_start = struct.unpack_from('<I', control, 0x38)[0], struct.unpack_from('<I', control, 0x40)[0]
+        length = len(code)   # shader_census cut the code at the end of its c1 part
+        return (c1_start if size <= c1_start <= length else length), length
+    return struct.unpack_from('<II', control, 0x700)
 
 
 def code_hash(stage, control, code, length, c1):
@@ -150,9 +165,12 @@ def main():
     ap.add_argument('--exefs', type=Path, help='ExeFS directory (default build/extracted/<version>/exefs)')
     ap.add_argument('--list', help='a shader_list.tsv instead of tools/data/shader_list.tsv or refs/MacNativeGames')
     ap.add_argument('--no-run', action='store_true', help='write the seed files only')
+    ap.add_argument('--no-list', action='store_true', help='default variants only, without a shared shader list')
+    ap.add_argument('--exe', default='nx2navi.exe' if os.name == 'nt' else 'nx2navi',
+                    help='the game executable in the build directory that runs --prepare-shaders')
     a = ap.parse_args()
     t0 = time.monotonic()
-    variants, prio = parse_list(read_list(a.list))
+    variants, prio = parse_list('' if a.no_list else read_list(a.list))
     extracted = ROOT / 'build' / 'extracted' / a.version
     listed = len(variants)
     shaders, _ = inventory(a.romfs or extracted / 'romfs', a.exefs or extracted / 'exefs', everything=False)
@@ -176,7 +194,7 @@ def main():
             skipped['stage'] += 1
             continue
         control, code = s['control'][:CONTROL], s['code']
-        c1_off, length = struct.unpack_from('<II', control, 0x700)
+        c1_off, length = bounds(control, code)
         c1 = code[c1_off:length]
         if key not in progs:
             h = code_hash(stage, control, code, length, c1)
@@ -205,7 +223,7 @@ def main():
           f'seed written in {time.monotonic() - t0:.1f} s', flush=True)
     if a.no_run:
         return 0
-    exe = out / ('nx2navi.exe' if os.name == 'nt' else 'nx2navi')
+    exe = out / a.exe
     r = subprocess.run([str(exe), '--prepare-shaders'], cwd=str(out))
     for _ in range(RETRIES):
         if not r.returncode or not driver_crashed(out):
@@ -213,7 +231,7 @@ def main():
         print(f'prepare_shaders: the graphics driver crashed while building shaders (rc={r.returncode}); building them '
               'again without the variants it was building (nx2navi.exe --warm-shaders)', flush=True)
         r = subprocess.run([str(exe), '--warm-shaders'], cwd=str(out))
-    print(f'nx2navi.exe --prepare-shaders: rc={r.returncode}; total {time.monotonic() - t0:.1f} s')
+    print(f'{a.exe} --prepare-shaders: rc={r.returncode}; total {time.monotonic() - t0:.1f} s')
     return r.returncode
 
 
