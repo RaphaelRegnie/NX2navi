@@ -100,7 +100,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_SHARPNESS] = "FSR sharpness",
     [UI_MENU_SHARPNESS_DESC] = "Sharpening after FSR scaling, also when the picture is shrunk to the window; 0 turns it "
                                "off.",
-    [UI_MENU_SHARPNESS_NEEDS_FSR] = "only with AMD FSR 1",
+    [UI_MENU_SHARPNESS_NEEDS_FSR] = "only with AMD FSR 1 or FSR 3.1",
     [UI_MENU_COLOR] = "Colour",
     [UI_MENU_COLOR_PRESET] = "Colour profile",
     [UI_MENU_COLOR_PRESET_DESC] = "Sets the four values below. Vivid: more contrast and saturation, shadows opened a "
@@ -527,6 +527,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_HDR_NOTE] = "after restart",
     [UI_MENU_HDR_ENHANCED] = "Enhanced", [UI_MENU_HDR_NATIVE] = "Native (the game's)",
     [UI_MENU_FRAMEGEN_NOTE] = "after restart; needs DLSS or FSR 3.1",
+    [UI_MENU_FRAMEGEN_NEEDS] = "choose a DLSS or FSR 3.1 mode under Upscaling first",
     [UI_MENU_GAME_RES] = "Resolution",
     [UI_MENU_GAME_RES_DESC] = "The height of the game's picture: 1440p is the game's own; higher draws a sharper picture "
                               "and its scene in proportion, at a matching cost on the graphics card. Native: the "

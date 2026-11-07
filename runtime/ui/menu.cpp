@@ -773,6 +773,8 @@ static void row_hdr(void) {
 
 // Frame generation (vk_fg.cpp), after a restart; it needs a temporal upscaler's motion vectors
 static void row_framegen(void) {
+    // the generated frames are made from DLSS's or FSR 3.1's motion vectors: without one of them it would do nothing
+    if (!cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_FRAMEGEN_NEEDS);
     static const char *const values[] = {"off", "fsr3", "dlss"};
     const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), "AMD FSR 3.1", "NVIDIA DLSS"};
     const char *v = cfg_value("NX2NAVI_FRAMEGEN");
@@ -812,8 +814,10 @@ static void tab_screen(float scale) {
     row_upscaling();
     row_framegen();
     row_hdr();
-    // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear or DLSS the slider would do nothing
-    if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
+    // The sharpening runs under FSR 1 (vk_fsr.c vk_fsr_record, RCAS) and FSR 3.1 (vk_ffx.cpp, its own RCAS); with
+    // bilinear or DLSS the slider would do nothing
+    int dl = cfg_bool("NX2NAVI_DLAA"), fsr3 = dl && !strcmp(cfg_value("NX2NAVI_TAA"), "fsr3");
+    if (!fsr3 && (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || dl)) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("NX2NAVI_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
