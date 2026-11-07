@@ -71,9 +71,12 @@ static unsigned picture_height(void) {
 void wide_init(void) {
     int so = rt_patch_set("wide_out"), ss = rt_patch_set("wide_scene"), sa = rt_patch_set("wide_aspect"),
         sh = rt_patch_set("wide_hud"), sm = rt_patch_set("wide_movie");
-    // The scene keeps the game's 3/4 of the picture. Its renderer takes the scene's size from the picture's by that
-    // share itself: writing another size into wide_scene's constant (main+0x31f3a00) left the light target at 3/4,
-    // so DLSS's quality modes, which need a smaller scene, have no lever here yet.
+    // The scene keeps the game's 3/4 of the picture, a share its renderer applies itself: writing another size into
+    // wide_scene's constant (main+0x31f3a00) or into the 1920x1080 / 1280x720 render sizes at main+0x108b688 left the
+    // light target at 3/4. Found so far (for DLSS's quality modes, which need a smaller scene): the scene targets come
+    // from the view objects' render-target descriptors ({u16 w, u16 h, ...} at +0x3ab0, made by main+0x2507b0 through
+    // main+0x3ed00), which main+0x6590d0 copies in from a float rectangle at +0x3a10 of another object (width
+    // [+0x3a18] - [+0x3a10]); where that rectangle's 2562 comes from is still open.
     double r = wanted_ratio(), game = (double)GAME_W / GAME_H, f = 0.75;
     unsigned oh = picture_height();
     if (r <= 0 || r < game * 1.01) {
