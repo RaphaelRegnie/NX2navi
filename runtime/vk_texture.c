@@ -1055,16 +1055,38 @@ static int alias_copy(Tex *e, const Tex *src) {
     return 1;
 }
 
+// Descriptors whose image creation failed (VRAM exhausted, an unsupported format): not tried again for 2 s, so a
+// draw that names one every frame does not repeat a failing allocation on every use. Texture lock held.
+#define FAILED_HOLD 32
+static struct {
+    TexKey k;
+    uint64_t until_ns;
+} failed_hold[FAILED_HOLD];
+static unsigned failed_next;
+
+static int create_held(const TexKey *k) {
+    uint64_t now = plat_now_ns();
+    for (int i = 0; i < FAILED_HOLD; i++)
+        if (failed_hold[i].until_ns > now && !memcmp(&failed_hold[i].k, k, sizeof *k)) return 1;
+    return 0;
+}
+
+static void create_failed(const TexKey *k) {
+    unsigned i = failed_next++ % FAILED_HOLD;
+    failed_hold[i].k = *k, failed_hold[i].until_ns = plat_now_ns() + 2000000000ull;
+}
+
 static Tex *entry_of(const tex_t *t) {
     TexKey k;
     make_key(t, &k);
     Tex *e = nvn_hm_get(&by_key, &k);
     if (!e) {
+        if (create_held(&k)) return NULL;
         if (tex_alias < 0) {
             tex_alias = cfg_bool("NX2NAVI_TEX_ALIAS");
             rt_log("vk: texture aliases: %s", tex_alias ? "a new image takes the live image's content" : "a new image starts empty");
         }
-        if (!(e = create_tex(t, &k, tex_alias))) return NULL;
+        if (!(e = create_tex(t, &k, tex_alias))) return create_failed(&k), NULL;
         perf_count(PERF_CNT_TEX_NEW);
         // released entries of another descriptor at this address are replaced by the new one; a live one holding
         // GPU-written content is the alias source, preferring the one that differs only in swizzle (same_but_swizzle)

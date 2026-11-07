@@ -157,7 +157,7 @@ Grep-level look on 2026-10-22, statuses updated 2026-10-26; "saw" is what the gr
 13. **FMZ / NaN.** Count `FMUL/FFMA/FMUL32I/FFMA32I` words with the `Fmz` field set (`Decoders/InstDecoders.cs:1901`
     bit positions) in `build/v121/shaders/`; FMin/FMax/FClamp NaN results are undefined (3.1). Census (2026-10-22):
     FMZ in 1 instruction of 12397 shaders, FTZ in 12241 shaders, FMNMX in 7457. The translator emits GLSL.std.450
-    FMin/FMax (`GenerateMinimum`), not NMin/NMax. **FMZ: no fix needed. FMNMX: OK** (RX 9070 test: FMin/FMax(NaN, 1) = 1 both orders, FClamp(NaN, 0, 1) = 0).
+    NMin/NMax/NClamp (patch 0031), which return the other operand for a NaN as FMNMX does. **FMZ: no fix needed. FMNMX: OK.**
 14. **Point size / line width.** Census: `SetLineWidth 4.5` ~1/frame (2 line draws into a 144x144 R8 target),
     `SetPointSize 5` ~14/frame; 4 point VS rely on it. Point size: translator patch 0008 reads it from the support
     buffer, **fixed**. Line width: 1 px, non-default values logged (`nvn_ext.c`), **mismatch, minor**.

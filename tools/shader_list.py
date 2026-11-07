@@ -1,4 +1,4 @@
-"""The shared shader list (PATH in the refs/MacNativeGames checkout; MIT, see THIRD_PARTY_NOTICES.md) as our tools
+"""The shared shader list (games/<game>/assets/shader_list.tsv in the refs/MacNativeGames checkout; MIT, see THIRD_PARTY_NOTICES.md) as our tools
 read it: every row of one revision, plus the V rows of every older revision that it dropped.
 
 The list drops V rows its producer's runtime no longer needs: default variants, which that runtime translates for every
@@ -10,7 +10,15 @@ our play meets: at 1340bee the list alone has 134 rows of 1.4.3 shaders, its his
 import subprocess
 import sys
 
-PATH = 'games/<game>/assets/shader_list.tsv'
+TAIL = '/assets/shader_list.tsv'   # under the checkout's game folder (see list_path)
+
+
+def list_path(repo, rev):
+    """The shader list's path at rev: the one games/<game>/assets/shader_list.tsv of the checkout."""
+    for p in git(repo, 'ls-tree', '-r', '--name-only', rev, '--', 'games').splitlines():
+        if p.endswith(TAIL) and p.count('/') == 3:
+            return p
+    raise SystemExit(f'shader_list.py: no games/*{TAIL} at {rev}')
 
 
 def git(repo, *args):
@@ -22,6 +30,7 @@ def history(repo, rev='origin/HEAD'):
     if git(repo, 'rev-parse', '--is-shallow-repository').strip() == 'true':
         # a shallow clone has rev's list only: preparing from it skips most variants and shows only as stutter in play
         sys.exit(f'{repo} is a shallow clone without the shader list\'s history; run tools/fetch_refs.sh')
+    PATH = list_path(repo, rev)
     lines = git(repo, 'show', f'{rev}:{PATH}').splitlines()
     seen = set(lines)
     for h in git(repo, 'log', '--format=%H', rev, '--', PATH).split()[1:]:

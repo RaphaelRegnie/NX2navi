@@ -199,7 +199,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
 
     [UI_MENU_MODS_BUILTIN] = "Built into the port", [UI_MENU_MODS_INSTALLED] = "Installed mods",
     [UI_MENU_MODS_NONE] = "No mods yet. Unpack a mod into the mods folder, one folder per mod with its romfs folder "
-                          "inside, and restart the game. a mod manager can export its merged mods into a folder there too.",
+                          "inside, and restart the game. A mod manager can export its merged mods into a folder there too.",
     [UI_MENU_MODS_OPEN] = "Open mods folder",
     [UI_MENU_MODS_OPEN_DESC] = "Shows the folder the game loads mods from. It is created if it is missing.",
     [UI_MENU_MODS_ROW_DESC] = "Game files it replaces: %u. New files it adds: %u.",
@@ -710,7 +710,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
 
     [UI_MENU_MODS_BUILTIN] = "Встроенные в порт", [UI_MENU_MODS_INSTALLED] = "Установленные моды",
     [UI_MENU_MODS_NONE] = "Модов пока нет. Распакуйте мод в папку mods, каждый мод в свою папку с папкой romfs внутри, и "
-                          "перезапустите игру. a mod manager тоже может выгрузить туда объединённые моды отдельной папкой.",
+                          "перезапустите игру. Менеджер модов тоже может выгрузить туда объединённые моды отдельной папкой.",
     [UI_MENU_MODS_OPEN] = "Открыть папку модов",
     [UI_MENU_MODS_OPEN_DESC] = "Показывает папку, из которой игра загружает моды. Если её нет, она будет создана.",
     [UI_MENU_MODS_ROW_DESC] = "Заменяет файлов игры: %u. Добавляет новых файлов: %u.",
@@ -1040,7 +1040,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_TAB_MODS] = "Mods",
     [UI_MENU_MODS_BUILTIN] = "Embutidos no port", [UI_MENU_MODS_INSTALLED] = "Mods instalados",
     [UI_MENU_MODS_NONE] = "Nenhum mod ainda. Descompacte um mod na pasta mods, uma pasta por mod com a pasta romfs dentro, "
-                          "e reinicie o jogo. O a mod manager também pode exportar os mods mesclados para uma pasta ali.",
+                          "e reinicie o jogo. Um gerenciador de mods também pode exportar os mods mesclados para uma pasta ali.",
     [UI_MENU_MODS_OPEN] = "Abrir pasta de mods",
     [UI_MENU_MODS_OPEN_DESC] = "Mostra a pasta de onde o jogo carrega os mods. Ela é criada se não existir.",
     [UI_MENU_MODS_ROW_DESC] = "Arquivos do jogo que substitui: %u. Arquivos novos que adiciona: %u.",
@@ -1557,7 +1557,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_TAB_MODS] = "模组",
     [UI_MENU_MODS_BUILTIN] = "移植版内置", [UI_MENU_MODS_INSTALLED] = "已安装的模组",
     [UI_MENU_MODS_NONE] = "还没有模组。把模组解压到 mods 文件夹，每个模组一个文件夹，里面放 romfs 文件夹，然后重启游戏。"
-                          "a mod manager 也可以把合并后的模组导出到那里的一个文件夹。",
+                          "模组管理器也可以把合并后的模组导出到那里的一个文件夹。",
     [UI_MENU_MODS_OPEN] = "打开模组文件夹",
     [UI_MENU_MODS_OPEN_DESC] = "显示游戏加载模组的文件夹。不存在时会创建它。",
     [UI_MENU_MODS_ROW_DESC] = "替换的游戏文件：%u。新增的文件：%u。",

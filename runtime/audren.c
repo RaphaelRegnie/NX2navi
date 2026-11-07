@@ -447,7 +447,7 @@ static void renderer_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *r
     case 7: rs->copy[rs->ncopy++] = kern_event_readable(r->event); return;   // QuerySystemEvent
     case 8: r->time_limit = IPC_ARG(rq, uint32_t, 0); return;                // SetRenderingTimeLimit
     case 9: { uint32_t v = r->time_limit ? r->time_limit : 100; IPC_OUT(rs, v); return; }   // GetRenderingTimeLimit
-    // 15.0.0+ Set/GetVoiceDropParameter (the system service/audio/audio_renderer.cpp): the factor the DSP uses to drop
+    // 15.0.0+ Set/GetVoiceDropParameter (the system's audio renderer service): the factor the DSP uses to drop
     // voices when a frame overruns its time. The host mixer renders every voice, so the value is only kept.
     case 12: {
         float v = IPC_ARG(rq, float, 0);

@@ -23,7 +23,7 @@
 #define STACK_OFF 0x10000000ull
 #define STACK_SIZE 0x10000000ull
 #define HEAP_OFF (STACK_OFF + STACK_SIZE + 0x10000000ull)
-#define HEAP_CAP (12 * GiB)        // heap region: a Switch 2 application pool is 9809 MiB (the system 12 GB arrangement)
+#define HEAP_CAP (12 * GiB)        // heap region: a Switch 2 application pool is 9809 MiB (the 12 GB console arrangement)
 #define ALIAS_SIZE (64 * GiB)
 #define ALIAS_ALIGN (4 * GiB)
 #define ALIAS_PAGES (ALIAS_SIZE / PAGE)

@@ -284,7 +284,7 @@ HOST_OVERRIDE("_ZN2nn3ssl7Context9ImportCrlEPmPKcj", ov_ssl_import);
 HOST_OVERRIDE("_ZN2nn3ssl7Context6CreateENS1_10SslVersionE", ov_ssl_ok);
 HOST_OVERRIDE("_ZN2nn3ssl7Context7DestroyEv", ov_ssl_ok);
 
-// ---- nn::nsd: the server environment is production ("lp1", as the system service/sockets/nsd.cpp answers);
+// ---- nn::nsd: the server environment is production ("lp1", as the console answers);
 // ResolveEx(Fqdn *out, const Fqdn &in) copies the 0x100-byte name (nothing resolves offline anyway).
 static void ov_nsd_environment(Cpu *c) {
     char *out = arg_p(c, 0);

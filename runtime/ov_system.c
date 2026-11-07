@@ -136,8 +136,8 @@ HOST_OVERRIDE("_ZN2nn2oe42SetGraphicsScaleChangedNotificationEnabledEb", ov_oe_g
 
 // GraphicsScalingParameters GetGraphicsScalingParameters(): 12 bytes returned in x0 (words 0-1) and w1 (word 2).
 // Word 0 is a scale *mode*, not a float: the SDK's own caller (sdk+0x59a690) maps 10 -> 0, 20 -> 1, 30 -> 2 and
-// aborts on anything else (an earlier {1.0f, 1.0f} here hit that abort). 10 is the console's default (the system
-// IGraphicsScaleController::GetCurrentGraphicsScale); the other two words are zero.
+// aborts on anything else (an earlier {1.0f, 1.0f} here hit that abort). 10 is the console's default (the graphics
+// scale controller's current scale); the other two words are zero.
 static void ov_oe_scaling_parameters(Cpu *c) {
     ret_x(c, 10);
     c->x[1] = 0;
@@ -447,7 +447,7 @@ static void ov_aoc_list(Cpu *c) {
 }
 // ==== nn::nifm: this build is offline. Initialize succeeds without the nifm:u session, the network is never
 // available, a request completes at once (unaccepted), and the calls that report its error return
-// NetworkCommunicationDisabled (nifm module 110, description 1111: the system service/nifm/nifm.cpp).
+// NetworkCommunicationDisabled (nifm module 110, description 1111).
 #define NIFM_R_COMMUNICATION_DISABLED 0x8ae6eu
 static void ov_nifm_initialize(Cpu *c) { rt_log("nifm: offline, no network"); ret_x(c, 0); }
 static void ov_nifm_available(Cpu *c) { ret_x(c, 0); }

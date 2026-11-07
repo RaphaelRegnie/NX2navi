@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-NVN_DIR = ROOT / "refs/MacNativeGames/games/<game>/third_party/d2r_gfx/gfx/nvn"
+# the game folder of the refs checkout that holds the NVN front end
+NVN_DIR = next((ROOT / "refs/MacNativeGames/games").glob("*/third_party/d2r_gfx/gfx/nvn"),
+               ROOT / "refs/MacNativeGames/games/third_party/d2r_gfx/gfx/nvn")
 OUT = ROOT / "runtime/nvn_procs.inc"
 
 NOT_LOADED = {"nvnDeviceApplyDeferredFinalizes", "nvnQueueAcquireTexture"}

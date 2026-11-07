@@ -23,7 +23,7 @@
 enum { T_CLOSE = 2, T_REQUEST = 4, T_CONTROL = 5, T_REQUEST_CTX = 6, T_CONTROL_CTX = 7, T_TIPC_CLOSE = 15,
        T_TIPC_BASE = 16 };
 
-// The application's lifecycle (the system service/am/lifecycle_manager.cpp, read for behaviour): one state-changed
+// The application's lifecycle (as the system's applet manager runs it): one state-changed
 // event per applet, signalled while a message is waiting and cleared by the server once the queue drains (Horizon
 // does not clear it on a wait). An *application* learns it has focus through FocusStateChanged (15) followed by
 // GetCurrentFocusState == InFocus; ChangeIntoForeground (1) is the library-applet message and an application
@@ -182,7 +182,7 @@ static void applet_oe_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *
 }
 
 // aud:u: the Switch 2 audio entry point (nn::audio::CreateUserClientSessionByHipc). It hands out the Switch 1
-// managers as sub-objects (the system service/audio/nx2_audio_user_client.h; command ids are the system's guesses):
+// managers as sub-objects (command ids inferred from the calls the SDK makes):
 // 2 -> IAudioRendererManager (the audren:u manager), 1 -> IAudioOutManager (not served by this host).
 static void aud_user_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
     (void)s;
@@ -1008,7 +1008,7 @@ int probe_ipc(void) {
 }
 
 // Create the applet state-changed event at boot and queue the launch message: the application starts in focus
-// (the system AppletManager: SetFocusState(InFocus) -> FocusStateChanged for an application).
+// (the applet manager: SetFocusState(InFocus) -> FocusStateChanged for an application).
 void ipc_applet_event_init(void) {
     if (!g_applet_event) {
         g_applet_event_w = kern_event_new();

@@ -981,7 +981,7 @@ void audio_device_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) 
     }
     // 17.0.0+: Acquire/Release Audio{Input,Output}DeviceNotification (15-18), 18.0.0+: SetAudioDeviceOutputVolume-
     // AutoTuneEnabled (19) / IsAudioDeviceOutputVolumeAutoTuneEnabled (20), 21.0.0+:
-    // IsActiveOutputDeviceEstimatedLowLatency (21). Command ids from the system service/audio/audio_device.cpp. The
+    // IsActiveOutputDeviceEstimatedLowLatency (21). Command ids as the system answers them. The
     // device never changes and the host applies no auto-tuned volume, so the answers are "off" / "no".
     case 15: case 17: {   // Acquire...Notification -> a readable event that is never signalled
         uint32_t ev = kern_event_new();
@@ -995,7 +995,7 @@ void audio_device_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) 
 }
 
 // ---- auddmg:u: the Switch 2 audio device manager. Command 0 opens the virtual device manager. Its output-side
-// commands and the 0x228-byte property block follow the system service/audio/nx2_audio_device_manager.h
+// commands and the 0x228-byte property block follow the system service's layout
 // (INx2AudioVirtualDeviceManager); ids there are partly guessed. One virtual output device feeds the host mixer;
 // there are no input devices, so a command not listed here (the input side the SDK's ListVirtualInputDevices
 // reaches) is logged once and answered with success and a zero count.
@@ -1048,7 +1048,7 @@ static void virtual_device_manager_handler(IpcSession *s, const IpcRequest *rq, 
         memcpy(block + 0x110, device_name, sizeof device_name);
         uint64_t latency_ns = 10000000;
         memcpy(block + 0x218, &latency_ns, sizeof latency_ns);
-        uint32_t id = 1;   // nonzero: the SDK's output streams pass it on (the system: a zero breaks stream creation)
+        uint32_t id = 1;   // nonzero: the SDK's output streams pass it on (a zero breaks stream creation)
         memcpy(block + 0x220, &id, sizeof id);
         put_block(rq, rs, block, sizeof block);
         return;
@@ -1075,7 +1075,7 @@ void audio_dmg_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *rs) {
 }
 
 // ---- audsmx:u: the Switch 2 sound mixer (sysmix). Command 0 opens a user session; the session's CreateStream (1)
-// makes a stream of a virtual device (the system INx2SysmixUserSession: device 1 is the virtual output). This host
+// makes a stream of a virtual device (the sysmix user session: device 1 is the virtual output). This host
 // renders through audren, has no sysmix output streams yet and no input devices: CreateStream of a device other
 // than 1 fails with InvalidArgument (as the system does), and device 1 stops with its name so the first title that needs
 // a sysmix output stream says so. Engage/DisengageStreams (2/3) succeed.

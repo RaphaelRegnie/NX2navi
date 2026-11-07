@@ -174,7 +174,7 @@ def program_nca(records, update=False):
     require(len(programs) == 1, 'Expected one base Program NCA; updates, DLC and combined packages are unsupported')
     record, hdr = programs[0]
     require(record['title_id'] == '0100F2C0115B6000',
-            'Expected Ocarina of Time base game 1.0.0; updates, DLC and other games are unsupported')
+            'Expected the supported base game 1.0.0; updates, DLC and other games are unsupported')
     return record, hdr
 
 

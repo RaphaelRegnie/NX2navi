@@ -104,7 +104,7 @@ int probe_mods(void) {
               "an ExeFS patch for main the build lacks waits for the rebuild");
         CHECK(jm->kind == MOD_CHEATS && jm->problem == MOD_OK && ends_with(jm->cheats, "J/cheats"),
               "cheats-only mod");
-        CHECK(km->kind == MOD_ROMFS && km->problem == MOD_OK && ends_with(km->romfs, "K/romfslite"), "a mod manager romfslite");
+        CHECK(km->kind == MOD_ROMFS && km->problem == MOD_OK && ends_with(km->romfs, "K/romfslite"), "merged romfslite");
         CHECK(lm->kind == (MOD_ROMFS | MOD_CHEATS) && lm->problem == MOD_OK, "RomFS + cheats, main.npdm is no code");
         CHECK(u->kind == MOD_ROMFS && ends_with(u->romfs, "Ultra \xD0\x96/romfs"), "Unicode folder name");
         CHECK(!mods_changed(), "nothing changed after the scan");

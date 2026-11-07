@@ -369,6 +369,9 @@ void vk_pool_fini(pool_t *p) {
     // name them (the game frees a pool only once the GPU is done with it, but its CPU writes may still be queued).
     if (r->mbuf) mirror_retiring(r), vk_completion_add(vk_sync_issued() + 1, mirror_retire, r);
     else if (r->gpa_rec && !r->used) vk_completion_add(vk_sync_issued() + 1, gpa_retire, r);   // the queue was not drained
+    // an unused physical pool may still be read through the virtual pages that mapped it (device addresses, which do not
+    // mark it used): its buffer outlives the submission being recorded too
+    else if (r->kind == POOL_PHYS && !r->used) vk_completion_add(vk_sync_issued() + 1, gpa_retire, r);
     else destroy_rec(c, r);
 }
 

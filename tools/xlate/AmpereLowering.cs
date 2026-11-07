@@ -2306,6 +2306,18 @@ static class AmpereLowering
                 // (the uniform switches: UISETP.GT P0, URx, bound; USEL URx, URx, bound, P0)
                 uint mop = mn >= 0 ? _code[mn].Bits(0, 12) : 0, mb = mop & 0x7f;
                 if (mn >= 0 && (mb == 0x17 || mb == 0x07) && _code[mn].Bits(9, 3) == 4) count = (int)_code[mn].W1 + 1;
+                // the register form, the bound in a register a MOV (UMOV) of an immediate set before it: SEL Rx, Rx, Rb
+                // under ISETP Rx, Rb, or IMNMX Rx, Rx, Rb; either source may be the bound, the other is the index
+                else if (mn >= 0 && (mb == 0x17 || mb == 0x07) && _code[mn].Bits(9, 3) == 1)
+                    foreach (uint r in new[] { _code[mn].Bits(32, 8), _code[mn].Bits(24, 8) })
+                    {
+                        int mv = r == RZ ? -1 : Writer(mn - 1, r, uniform);
+                        if (mv >= 0 && _code[mv].Bits(0, 12) == (uniform ? 0x882u : 0x802u) && _code[mv].Bits(12, 4) == 7)
+                        {
+                            count = (int)_code[mv].W1 + 1;
+                            break;
+                        }
+                    }
             }
             if (count <= 0 || count > 1024) throw Fail("BRX jump table without a bound");
             var t = new List<uint>();
