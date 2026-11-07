@@ -30,6 +30,8 @@ static int g_font_bad;
 #pragma clang diagnostic ignored "-Wunused-function"
 #include "imstb_truetype.h"
 #include "menu_sound.h"
+#include "menu_assets.h"
+#include "ui/menu_art.h"
 #pragma clang diagnostic pop
 #include "ui/amiibo_page.h"
 #include "ui/binds_page.h"
@@ -204,41 +206,42 @@ static float menu_scale(uint32_t h) {
     return ((float)h >= least ? (float)h : least) / 1080.0f;
 }
 
-// Ocarina of Time colours: a night-sky navy panel, Kokiri green for what is selected, Triforce gold for accents and
-// the cursor, the Ocarina's blue for the active control.
-static const ImVec4 kGold(0.95f, 0.78f, 0.30f, 1), kGreen(0.16f, 0.42f, 0.26f, 1), kNavy(0.05f, 0.07f, 0.13f, 0.96f),
-    kOcarina(0.26f, 0.48f, 0.82f, 1);
+// The game's menu colours: a dark umber panel, warm browns for frames and what is selected, gold for the ornaments,
+// accents and the cursor, parchment text. kGreen and kOcarina keep their names for the selected and active controls.
+static const ImVec4 kGold(0.93f, 0.76f, 0.38f, 1), kGreen(0.36f, 0.26f, 0.13f, 1), kNavy(0.075f, 0.058f, 0.042f, 0.95f),
+    kOcarina(0.62f, 0.47f, 0.22f, 1);
 static void style_init(ImGuiStyle &s) {
     ImGui::StyleColorsDark(&s);
     s.WindowRounding = 10; s.FrameRounding = 6; s.GrabRounding = 6; s.TabRounding = 6; s.ChildRounding = 8;
-    s.WindowPadding = ImVec2(30, 22); s.FramePadding = ImVec2(14, 8); s.ItemSpacing = ImVec2(14, 12);
+    s.WindowPadding = ImVec2(40, 30); s.FramePadding = ImVec2(14, 8); s.ItemSpacing = ImVec2(14, 12);
     s.WindowBorderSize = 2; s.ScrollbarSize = 16;
     ImVec4 *c = s.Colors;
     c[ImGuiCol_WindowBg] = kNavy;
     c[ImGuiCol_Border] = ImVec4(kGold.x, kGold.y, kGold.z, 0.55f);
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_PopupBg] = kNavy;
-    c[ImGuiCol_Text] = ImVec4(0.97f, 0.95f, 0.88f, 1);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.64f, 0.70f, 1);
-    c[ImGuiCol_FrameBg] = ImVec4(0.10f, 0.14f, 0.22f, 1);
-    c[ImGuiCol_FrameBgHovered] = ImVec4(0.13f, 0.24f, 0.22f, 1);
+    c[ImGuiCol_Text] = ImVec4(0.96f, 0.92f, 0.82f, 1);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.56f, 0.46f, 1);
+    c[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.115f, 0.08f, 1);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.24f, 0.18f, 0.10f, 1);
     c[ImGuiCol_FrameBgActive] = kGreen;
     c[ImGuiCol_SliderGrab] = kOcarina;
     c[ImGuiCol_SliderGrabActive] = kGold;
     c[ImGuiCol_CheckMark] = kGold;
-    c[ImGuiCol_Button] = ImVec4(0.12f, 0.18f, 0.28f, 1);
+    c[ImGuiCol_Button] = ImVec4(0.19f, 0.145f, 0.09f, 1);
     c[ImGuiCol_ButtonHovered] = kGreen;
     c[ImGuiCol_ButtonActive] = kOcarina;
-    c[ImGuiCol_Header] = ImVec4(0.13f, 0.24f, 0.22f, 1);
+    c[ImGuiCol_Header] = ImVec4(0.24f, 0.18f, 0.10f, 1);
     c[ImGuiCol_HeaderHovered] = kGreen;
     c[ImGuiCol_HeaderActive] = kOcarina;
-    c[ImGuiCol_Tab] = ImVec4(0.09f, 0.13f, 0.21f, 1);
+    c[ImGuiCol_Tab] = ImVec4(0.13f, 0.10f, 0.07f, 1);
     c[ImGuiCol_TabHovered] = kGreen;
-    c[ImGuiCol_TabSelected] = ImVec4(0.14f, 0.36f, 0.24f, 1);
+    c[ImGuiCol_TabSelected] = ImVec4(0.42f, 0.31f, 0.15f, 1);
     c[ImGuiCol_TabSelectedOverline] = kGold;
     c[ImGuiCol_NavCursor] = kGold;
     c[ImGuiCol_Separator] = ImVec4(kGold.x, kGold.y, kGold.z, 0.30f);
-    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.20f, 0.28f, 0.40f, 1);
+    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.36f, 0.28f, 0.16f, 1);
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.2f);
 }
 
 // The Triforce, its top at (x, y), h high, drawn with the title.
@@ -264,6 +267,7 @@ static void make_context(void) {
 
 static void vk_down(void) {
     if (!g_vk_ok) return;
+    menu_art_release();
     ImGui_ImplVulkan_Shutdown();
     g_vk_ok = 0;
     g_font_scale = 0;
@@ -351,13 +355,42 @@ static void add_row_glyphs(void *ctx, const char *text) {
     static_cast<ImFontGlyphRangesBuilder *>(ctx)->AddText(text);
 }
 
+// The game's own interface fonts from the user's RomFS (menu_assets.c), read once: ClarimoUDPE for the menu's text,
+// CetraDisplayPro for its title and tabs. Roboto stays merged behind them for the glyphs they lack; without them the
+// menu keeps Roboto alone.
+static uint8_t *g_game_font, *g_title_font_data;
+static size_t g_game_font_n, g_title_font_n;
+static ImFont *g_title_font;
+
+static void game_fonts_read(void) {
+    static int done;
+    if (done) return;
+    done = 1;
+    g_game_font = menu_asset_font("Font2/Scalable/ClarimoUDPE-Regular.Nin_Ounce_NVN2.bfotf.zs", &g_game_font_n);
+    g_title_font_data = menu_asset_font("Font2/Scalable/CetraDisplayPro-Medium.Nin_Ounce_NVN2.bfotf.zs", &g_title_font_n);
+    if (g_game_font && !font_usable(g_game_font, g_game_font_n)) free(g_game_font), g_game_font = NULL;
+    if (g_title_font_data && !font_usable(g_title_font_data, g_title_font_n)) free(g_title_font_data), g_title_font_data = NULL;
+    rt_log("menu: the game's interface fonts: text %s, titles %s", g_game_font ? "ClarimoUDPE" : "not found (Roboto)",
+           g_title_font_data ? "CetraDisplayPro" : "not found");
+}
+
 static int fonts_up(float scale) {
     enum { N = sizeof kCjk / sizeof *kCjk };
     ImFontAtlas *fa = ImGui::GetIO().Fonts;
     fa->Clear();
+    game_fonts_read();
+    g_title_font = nullptr;
     ImFontConfig fc;
     fc.FontDataOwnedByAtlas = false;
-    fa->AddFontFromMemoryTTF((void *)roboto_ttf, (int)sizeof roboto_ttf, 26.0f * scale, &fc, kRanges);
+    if (g_game_font) {
+        fa->AddFontFromMemoryTTF(g_game_font, (int)g_game_font_n, 25.5f * scale, &fc, kRanges);
+        ImFontConfig rc;
+        rc.MergeMode = true;
+        rc.FontDataOwnedByAtlas = false;
+        fa->AddFontFromMemoryTTF((void *)roboto_ttf, (int)sizeof roboto_ttf, 26.0f * scale, &rc, kRanges);
+    } else {
+        fa->AddFontFromMemoryTTF((void *)roboto_ttf, (int)sizeof roboto_ttf, 26.0f * scale, &fc, kRanges);
+    }
     uint8_t *data[N] = {};
     ImVector<ImWchar> ranges[N];
     int merged = 0;
@@ -388,8 +421,20 @@ static int fonts_up(float scale) {
         mc.FontDataOwnedByAtlas = false;
         fa->AddFontFromMemoryTTF(data[i], (int)size, 26.0f * scale, &mc, ranges[i].Data);
     }
+    if (g_title_font_data) {   // after the text font's merges, which go to the font added last
+        ImFontConfig tc;
+        tc.FontDataOwnedByAtlas = false;
+        g_title_font = fa->AddFontFromMemoryTTF(g_title_font_data, (int)g_title_font_n, 31.0f * scale, &tc, kRanges);
+        ImFontConfig rc;
+        rc.MergeMode = true;
+        rc.FontDataOwnedByAtlas = false;
+        fa->AddFontFromMemoryTTF((void *)roboto_ttf, (int)sizeof roboto_ttf, 30.0f * scale, &rc, kRanges);
+    }
     vk_queue_lock();   // the upload submits on the queue and waits for it
     int ok = ImGui_ImplVulkan_CreateFontsTexture();
+    // ClarimoUDPE's line (ascent to descent, which is all Dear ImGui spaces lines by) leaves wrapped lines touching: the
+    // line height grows by a sixth over the glyphs' size, the glyphs stay as rasterized.
+    if (ok && g_game_font && fa->Fonts.Size) fa->Fonts[0]->FontSize *= 1.16f;
     vk_queue_unlock();
     fa->ClearInputData();   // the glyphs are in the texture: the font files and the pixels are not needed again
     fa->ClearTexData();
@@ -889,12 +934,33 @@ static void menu_sounds_frame(void) {
 }
 
 static void layout_menu(uint32_t w, uint32_t h, float scale) {
-    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), IM_COL32(4, 8, 20, 140));
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), IM_COL32(10, 6, 2, 150));
     float ww = fminf(w * 0.88f, 1400 * scale), wh = fminf(h * 0.86f, 820 * scale);
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(ww, wh), ImGuiCond_Always);
+    ImTextureID frame_tex;
+    const bool framed = menu_art(MENU_ART_FRAME_DECO, &frame_tex, nullptr, nullptr);
+    if (framed) ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);   // the game's frame is the border
     ImGui::Begin("##menu", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                         ImGuiWindowFlags_NoSavedSettings);
+    if (framed) ImGui::PopStyleVar();
+    const ImVec2 win_p = ImGui::GetWindowPos(), win_s = ImGui::GetWindowSize();
+    const float inset = 7 * scale;
+    // The game's ornamented frame (ui/menu_art.cpp; nothing without the RomFS's), in gold. Its lines lie inside the
+    // texture (about 4 % of the width, 7 % of the height in), so the frame is drawn that far outside the window and its
+    // lines run along the window's edge, clear of the title and the rows; unclipped, it may reach past the window.
+    if (framed) {
+        ImDrawList *fdl = ImGui::GetWindowDrawList();
+        const float ox = 15 * scale, oy = 30 * scale;
+        fdl->PushClipRectFullScreen();
+        // the art holds the top and left edges with their corners; turned half a turn it gives the bottom and right ones
+        for (int turned = 0; turned < 2; turned++)
+            menu_art_draw9_turned(fdl, MENU_ART_FRAME_DECO, ImVec2(win_p.x - ox, win_p.y - oy),
+                                  ImVec2(win_p.x + win_s.x + ox, win_p.y + win_s.y + oy), 96 * scale, 0.2f,
+                                  IM_COL32(236, 196, 112, 235), 0, turned);
+        fdl->PopClipRect();
+    }
+    if (g_title_font) ImGui::PushFont(g_title_font);
     {   // the Triforce, then "Ocarina of Time" and the page title
         ImVec2 at = ImGui::GetCursorScreenPos();
         float th = ImGui::GetTextLineHeight();
@@ -906,6 +972,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
         ImGui::SameLine();
         ImGui::TextUnformatted(menu_text(UI_MENU_TITLE));
     }
+    if (g_title_font) ImGui::PopFont();
     // the port version and the game update, right-aligned on the title line: what a bug report needs first
     char game[16], version[96];
     snprintf(game, sizeof game, "%d.%d.%d", rt_game_version / 100, rt_game_version / 10 % 10, rt_game_version % 10);
@@ -927,7 +994,10 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
         for (int k = 0; k < TAB_COUNT; k++) {
             char label[128];
             snprintf(label, sizeof label, "  %s  ###tab%d", menu_text(kTabNames[k]), k);   // the id stays per language
-            if (!ImGui::BeginTabItem(label, nullptr, g_tab_request == k ? ImGuiTabItemFlags_SetSelected : 0)) continue;
+            if (g_title_font) ImGui::PushFont(g_title_font);   // the tab labels in the title face
+            bool shown = ImGui::BeginTabItem(label, nullptr, g_tab_request == k ? ImGuiTabItemFlags_SetSelected : 0);
+            if (g_title_font) ImGui::PopFont();
+            if (!shown) continue;
             g_tab = k;
             if (g_focus_page == k) {
                 opt_focus_first();
@@ -950,9 +1020,15 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
         ImGui::EndTabBar();
     }
 
-    // bottom row: the save status on the left, the two buttons on the right
+    // bottom row: the save status on the left, the two buttons on the right, on the game's control-guide bar
     ImGui::Spacing();
     float y = ImGui::GetCursorPosY();
+    {
+        float sy = win_p.y + y, fh = ImGui::GetFrameHeight();
+        // within the bottom row's own height: above it the page's last row may still show
+        menu_art_draw(ImGui::GetWindowDrawList(), MENU_ART_GUIDE_BAR, ImVec2(win_p.x + st.WindowPadding.x, sy),
+                      ImVec2(win_p.x + win_s.x - st.WindowPadding.x, sy + fh), IM_COL32(96, 70, 36, 170));
+    }
     if (!cfg_last_save_ok()) {   // stays until a save succeeds; the settings hold for the session
         ImGui::SetCursorPosY(y + st.FramePadding.y);
         ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1), "%s", menu_text(UI_MENU_SAVE_FAILED));
@@ -1247,6 +1323,7 @@ static void perf_draw(const MenuTarget *t, float scale) {
 
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {
     *shot = NULL;
+    menu_art_start();      // the game's interface textures decode on a worker from the first present on
     cheats_frame(frame);   // the data cheats and the buttons of the cheats that need them held
     if (!g_test.parsed) test_parse();
     if (g_test.next_set < g_test.n_sets && frame >= g_test.sets[g_test.next_set].frame) test_apply_sets(frame);

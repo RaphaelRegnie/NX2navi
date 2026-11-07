@@ -18,6 +18,7 @@ extern "C" {
 #include "cfg.h"
 #include "platform/platform.h"
 #include "ui_text.h"
+#include "ui/menu_art.h"
 #include "menu_sound.h"
 // host.h pulls in cpu.h, which is C only: the one function needed from it, as declared there.
 void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -164,10 +165,21 @@ static int row_text(const char *key, const char *label, const char *desc, const 
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImFont *font = ImGui::GetFont();
     float r = 9 * g_scale, pad = 16 * g_scale, small = fs * 0.72f;
-    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), hov || foc ? IM_COL32(255, 255, 255, 22) : IM_COL32(0, 0, 0, 40), r);
-    dl->AddRect(p, ImVec2(p.x + w, p.y + h),
-                hov || foc ? (off ? IM_COL32(236, 194, 84, 120) : kGold) : IM_COL32(255, 255, 255, off ? 18 : 38), r, 0,
-                hov || foc ? 2.0f : 1.0f);
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), hov || foc ? IM_COL32(255, 230, 170, 18) : IM_COL32(0, 0, 0, 46), r);
+    // the selected row in the game's own cursor (glow, then its line; ui/menu_art.cpp), else a gold border
+    bool art = false;
+    if (hov || foc) {   // a halo around the row (the glow's middle left out, so the label stays readable), then the line
+        float gx = h * 0.22f, gy = h * 0.16f;
+        art = menu_art_draw9(dl, MENU_ART_CURSOR_GLOW, ImVec2(p.x - gx, p.y - gy), ImVec2(p.x + w + gx, p.y + h + gy), h * 0.5f, 0.3f,
+                             off ? IM_COL32(236, 194, 84, 50) : IM_COL32(244, 200, 96, 120), 0) &&
+              menu_art_draw9(dl, MENU_ART_CURSOR_LINE, ImVec2(p.x - gx * 0.3f, p.y - gy * 0.3f),
+                             ImVec2(p.x + w + gx * 0.3f, p.y + h + gy * 0.3f), h * 0.12f, 0.1f,
+                             off ? IM_COL32(255, 236, 190, 80) : IM_COL32(255, 236, 180, 150), 0);   // edges only: the art is a filled bar
+    }
+    if (!art)
+        dl->AddRect(p, ImVec2(p.x + w, p.y + h),
+                    hov || foc ? (off ? IM_COL32(236, 194, 84, 120) : kGold) : IM_COL32(255, 236, 200, off ? 16 : 34), r, 0,
+                    hov || foc ? 2.0f : 1.0f);
     float ty = p.y + fs * 0.25f, ny = p.y + fs * 1.3f;   // the label line and the note line under it
     float right = p.x + w - pad;                         // the value's right edge
     float value_left = right;

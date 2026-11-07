@@ -299,6 +299,65 @@ static void raise_window(HWND h) {
     }
 }
 
+// The window's pointer: a gold arrowhead in the menu's colours, its tip the hotspot at the top left, the half towards
+// the tip's right edge a lighter facet, with a dark outline; sized for the system DPI (32 px at 96 DPI) and drawn with
+// 4x4 samples per pixel into a 32-bit cursor with alpha. The arrow when anything fails.
+static int in_tri(float px, float py, float ax, float ay, float bx, float by, float cx, float cy) {
+    float d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by), d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy),
+          d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+    int neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+    return !(neg && pos);
+}
+
+static HCURSOR pointer_cursor(void) {
+    UINT dpi = GetDpiForSystem();
+    int n = (int)(32 * (dpi ? dpi : 96) / 96);
+    if (n < 24) n = 24;
+    if (n > 96) n = 96;
+    BITMAPV5HEADER bh = {.bV5Size = sizeof bh, .bV5Width = n, .bV5Height = -n, .bV5Planes = 1, .bV5BitCount = 32,
+                         .bV5Compression = BI_BITFIELDS, .bV5RedMask = 0x00ff0000, .bV5GreenMask = 0x0000ff00,
+                         .bV5BlueMask = 0x000000ff, .bV5AlphaMask = 0xff000000};
+    HDC dc = GetDC(NULL);
+    uint32_t *px = NULL;
+    HBITMAP color = CreateDIBSection(dc, (BITMAPINFO *)&bh, DIB_RGB_COLORS, (void **)&px, NULL, 0);
+    ReleaseDC(NULL, dc);
+    HBITMAP mask = CreateBitmap(n, n, 1, 1, NULL);
+    if (!color || !mask || !px) {
+        if (color) DeleteObject(color);
+        if (mask) DeleteObject(mask);
+        return LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    }
+    // the arrowhead: tip (ax, ay), the right wing (bx, by), the lower wing (cx, cy), the notch (mx, my) between them
+    float o = n * 0.07f, ax = o, ay = o, bx = o + n * 0.70f, by = o + n * 0.46f, cx = o + n * 0.30f, cy = o + n * 0.80f;
+    float mx = o + n * 0.36f, my = o + n * 0.50f, e = n * 0.055f;
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) {
+            int light = 0, deep = 0, edge = 0;
+            for (int sy = 0; sy < 4; sy++)
+                for (int sx = 0; sx < 4; sx++) {
+                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4;
+                    int l = in_tri(fx, fy, ax, ay, bx, by, mx, my), d = !l && in_tri(fx, fy, ax, ay, mx, my, cx, cy);
+                    int out = in_tri(fx, fy, ax - e, ay - e * 1.3f, bx + e * 1.4f, by + e * 0.2f, mx, my + e * 1.2f) ||
+                              in_tri(fx, fy, ax - e * 1.3f, ay - e, mx + e * 1.2f, my, cx + e * 0.2f, cy + e * 1.4f);
+                    light += l, deep += d, edge += out && !l && !d;
+                }
+            int cov = light + deep + edge;
+            uint32_t a = (uint32_t)(cov * 255 / 16), r = 0, g = 0, b = 0;
+            if (cov) {
+                r = (uint32_t)((255 * light + 214 * deep + 44 * edge) / cov);
+                g = (uint32_t)((226 * light + 158 * deep + 28 * edge) / cov);
+                b = (uint32_t)((138 * light + 58 * deep + 10 * edge) / cov);
+            }
+            // premultiplied by alpha, as 32-bit cursors want
+            px[y * n + x] = a << 24 | (r * a / 255) << 16 | (g * a / 255) << 8 | (b * a / 255);
+        }
+    ICONINFO ii = {.fIcon = FALSE, .xHotspot = (DWORD)o, .yHotspot = (DWORD)o, .hbmMask = mask, .hbmColor = color};
+    HCURSOR cur = CreateIconIndirect(&ii);
+    DeleteObject(color);
+    DeleteObject(mask);
+    return cur ? cur : LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+}
+
 static void window_main(void *arg) {
     (void)arg;
     HINSTANCE inst = GetModuleHandleW(NULL);
@@ -308,7 +367,7 @@ static void window_main(void *arg) {
                                           GetSystemMetrics(SM_CYICON), LR_SHARED),
                       .hIconSm = LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                             GetSystemMetrics(SM_CYSMICON), LR_SHARED),
-                      .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"NX2naviRecompWindow"};
+                      .hCursor = pointer_cursor(), .lpszClassName = L"NX2naviRecompWindow"};
     RegisterClassExW(&wc);
     int cw, ch, ow, oh;
     cfg_window_size(&cw, &ch);
