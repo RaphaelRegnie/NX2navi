@@ -63,6 +63,12 @@ const GfxShader *gfx_shader_load_input(const uint8_t iid[32], int xlate);
 // Boot prewarm: out[i] = gfx_shader_load_input(iids[i], 1) on `threads` threads with up to `procs` translators, then
 // every other stored input not cached under this translator is translated. Logs progress and the total.
 void gfx_shader_prewarm(const uint8_t (*iids)[32], size_t n, const GfxShader **out, int threads, int procs);
+// How far the running (or last) gfx_shader_prewarm is: shaders done of total, and how many of them it translated (the
+// rest were cached). Any thread; the numbers lag the workers by at most 100 ms.
+void gfx_shader_prewarm_progress(int64_t *done, int64_t *total, int64_t *translated);
+// A black frame with the boot screen (ui/menu.cpp menu_boot_frame) over it: boot.c's wait for the prewarm, on the
+// boot thread before the guest runs (nothing else presents then).
+void gfx_present_boot(void);
 // Answers met in play: from this call on, every (program, answers) a gfx_shader_get* call resolves is appended
 // to shader-answers.bin, and its program to shader-programs.bin, in the directory of `keys_path` (pipeline-keys.bin).
 void gfx_shader_record_at(const char *keys_path);

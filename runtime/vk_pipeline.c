@@ -2574,7 +2574,26 @@ static void warm_builder(void *arg) {
 
 static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]);
 
+// vk_pipeline_prewarm_progress's numbers: the phase, and the pipelines finished (built or failed) of those queued, copied
+// while prewarm_run waits for its builders.
+static int32_t pw_phase;
+static int64_t pw_pipe_done, pw_pipe_total;
+
+void vk_pipeline_prewarm_progress(VkPrewarmProgress *p) {
+    p->phase = __atomic_load_n(&pw_phase, __ATOMIC_ACQUIRE);
+    gfx_shader_prewarm_progress(&p->sh_done, &p->sh_total, &p->sh_translated);
+    p->pipe_done = __atomic_load_n(&pw_pipe_done, __ATOMIC_RELAXED);
+    p->pipe_total = __atomic_load_n(&pw_pipe_total, __ATOMIC_RELAXED);
+}
+
+static void prewarm_run(void);
+
 void vk_pipeline_prewarm(void) {
+    prewarm_run();
+    __atomic_store_n(&pw_phase, 3, __ATOMIC_RELEASE);
+}
+
+static void prewarm_run(void) {
     const char *gpu = rt_config()->gpu;
     uint32_t pr_hist[16] = {0}, fs_hist[4] = {0};   // library state of the recorded pipelines (lb_start)
     if (!A.on || (gpu && !strcmp(gpu, "null"))) return;
@@ -2609,6 +2628,7 @@ void vk_pipeline_prewarm(void) {
     int cpus = (int)plat_cpu_usable();
     const char *pe = cfg_get("NX2NAVI_PREWARM_XLATE");   // no fixed default: half the CPUs, at most 16, when unset
     int procs = pe && *pe ? atoi(pe) : cpus / 2 > 16 ? 16 : cpus / 2;
+    __atomic_store_n(&pw_phase, 1, __ATOMIC_RELEASE);
     gfx_shader_prewarm((const uint8_t(*)[32])ids, u, sh, cpus, procs < 1 ? 1 : procs);
     double t1 = now_ms();
 
@@ -2656,14 +2676,24 @@ void vk_pipeline_prewarm(void) {
     plat_mutex_unlock(&P.lock);
     free(ids), free(sh);
 
+    __atomic_store_n(&pw_pipe_done, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&pw_pipe_total, (int64_t)queued, __ATOMIC_RELAXED);
+    __atomic_store_n(&pw_phase, 2, __ATOMIC_RELEASE);
     PlatThread *t[64];
     int nt = 0;
     for (int i = 0; i < cpus && i < 64 && queued; i++)
         if ((t[nt] = plat_thread_new(warm_builder, NULL, "pipe prewarm"))) nt++;
     if (!nt) warm_builder(NULL);
+    double logged = now_ms();
     for (int i = 0; i < nt; i++)
-        while (!plat_thread_join_ns(t[i], 2000000000u))
-            rt_log("vk_pipeline: prewarm: %u of %u pipelines, %.0f ms", K.built + K.failed, queued, now_ms() - t1);
+        while (!plat_thread_join_ns(t[i], 100000000u)) {   // every 100 ms the numbers, every 2 s a log line
+            uint32_t fin = __atomic_load_n(&K.built, __ATOMIC_RELAXED) + __atomic_load_n(&K.failed, __ATOMIC_RELAXED);
+            __atomic_store_n(&pw_pipe_done, (int64_t)fin, __ATOMIC_RELAXED);
+            if (now_ms() - logged < 2000) continue;
+            logged = now_ms();
+            rt_log("vk_pipeline: prewarm: %u of %u pipelines, %.0f ms", fin, queued, now_ms() - t1);
+        }
+    __atomic_store_n(&pw_pipe_done, (int64_t)queued, __ATOMIC_RELAXED);
     plat_mutex_lock(&P.lock);
     while (K.left) plat_cond_wait(&done_cv, &P.lock);   // jobs a pool worker took
     rt_log("vk_pipeline: prewarm: %zu records in %s: %u pipelines built, %u failed, %u already built, %u dropped "

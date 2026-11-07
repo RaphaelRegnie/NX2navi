@@ -1407,6 +1407,92 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     return ImGui::GetDrawData()->TotalVtxCount > 0;
 }
 
+// ---- the boot screen (boot.c's wait for the prewarm; gfx_present_boot presents it on a black frame)
+
+static std::atomic<int> g_boot_phase;
+static std::atomic<long long> g_boot_done, g_boot_total;
+static uint64_t g_boot_t0;
+
+extern "C" void menu_boot_set(int phase, long long done, long long total) {
+    g_boot_done.store(done, std::memory_order_relaxed);
+    g_boot_total.store(total, std::memory_order_relaxed);
+    g_boot_phase.store(phase, std::memory_order_release);
+}
+
+// A panel in the middle of the screen in the menu's colours: the title, the step with its count and a bar, and why it
+// happens. The input queue is left alone: keys pressed now reach the menu once the game runs.
+extern "C" int menu_boot_frame(const MenuTarget *t) {
+    if (g_failed_flag() || g_boot_phase.load(std::memory_order_acquire) < 0) return 0;   // -1: done, a black frame
+    if (!g_ctx_ok) make_context();
+    float scale = menu_scale(t->height);
+    if (!vk_up(t) || (g_font_scale != scale && !fonts_up(scale))) {
+        rt_log("menu: Dear ImGui Vulkan back end set-up failed; no boot screen, and the menu stays closed");
+        g_failed.store(1);
+        return 0;
+    }
+    if (g_style_scale != scale) {
+        ImGui::GetStyle() = g_base_style;
+        ImGui::GetStyle().ScaleAllSizes(scale);
+        g_style_scale = scale;
+    }
+    uint64_t now = plat_now_ns();
+    if (!g_boot_t0) g_boot_t0 = now;
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = ImVec2((float)t->width, (float)t->height);
+    double dt = g_last_ns ? (now - g_last_ns) / 1e9 : 1 / 60.0;
+    io.DeltaTime = (float)(dt < 1e-4 ? 1e-4 : dt > 0.1 ? 0.1 : dt);
+    g_last_ns = now;
+    ImGui_ImplVulkan_NewFrame();
+    ImGui::NewFrame();
+
+    int phase = g_boot_phase.load(std::memory_order_acquire);
+    long long done = g_boot_done.load(std::memory_order_relaxed), total = g_boot_total.load(std::memory_order_relaxed);
+    char step[160];
+    if (phase == 1 || phase == 2)
+        snprintf(step, sizeof step, ui_text(phase == 1 ? UI_BOOT_SHADERS : UI_BOOT_PIPELINES), done, total);
+    else
+        snprintf(step, sizeof step, "%s", ui_text(UI_BOOT_STARTING));
+    const char *title = ui_text(UI_BOOT_TITLE), *hint = ui_text(UI_BOOT_HINT);
+
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float w = (float)t->width, h = (float)t->height, pad = 34 * scale, gap = 16 * scale;
+    ImFont *body = ImGui::GetFont();
+    float body_px = ImGui::GetFontSize();
+    ImFont *head = g_title_font ? g_title_font : body;
+    float head_px = g_title_font ? g_title_font->FontSize : body_px * 1.2f;
+    ImVec2 ts = head->CalcTextSizeA(head_px, FLT_MAX, 0, title), ss = body->CalcTextSizeA(body_px, FLT_MAX, 0, step),
+           hs = body->CalcTextSizeA(body_px * 0.8f, FLT_MAX, 0, hint);
+    float bar_h = 10 * scale;
+    float pw = fmaxf(fmaxf(ts.x, hs.x), 560 * scale) + pad * 2;
+    float ph = pad + ts.y + gap * 1.5f + ss.y + gap * 0.6f + bar_h + gap * 1.4f + hs.y + pad;
+    ImVec2 a((w - pw) / 2, (h - ph) / 2), b(a.x + pw, a.y + ph);
+    ImU32 gold = ImGui::GetColorU32(kGold), panel = ImGui::GetColorU32(kNavy);
+    ImU32 text = IM_COL32(236, 224, 196, 255), dim = IM_COL32(236, 224, 196, 150);
+    dl->AddRectFilled(a, b, panel, 10 * scale);
+    dl->AddRect(a, b, IM_COL32(237, 194, 97, 140), 10 * scale, 0, 1.5f * scale);
+    float y = a.y + pad;
+    dl->AddText(head, head_px, ImVec2((w - ts.x) / 2, y), gold, title);
+    y += ts.y + gap * 1.5f;
+    dl->AddText(body, body_px, ImVec2(a.x + pad, y), text, step);
+    y += ss.y + gap * 0.6f;
+    ImVec2 ba(a.x + pad, y), bb(b.x - pad, y + bar_h);
+    dl->AddRectFilled(ba, bb, IM_COL32(255, 255, 255, 28), bar_h / 2);
+    if ((phase == 1 || phase == 2) && total > 0) {
+        float f = (float)done / (float)total;
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        if (f > 0) dl->AddRectFilled(ba, ImVec2(ba.x + (bb.x - ba.x) * f, bb.y), gold, bar_h / 2);
+    } else {   // no count yet: a short segment sweeps along the bar
+        float span = (bb.x - ba.x) * 0.2f, run = (bb.x - ba.x) - span;
+        float s = (float)fmod((now - g_boot_t0) / 1e9 * 0.8, 2.0);
+        float x = ba.x + run * (s < 1 ? s : 2 - s);
+        dl->AddRectFilled(ImVec2(x, ba.y), ImVec2(x + span, bb.y), gold, bar_h / 2);
+    }
+    y += bar_h + gap * 1.4f;
+    dl->AddText(body, body_px * 0.8f, ImVec2((w - hs.x) / 2, y), dim, hint);
+    ImGui::Render();
+    return ImGui::GetDrawData()->TotalVtxCount > 0;
+}
+
 extern "C" void menu_overlay_draw(VkCommandBuffer cb) {
     uint64_t t0 = plat_now_ns();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cb);

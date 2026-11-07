@@ -748,8 +748,10 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     MenuTarget mt = {c->instance, c->phys, c->device, c->gfx_family, c->gfx_queue,
                      g_sc_hdr ? VK_FORMAT_R8G8B8A8_UNORM : g_sc_fmt, g_sc_ext.width,
                      g_sc_ext.height, cw, ch, g_scaler};
+    // without a source image (gfx_present_boot): a black frame with the boot screen
     int overlay = g_sc_view[idx] &&
-                  menu_overlay_frame(__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED), &mt, &menu_shot);
+                  (src ? menu_overlay_frame(__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED), &mt, &menu_shot)
+                       : menu_boot_frame(&mt));
     // NX2NAVI_SHOT_EVERY=<s> with NX2NAVI_SHOT_DIR=<dir>: the presented frame as shot_<n>.png every s seconds
     // (a check of what the window shows, for runs nobody watches)
     static char shot_path[1100];
@@ -771,7 +773,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         }
     }
     int cap = (g_capture || menu_shot) && ensure_capture_buffer();
-    int thumb = g_th_n && ensure_thumbs();
+    int thumb = src && g_th_n && ensure_thumbs();
 
     VkCommandBuffer cb = g_cb[slot];
     vkResetCommandBuffer(cb, 0);
@@ -786,11 +788,11 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     const int rect[4] = {cx, cy, cw, ch};
     int to[4];   // where the picture goes in the swapchain image: {x, y, w, h}
     gfx_fit_rect(cw, ch, (int)g_sc_ext.width, (int)g_sc_ext.height, to);
-    if (g_sc_ext.width && g_sc_ext.height) {
+    if (src && g_sc_ext.width && g_sc_ext.height) {
         for (int i = 0; i < 4; i++) g_pic[i] = (float)to[i] / (float)(i & 1 ? g_sc_ext.height : g_sc_ext.width);
         __atomic_store_n(&g_pic_ok, 1, __ATOMIC_RELEASE);
     }
-    if (to[2] != (int)g_sc_ext.width || to[3] != (int)g_sc_ext.height) {   // black bars beside or above and below it
+    if (!src || to[2] != (int)g_sc_ext.width || to[3] != (int)g_sc_ext.height) {   // black bars beside or above and below it
         VkClearColorValue black = {.float32 = {0, 0, 0, 1}};
         VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdClearColorImage(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
@@ -809,8 +811,8 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     // FSR (NX2NAVI_UPSCALER): EASU when the picture's rectangle is larger than the crop, the shrink and RCAS when it is
     // smaller; else the bilinear blit
     int fsr = general ? vk_fsr_record(cb, slot, psrc, pfmt, graded ? cw : w, graded ? ch : h, prect, dst, to) : 0;
-    g_scaler = fsr == 2 ? 3 : fsr ? 2 : cw != to[2] || ch != to[3];
-    if (!fsr) {
+    if (src) g_scaler = fsr == 2 ? 3 : fsr ? 2 : cw != to[2] || ch != to[3];
+    if (!fsr && src) {
         if (general)   // a GENERAL source (vk_texture.c images): earlier submissions' writes become visible to the blit here
             sync_barrier(cb, psrc, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                          VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -824,7 +826,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
             sync_barrier(cb, psrc, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0);
     }
-    if (!g_sc_hdr) movie_overlay(cb, slot, dst);   // a movie frame over the game image (SDR swapchains)
+    if (!g_sc_hdr && src) movie_overlay(cb, slot, dst);   // a movie frame over the game image (SDR swapchains)
     // last: the image's layout, and the stage and access of its last write, as each step leaves it
     VkImageLayout last = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     VkPipelineStageFlags2 last_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -913,6 +915,10 @@ void vk_present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w, in
 void vk_present_blit(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int h, const int crop[4]) {
     present_image(src, layout, fmt, w, h, crop, 1);
 }
+
+// The boot screen on a black frame (menu_boot_frame), without a game image: present_image's paths that read a source
+// are skipped. The size only places the picture rectangle, which a frame without a picture leaves as it was.
+void gfx_present_boot(void) { present_image(VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, VK_FORMAT_UNDEFINED, 1920, 1080, NULL, 0); }
 
 void vk_present_flip(void) {
     plat_rmutex_lock(&g_pl);

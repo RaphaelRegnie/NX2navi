@@ -238,6 +238,9 @@ typedef enum {
     UI_MENU_CHEAT_MASTER, UI_MENU_CHEAT_MASTER_DESC, UI_MENU_CHEAT_RESTORE, UI_MENU_CHEAT_RESTORE_DESC,
     UI_MENU_CHEAT_REBUILD, UI_MENU_CHEAT_REBUILD_DESC, UI_MENU_CHEAT_UNSUPPORTED, UI_MENU_CHEAT_UNSUPPORTED_DESC,
     UI_MENU_LAST_ID = UI_MENU_CHEAT_UNSUPPORTED_DESC,
+    // the boot screen while the boot prewarm prepares shaders and pipelines (boot.c, ui/menu.cpp menu_boot_frame)
+    UI_BOOT_TITLE, UI_BOOT_HINT, UI_BOOT_STARTING,
+    UI_BOOT_SHADERS, UI_BOOT_PIPELINES,   // printf: "%lld" done, "%lld" total
     UI_TEXT_COUNT
 } UiTextId;
 

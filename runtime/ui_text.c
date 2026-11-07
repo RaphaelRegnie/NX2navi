@@ -500,6 +500,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                    "now.",
     [UI_MENU_CHEAT_UNSUPPORTED] = "not supported",
     [UI_MENU_CHEAT_UNSUPPORTED_DESC] = "This cheat cannot be used with this version of the game:",
+    [UI_BOOT_TITLE] = "Preparing shaders", [UI_BOOT_HINT] = "This happens once after an update or a graphics driver change.",
+    [UI_BOOT_STARTING] = "Starting", [UI_BOOT_SHADERS] = "Shaders: %lld of %lld", [UI_BOOT_PIPELINES] = "Pipelines: %lld of %lld",
     [UI_MENU_CHEATS_REBUILD] = "Rebuild the game now",
     [UI_MENU_CHEATS_REBUILD_DESC] = "Some cheats change the game's code and are not built into it: they are new or "
                                     "edited, or their last rebuild failed or was cancelled. Closes the game; the setup "
@@ -982,6 +984,8 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                    "его при следующем запуске (несколько минут), или нажмите «Пересобрать игру сейчас».",
     [UI_MENU_CHEAT_UNSUPPORTED] = "не поддерживается",
     [UI_MENU_CHEAT_UNSUPPORTED_DESC] = "Этот чит нельзя использовать с этой версией игры:",
+    [UI_BOOT_TITLE] = "Подготовка шейдеров", [UI_BOOT_HINT] = "Это происходит один раз после обновления или смены видеодрайвера.",
+    [UI_BOOT_STARTING] = "Запуск", [UI_BOOT_SHADERS] = "Шейдеры: %lld из %lld", [UI_BOOT_PIPELINES] = "Конвейеры: %lld из %lld",
     [UI_MENU_CHEATS_REBUILD] = "Пересобрать игру сейчас",
     [UI_MENU_CHEATS_REBUILD_DESC] = "Некоторые читы меняют код игры и ещё не собраны в неё: они новые или изменены, "
                                     "либо прошлая пересборка не удалась или была отменена. Закрывает игру; установщик "
@@ -1489,6 +1493,8 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
                                    "Recompilar o jogo agora.",
     [UI_MENU_CHEAT_UNSUPPORTED] = "não suportado",
     [UI_MENU_CHEAT_UNSUPPORTED_DESC] = "Este cheat não pode ser usado com esta versão do jogo:",
+    [UI_BOOT_TITLE] = "Preparando shaders", [UI_BOOT_HINT] = "Isso acontece uma vez após uma atualização ou troca do driver de vídeo.",
+    [UI_BOOT_STARTING] = "Iniciando", [UI_BOOT_SHADERS] = "Shaders: %lld de %lld", [UI_BOOT_PIPELINES] = "Pipelines: %lld de %lld",
     [UI_MENU_CHEATS_REBUILD] = "Recompilar o jogo agora",
     [UI_MENU_CHEATS_REBUILD_DESC] = "Alguns cheats alteram o código do jogo e ainda não foram compilados nele: são "
                                     "novos ou editados, ou a última recompilação falhou ou foi cancelada. Fecha o "
@@ -2082,6 +2088,8 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_CHEAT_REBUILD_DESC] = "此金手指修改游戏代码，并且是在游戏构建后新增或修改的。游戏会在下次启动时把它构建进去（几分钟），也可以使用“立即重新构建游戏”。",
     [UI_MENU_CHEAT_UNSUPPORTED] = "不支持",
     [UI_MENU_CHEAT_UNSUPPORTED_DESC] = "此金手指不能用于此游戏版本：",
+    [UI_BOOT_TITLE] = "正在准备着色器", [UI_BOOT_HINT] = "仅在更新或更换显卡驱动后进行一次。",
+    [UI_BOOT_STARTING] = "正在启动", [UI_BOOT_SHADERS] = "着色器：%lld / %lld", [UI_BOOT_PIPELINES] = "管线：%lld / %lld",
     [UI_MENU_CHEATS_REBUILD] = "立即重新构建游戏",
     [UI_MENU_CHEATS_REBUILD_DESC] = "有些金手指会修改游戏代码，但尚未构建进游戏：它们是新增或修改的，或上次重新构建失败或被取消。将关闭游戏；安装程序会把它们构建进去（几分钟）并重新启动游戏。上次存档之后的进度会丢失。",
     [UI_MENU_MODS_EXEFS_UNSUPPORTED] = "此模组修改游戏代码（exefs）的方式本移植无法应用，因此整个模组保持关闭。%s",

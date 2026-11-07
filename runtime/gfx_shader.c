@@ -1747,6 +1747,16 @@ typedef struct {
     volatile int32_t missing, other_cached;
 } Warm;
 
+// The running prewarm's numbers for gfx_shader_prewarm_progress (boot.c's wait screen), copied from its Warm while it
+// waits for the workers: the Warm lives on that function's stack.
+static int64_t pw_done, pw_total, pw_xlated;
+
+void gfx_shader_prewarm_progress(int64_t *done, int64_t *total, int64_t *translated) {
+    *done = __atomic_load_n(&pw_done, __ATOMIC_RELAXED);
+    *total = __atomic_load_n(&pw_total, __ATOMIC_RELAXED);
+    *translated = __atomic_load_n(&pw_xlated, __ATOMIC_RELAXED);
+}
+
 static void warm_worker(void *arg) {
     Warm *w = arg;
     for (;;) {
@@ -1822,6 +1832,9 @@ void gfx_shader_prewarm(const uint8_t (*iids)[32], size_t n, const GfxShader **o
     w.n_other = other_inputs(sorted, sorted ? n : 0, &w.other);
     free(sorted);
     size_t total = w.n_named + w.n_other;
+    __atomic_store_n(&pw_done, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&pw_xlated, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&pw_total, (int64_t)total, __ATOMIC_RELAXED);
     threads = threads < 1 ? 1 : threads > 64 ? 64 : threads;
     if ((size_t)threads > total) threads = (int)(total ? total : 1);
     svc_set_limit(procs);
@@ -1830,10 +1843,18 @@ void gfx_shader_prewarm(const uint8_t (*iids)[32], size_t n, const GfxShader **o
     for (int i = 0; i < threads; i++)
         if ((t[k] = plat_thread_new(warm_worker, &w, "shader prewarm"))) k++;
     if (!k) warm_worker(&w);
+    double logged = (double)plat_now_ms();
     for (int m = 0; m < k; m++)
-        while (!plat_thread_join_ns(t[m], 2000000000u))
+        while (!plat_thread_join_ns(t[m], 100000000u)) {   // every 100 ms the numbers, every 2 s a log line
+            __atomic_store_n(&pw_done, (int64_t)w.done, __ATOMIC_RELAXED);
+            __atomic_store_n(&pw_xlated, (int64_t)((uint64_t)n_xlated - xl0), __ATOMIC_RELAXED);
+            if ((double)plat_now_ms() - logged < 2000) continue;
+            logged = (double)plat_now_ms();
             rt_log("gfx_shader: prewarm: %lld of %zu shaders, %llu translated, %.0f ms", (long long)w.done, total,
                    (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
+        }
+    __atomic_store_n(&pw_done, (int64_t)total, __ATOMIC_RELAXED);
+    __atomic_store_n(&pw_xlated, (int64_t)((uint64_t)n_xlated - xl0), __ATOMIC_RELAXED);
     svc_set_limit(svc_runtime_limit());
     rt_log("gfx_shader: prewarm: %zu shaders named by pipeline keys (%ld not available), %zu other stored inputs (%ld "
            "cached); %llu translated, %llu failed, with up to %d translators and %d threads, in %.0f ms", w.n_named,

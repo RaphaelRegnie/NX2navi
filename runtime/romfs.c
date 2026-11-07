@@ -1026,8 +1026,10 @@ const char *romfs_entry(uint64_t i, uint64_t *offset, uint64_t *size) {
 const char *romfs_image_path(void) { return image_file; }
 // The whole of a RomFS file by its path from the RomFS root, for host-side readers (menu_sound.c: the game's own
 // interface sounds); malloc'd, NULL when the file is absent or not in the image (an added mod file). The original
-// file, not a mod's replacement.
+// file, not a mod's replacement. Opens the RomFS when nothing has yet: the boot screen (ui/menu.cpp menu_boot_frame)
+// loads the menu's fonts before the guest's first file access.
 uint8_t *romfs_load(const char *rel, uint64_t *size_out) {
+    fs_init();
     if (!rel || !image) return NULL;
     uint64_t i = file_index(rel);
     if (i >= file_count) return NULL;

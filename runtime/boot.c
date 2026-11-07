@@ -22,6 +22,7 @@
 #include "mods.h"
 #include "nvn_api.h"
 #include "platform/platform.h"
+#include "ui/menu.h"
 #include "vk.h"
 #include "platform/platform.h"
 
@@ -348,6 +349,45 @@ static void prewarm_main(void *arg) {
     return;
 }
 
+// rt_boot's wait for the prewarm, polled every 50 ms. A warm start is done in about half a second and shows nothing.
+// When the prewarm translates shaders (a new translator, GPU or driver, or an emptied cache) or runs past
+// BOOT_SCREEN_MS, the window shows the boot screen with its progress at 10 frames a second, and a black frame once it is
+// done. cap_ms (NX2NAVI_PREWARM_WAIT_MS) bounds the wait, 0 none. Without progress for BOOT_STALL_MS (a translator or
+// driver that hangs) the guest starts anyway; the prewarm then goes on in the background.
+#define BOOT_SCREEN_MS 1000
+#define BOOT_STALL_MS 60000
+static void boot_wait(PlatThread *warm, uint64_t cap_ms) {
+    uint64_t t0 = plat_now_ms(), moved = t0, shown = 0;
+    VkPrewarmProgress p, last = {.phase = -1};
+    int screen = 0;
+    while (!plat_thread_join_ns(warm, 50000000ull)) {
+        uint64_t now = plat_now_ms();
+        vk_pipeline_prewarm_progress(&p);
+        if (p.phase != last.phase || p.sh_done != last.sh_done || p.pipe_done != last.pipe_done) last = p, moved = now;
+        if ((cap_ms && now - t0 >= cap_ms) || now - moved >= BOOT_STALL_MS) {
+            plat_thread_detach(warm);
+            rt_log("boot: the prewarm goes on in the background after %llu ms (%s)", (unsigned long long)(now - t0),
+                   cap_ms && now - t0 >= cap_ms ? "NX2NAVI_PREWARM_WAIT_MS" : "no progress for 60 s");
+            break;
+        }
+        if (!screen && (p.sh_translated > 0 || now - t0 >= BOOT_SCREEN_MS)) {
+            screen = 1;
+            rt_log("boot: preparing shaders on the boot screen (%lld of %lld shaders done, %lld translated)",
+                   (long long)p.sh_done, (long long)p.sh_total, (long long)p.sh_translated);
+        }
+        if (screen && now - shown >= 100) {
+            int pipes = p.phase >= 2;
+            menu_boot_set(p.phase, pipes ? p.pipe_done : p.sh_done, pipes ? p.pipe_total : p.sh_total);
+            gfx_present_boot();
+            shown = now;
+        }
+    }
+    if (screen) {   // the window stays black, not on the last count, until the game's first frame
+        menu_boot_set(-1, 0, 0);
+        gfx_present_boot();
+    }
+}
+
 void rt_boot(void) {
     check_npdm();
     if (!rt_config()->shot) vk_pipeline_async_enable();   // a --shot image must not depend on build timing
@@ -366,17 +406,16 @@ void rt_boot(void) {
     ipc_applet_event_init();
     hostfn_seal();
     uint64_t held = plat_now_ms();
-    // At most NX2NAVI_PREWARM_WAIT_MS (default 3000): a warm start is ready in about 0.3 s, but a cold one (a new
-    // translator, a new driver) translated 2,132 shaders and built 1,579 pipelines for 9.8 s while the window stayed
-    // black, for shaders the game first needs in play, well after its intro. Past the wait the prewarm goes on in the
-    // background; 0 waits for all of it. A --shot image waits for all of it, so that it does not depend on build timing.
+    // The guest waits for all of the prewarm (boot_wait): a warm start is ready in about half a second; a cold one (a new
+    // translator, GPU or driver) translated 2,987 shaders in about 11 s and then builds the recorded pipelines, with the
+    // boot screen showing its progress. Started early instead, the game would meet those shaders in play and wait for
+    // each one there. NX2NAVI_PREWARM_WAIT_MS caps the wait (0, the default: none); past it the prewarm goes on in the
+    // background. A --shot image waits for all of it without the screen, so that it does not depend on build timing.
     const char *pw = cfg_get("NX2NAVI_PREWARM_WAIT_MS");
-    uint64_t wait_ms = pw && *pw ? strtoull(pw, NULL, 10) : 3000;
-    if (warm && (rt_config()->shot || !wait_ms)) plat_thread_join(warm);
-    else if (warm && !plat_thread_join_ns(warm, wait_ms * 1000000ull)) {
-        plat_thread_detach(warm);
-        rt_log("boot: the prewarm goes on in the background after %llu ms", (unsigned long long)wait_ms);
-    } else if (!warm) vk_pipeline_prewarm();
+    uint64_t wait_ms = pw && *pw ? strtoull(pw, NULL, 10) : 0;
+    if (warm && rt_config()->shot) plat_thread_join(warm);
+    else if (warm) boot_wait(warm, wait_ms);
+    else vk_pipeline_prewarm();
     held = plat_now_ms() - held;
     rt_log("boot: guest starts %llu ms after process start (%llu ms of it waiting for the prewarm)",
            (unsigned long long)(plat_process_uptime_ns() / 1000000), (unsigned long long)held);

@@ -584,6 +584,12 @@ int vk_pipeline_async_on(void);   // 1 after vk_pipeline_async_enable: graphics 
 // cached under the current translator from their stored inputs, and builds every recorded pipeline, on all cores.
 // No-op without vk_pipeline_async_enable, with NX2NAVI_PIPE_PREBUILD=0 or with NX2NAVI_GPU=null.
 void vk_pipeline_prewarm(void);
+typedef struct {
+    int phase;                            // 0 starting (device, key file), 1 shaders, 2 pipelines, 3 done
+    int64_t sh_done, sh_total, sh_translated;   // gfx_shader_prewarm_progress
+    int64_t pipe_done, pipe_total;        // pipelines built or failed of those queued
+} VkPrewarmProgress;
+void vk_pipeline_prewarm_progress(VkPrewarmProgress *p);   // any thread, while vk_pipeline_prewarm runs or after
 VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info);
 // Records every dynamic state that VkPipeState determines, after binding a graphics pipeline: cull mode, front face,
 // topology, depth and stencil tests and ops, depth bias enable, rasterizer discard, vertex input, and, where the GPU
