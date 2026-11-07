@@ -42,7 +42,7 @@ struct {
     ffxQueryDescSwapchainReplacementFunctionsVK fn = {};
     uint64_t frame = 0;
     int failed = 0;
-    uint64_t generated = 0, paused = 0, no_inputs = 0;
+    uint64_t generated = 0, paused = 0, no_inputs = 0, hudless = 0;
 } F;
 
 VkResult submit_game(uint32_t n, const VkSubmitInfo *si, VkFence fence) {
@@ -141,8 +141,15 @@ extern "C" VkResult vk_fg_present(const VkPresentInfoKHR *pi) {
     return F.fn.pOutQueuePresentKHR(vk_ctx()->gfx_queue, pi);
 }
 
-extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext) {
+extern "C" uint64_t vk_fg_presents(VkSwapchainKHR sc) {
+    return vk_fg_active() && F.fn.pOutGetLastPresentCountFFXAPI && sc ? F.fn.pOutGetLastPresentCountFFXAPI(sc) : 0;
+}
+
+extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless,
+                            VkImageView hudless_view) {
+    (void)hudless_view;
     if (!vk_fg_active()) return;
+    vk_dlaa_hudless_wanted = 1;   // the upscaling pass keeps a copy of the picture before the HUD (vk_dlaa.c hudless)
     const VkCtx *c = vk_ctx();
     if (F.fg && (F.fg_ext.width != ext.width || F.fg_ext.height != ext.height || F.fg_fmt != fmt)) {
         vkDeviceWaitIdle(c->device);   // a new window size: the context is made for its display size
@@ -155,9 +162,14 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
         be.vkDevice = c->device;
         be.vkPhysicalDevice = c->phys;
         be.vkDeviceProcAddr = vkGetDeviceProcAddr;
+        // the HUD-less picture has the swapchain's format (gfx_present.c hudless_record)
+        ffxCreateContextDescFrameGenerationHudless hl = {};
+        hl.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_HUDLESS;
+        hl.header.pNext = &be.header;
+        hl.hudlessBackBufferFormat = ffxApiGetSurfaceFormatVK(fmt);
         ffxCreateContextDescFrameGeneration d = {};
         d.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-        d.header.pNext = &be.header;
+        d.header.pNext = &hl.header;
         d.flags = FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE;
         d.displaySize = {ext.width, ext.height};
         d.maxRenderSize = {ext.width, ext.height};
@@ -183,6 +195,11 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
     cfg.frameGenerationEnabled = on != 0;
     cfg.allowAsyncWorkloads = false;
     cfg.generationRect = {0, 0, (int32_t)ext.width, (int32_t)ext.height};
+    if (on && hudless) {
+        VkFfxImage h = {hudless, fmt, ext.width, ext.height, 1};
+        cfg.HUDLessColor = image(&h);
+        F.hudless++;
+    }
     cfg.frameID = F.frame;
     ffxReturnCode_t r = vk_ffx_configure(&F.fg, &cfg.header);
     if (r != FFX_API_RETURN_OK) return fail("frame generation configuration", r);
@@ -208,9 +225,9 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
     r = vk_ffx_dispatch(&F.fg, &p.header);
     if (r != FFX_API_RETURN_OK) return fail("frame generation preparation", r);
     if (F.frame == 2 || F.frame % 3600 == 0)
-        rt_log("fg: %llu frames presented, %llu generated; paused %llu (menu), %llu without depth and motion",
-               (unsigned long long)F.frame, (unsigned long long)F.generated, (unsigned long long)F.paused,
-               (unsigned long long)F.no_inputs);
+        rt_log("fg: %llu frames presented, %llu generated (%llu with the HUD kept out); paused %llu (menu), %llu without depth "
+               "and motion", (unsigned long long)F.frame, (unsigned long long)F.generated, (unsigned long long)F.hudless,
+               (unsigned long long)F.paused, (unsigned long long)F.no_inputs);
 }
 
 extern "C" void vk_fg_release(void) {

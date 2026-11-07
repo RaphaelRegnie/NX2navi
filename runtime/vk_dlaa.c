@@ -355,9 +355,37 @@ static struct {
     unsigned cfg_seen;           // cfg_version when preset was read
     uint64_t last_eval_ns;       // plat_now_ns of the previous evaluation (FrameTimeDeltaInMsec)
     VkFfxImage fg_depth, fg_mv;  // the last evaluation's depth and motion vectors, for frame generation
+    VkImageView fg_depth_view, fg_mv_view;
+    VkDlaaCamera fg_cam;         // this frame's camera (mv_pass), fg_cam_ok when known
+    int fg_cam_ok;
     float fg_jx, fg_jy;
     int fg_fresh, fg_reset;      // fresh: not handed out yet (vk_dlaa_fg_inputs)
+    // the picture without the HUD for frame generation (vk_dlaa_fg_hudless): DLSS's output encoded to sRGB as the game's
+    // last pass encodes its picture, then copied bit for bit into an RGBA8 UNORM image, the format the present reads
+    VkImage hl_srgb, hl;
+    VmaAllocation hl_srgb_mem, hl_mem;
+    VkImageView hl_view;
+    uint32_t hl_w, hl_h;
+    int hl_fresh;
 } D = {.mv_ok = -1, .cfg_seen = ~0u};
+
+int vk_dlaa_fg_hudless(VkImage *img, VkImageView *view, uint32_t *w, uint32_t *h) {
+    if (!D.hl_fresh) return 0;
+    D.hl_fresh = 0;
+    *img = D.hl, *view = D.hl_view, *w = D.hl_w, *h = D.hl_h;
+    return 1;
+}
+
+int vk_dlaa_fg_views(VkImageView *depth, VkImageView *mv) {
+    *depth = D.fg_depth_view, *mv = D.fg_mv_view;
+    return D.fg_depth_view && D.fg_mv_view;
+}
+
+int vk_dlaa_fg_camera(VkDlaaCamera *c) {
+    if (!D.fg_cam_ok) return 0;
+    *c = D.fg_cam;
+    return 1;
+}
 
 int vk_dlaa_fg_inputs(VkFfxImage *depth, VkFfxImage *mv, float *jx, float *jy, int *reset) {
     if (!D.fg_fresh || D.failed) return 0;
@@ -640,6 +668,30 @@ static void ocam_vp(const float *v, double out[16]) {
         }
 }
 
+// Frame generation's camera (vk_dlaa_fg_camera) from the Ocarina block: the projection is rows 7-10, the view rows 0-2
+// (rows: right, up, back; the camera looks down -z), m the reprojection from this frame's clip space to last frame's.
+// Each matrix is handed out transposed, for row vectors.
+static void fg_store(float out[16], const double m[16]) {
+    for (int r = 0; r < 4; r++)
+        for (int k = 0; k < 4; k++) out[r * 4 + k] = (float)m[k * 4 + r];
+}
+static void fg_camera(const float *v, const double m[16]) {
+    double P[16], Pi[16], mi[16];
+    for (int i = 0; i < 16; i++) P[i] = v[28 + i];
+    if (!inv4(P, Pi) || !inv4(m, mi)) return;
+    VkDlaaCamera *c = &D.fg_cam;
+    fg_store(c->view_to_clip, P), fg_store(c->clip_to_view, Pi);
+    fg_store(c->clip_to_prev_clip, m), fg_store(c->prev_clip_to_clip, mi);
+    for (int i = 0; i < 3; i++) {
+        c->right[i] = v[i], c->up[i] = v[4 + i], c->fwd[i] = -v[8 + i];
+        // the position: -R^T t, R the view's 3x3 and t its last column
+        c->pos[i] = -(v[i] * v[3] + v[4 + i] * v[7] + v[8 + i] * v[11]);
+    }
+    c->fov_y = P[5] != 0 ? 2.0f * (float)atan(1.0 / fabs(P[5])) : 1.0f;
+    c->aspect = P[0] != 0 ? (float)fabs(P[5] / P[0]) : 1.777f;
+    D.fg_cam_ok = 1;
+}
+
 // The pass, recorded through the recorder like the replay's own commands. 0: no camera this frame (the vectors stay
 // zero and DLSS starts a new history). bias > 0 with this frame's G-buffer classes (D.ids) also writes e->mask, the
 // bias mask (dlaa_mv.comp); *masked says whether it did.
@@ -674,6 +726,8 @@ static int mv_pass(VkExec *ex, struct Size *e, VkImageView zv, float jx, float j
             have_m = 1;
         }
     }
+    D.fg_cam_ok = 0;
+    if (cr && have_m && D.cam_size == OCAM_BLOCK) fg_camera(cr, m);
     int s = D.cam_slot, had_prev = D.cam_prev_ok;
     if (D.cam_size == CAM_BLOCK) {   // the whole block, for the per-object motion pass (the deferred engine's only)
         VkBufferCopy bc = {cam.offset, (VkDeviceSize)s * CAM_SLOT, CAM_BLOCK};
@@ -1039,6 +1093,8 @@ static int perf_quality(uint32_t w, uint32_t ow) {
 }
 
 // dst: the target DLSS's picture goes to, NULL for the light target itself (DLAA in place).
+static void hudless(VkCommandBuffer cb, struct Size *e, uint32_t w, uint32_t h);
+
 static void evaluate(VkExec *ex, const VkExecTarget *dst) {
     const VkExecTarget *t = &D.color, *z = &D.depth;
     if (!dst) dst = t;
@@ -1179,12 +1235,14 @@ evaluated:
                    VK_FILTER_NEAREST);
     full_barrier(cb);
     if (dst != t) vk_dlaa_swap_img = t->img, vk_dlaa_swap_view = e->out_view;   // the scaling draw reads DLSS's picture
+    if (vk_dlaa_hudless_wanted) hudless(cb, e, ow, oh);   // frame generation keeps the HUD out of its generated frames
     ex->recorded += 4;
     vk_exec_draw_new_cb();   // NGX bound pipelines and descriptor sets of its own: the next draw binds everything again
     D.jdepth = z->image;
     // for frame generation at this frame's present (vk_dlaa_fg_inputs)
     D.fg_depth = (VkFfxImage){z->image, z->format, w, h, 0};
     D.fg_mv = (VkFfxImage){e->mv, VK_FORMAT_R16G16_SFLOAT, w, h, 1};
+    D.fg_depth_view = zv, D.fg_mv_view = e->mv_view;
     D.fg_jx = jx, D.fg_jy = jy, D.fg_fresh = 1;
     next_jitter(w, ow);
     if (++D.evals == 1 || D.evals == 300 || D.evals % 3600 == 0)   // 300: one early line with the frames counted
@@ -1195,6 +1253,54 @@ evaluated:
                (unsigned long long)D.mv_frames, (unsigned long long)D.masked, (unsigned long long)D.mv_none,
                (unsigned long long)D.holds, (unsigned long long)D.why[0], (unsigned long long)D.why[1],
                (unsigned long long)D.why[2], (unsigned long long)R.made, (unsigned long long)R.missed);
+}
+
+// The HUD-less picture (vk_dlaa_fg_hudless): DLSS's output, which the HUD is then drawn over, through the encode the
+// game's last pass gives its picture (linear to sRGB), as RGBA8 UNORM bytes like the picture the present reads.
+int vk_dlaa_hudless_wanted;
+static void hudless(VkCommandBuffer cb, struct Size *e, uint32_t w, uint32_t h) {
+    const VkCtx *c = vk_ctx();
+    if (D.hl && (D.hl_w != w || D.hl_h != h)) {
+        vkDeviceWaitIdle(c->device);
+        vkDestroyImageView(c->device, D.hl_view, NULL);
+        vmaDestroyImage(c->vma, D.hl, D.hl_mem), vmaDestroyImage(c->vma, D.hl_srgb, D.hl_srgb_mem);
+        D.hl = D.hl_srgb = VK_NULL_HANDLE;
+    }
+    if (!D.hl) {
+        VkImageView v2 = VK_NULL_HANDLE;
+        VkImageUsageFlags u = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (!image2d(w, h, VK_FORMAT_R8G8B8A8_SRGB, u, &D.hl_srgb, &D.hl_srgb_mem, &v2) ||
+            !image2d(w, h, VK_FORMAT_R8G8B8A8_UNORM, u | VK_IMAGE_USAGE_STORAGE_BIT, &D.hl, &D.hl_mem, &D.hl_view)) {
+            rt_log("dlaa: the HUD-less picture's images could not be made: frame generation sees the HUD");
+            vk_dlaa_hudless_wanted = 0;
+            return;
+        }
+        if (v2) vkDestroyImageView(c->device, v2, NULL);
+        D.hl_w = w, D.hl_h = h;
+        VkImageMemoryBarrier2 ib[2];
+        VkImage im[2] = {D.hl_srgb, D.hl};
+        for (int i = 0; i < 2; i++)
+            ib[i] = (VkImageMemoryBarrier2){.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                            .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = im[i],
+                                            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 2,
+                               .pImageMemoryBarriers = ib};
+        vkCmdPipelineBarrier2(cb, &di);
+    }
+    VkImageBlit b = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)w, (int32_t)h, 1}},
+                     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {(int32_t)w, (int32_t)h, 1}}};
+    vkCmdBlitImage(cb, e->out, VK_IMAGE_LAYOUT_GENERAL, D.hl_srgb, VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_NEAREST);
+    full_barrier(cb);
+    VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                      .extent = {w, h, 1}};
+    vkCmdCopyImage(cb, D.hl_srgb, VK_IMAGE_LAYOUT_GENERAL, D.hl, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
+    full_barrier(cb);
+    D.hl_fresh = 1;
 }
 
 static int scene_color(VkFormat f) {

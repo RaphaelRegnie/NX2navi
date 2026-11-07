@@ -463,7 +463,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
 
     [UI_MENU_OV_FPS] = "%.0f FPS", [UI_MENU_OV_FRAME_MS] = "%.1f ms", [UI_MENU_OV_GAME_PCT] = "game %.0f%%",
     [UI_MENU_OV_MAX_MS] = "max %.1f ms",
-    [UI_MENU_OV_FPS_LABEL] = "FPS", [UI_MENU_OV_FRAME_LABEL] = "Frame", [UI_MENU_OV_FMT_FPS] = "%.0f",
+    [UI_MENU_OV_FPS_LABEL] = "FPS", [UI_MENU_OV_FG_LABEL] = "FG", [UI_PERF_LINE_FPS_FG] = "%.0f fps (%.0f frame gen)",
+    [UI_MENU_OV_FRAME_LABEL] = "Frame", [UI_MENU_OV_FMT_FPS] = "%.0f",
     [UI_MENU_OV_LOW1] = "1%% low %.0f", [UI_MENU_OV_LOW01] = "0.1%% low %.0f",
     [UI_MENU_OV_GPU] = "GPU", [UI_MENU_OV_CPU] = "CPU", [UI_MENU_OV_RAM] = "RAM", [UI_MENU_OV_VRAM] = "VRAM",
     [UI_MENU_OV_TEMP] = "Temperature", [UI_MENU_OV_POWER] = "Power", [UI_MENU_OV_CLOCK] = "Clock",
@@ -517,7 +518,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_FRAMEGEN_DESC] = "Shows a generated frame between every two the game draws, for about twice the frame rate "
                               "on a fast display. It needs DLSS or FSR 3.1 under Upscaling (any mode), whose motion "
                               "vectors it uses. AMD FSR 3.1 frame generation runs on any GPU (amd_fidelityfx_vk.dll next "
-                              "to the game's .exe). It pauses while this menu is open. Takes effect after a restart.",
+                              "to the game's .exe); NVIDIA DLSS frame generation needs an RTX 40 or 50 GPU and "
+                              "NVIDIA's Streamline files next to the .exe. It pauses while this menu is open. Takes "
+                              "effect after a restart.",
     [UI_MENU_FRAMEGEN_OFF] = "Off",
     [UI_MENU_FRAMEGEN_NOTE] = "after restart; needs DLSS or FSR 3.1",
     [UI_MENU_GAME_RES] = "Resolution",

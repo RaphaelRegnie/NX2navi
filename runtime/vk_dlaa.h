@@ -12,7 +12,20 @@ int vk_dlaa_fsr3(void);
 // Frame generation (vk_fg.cpp): the depth and motion vectors of the frame DLSS or FSR 3.1 last ran on, with its jitter
 // and whether its history reset; 1 once per evaluation (0: none since the last call). The images stay valid until the
 // next frame's scene draws over them, after this present.
-int vk_dlaa_fg_inputs(VkFfxImage *depth, VkFfxImage *mv, float *jx, float *jy, int *reset);     // ... and its temporal upscaler is AMD FSR 3.1 (NX2NAVI_TAA = fsr3) instead of DLSS
+int vk_dlaa_fg_inputs(VkFfxImage *depth, VkFfxImage *mv, float *jx, float *jy, int *reset);
+// ... their views, and this frame's camera for DLSS Frame Generation (vk_dlssg.c): matrices for row vectors (v * M, the
+// rows stored in order), as Streamline takes them; 0 without a camera that frame.
+typedef struct {
+    float view_to_clip[16], clip_to_view[16], clip_to_prev_clip[16], prev_clip_to_clip[16];
+    float pos[3], up[3], right[3], fwd[3];
+    float fov_y, aspect;
+} VkDlaaCamera;
+int vk_dlaa_fg_views(VkImageView *depth, VkImageView *mv);
+// The picture without the HUD at the size of the game's picture, RGBA8 UNORM bytes like it (sRGB-encoded), made at
+// each evaluation while vk_dlaa_hudless_wanted (frame generation sets it); 1 once per evaluation.
+extern int vk_dlaa_hudless_wanted;
+int vk_dlaa_fg_hudless(VkImage *img, VkImageView *view, uint32_t *w, uint32_t *h);
+int vk_dlaa_fg_camera(VkDlaaCamera *c);     // ... and its temporal upscaler is AMD FSR 3.1 (NX2NAVI_TAA = fsr3) instead of DLSS
 // vk_device.c: NGX's instance and device extensions join the lists (room for max names); vk_dlaa_init after the
 // device exists brings NGX up and checks that DLSS is available.
 void vk_dlaa_instance_exts(const char **ext, uint32_t *n, uint32_t max);

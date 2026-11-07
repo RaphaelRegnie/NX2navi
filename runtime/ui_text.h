@@ -213,7 +213,7 @@ typedef enum {
 
     // Performance overlay
     UI_MENU_OV_FPS, UI_MENU_OV_FRAME_MS, UI_MENU_OV_GAME_PCT, UI_MENU_OV_MAX_MS,
-    UI_MENU_OV_FPS_LABEL, UI_MENU_OV_FRAME_LABEL, UI_MENU_OV_FMT_FPS,   // the frame rows: their labels, the rate
+    UI_MENU_OV_FPS_LABEL, UI_MENU_OV_FG_LABEL, UI_PERF_LINE_FPS_FG, UI_MENU_OV_FRAME_LABEL, UI_MENU_OV_FMT_FPS,   // the frame rows: their labels, the rate
     UI_MENU_OV_LOW1, UI_MENU_OV_LOW01,   // printf: the fps of the slowest 1% / 0.1% of the frames, no unit (the overlay column stays narrow)
     UI_MENU_OV_GPU, UI_MENU_OV_CPU, UI_MENU_OV_RAM, UI_MENU_OV_VRAM, UI_MENU_OV_TEMP, UI_MENU_OV_POWER,
     UI_MENU_OV_CLOCK, UI_MENU_OV_NONE,

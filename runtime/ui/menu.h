@@ -74,6 +74,7 @@ unsigned gfx_window_dpi(void);                 // the window's DPI (96 at 100% d
 // The present mode the swapchain got, as a NX2NAVI_VK_PRESENT value ("fifo" when mailbox is missing); "" before the first
 // swapchain. Any thread.
 const char *gfx_window_present_mode(void);
+double gfx_output_fps(void);   // frames the display gets per second with frame generation (generated ones too); 0 when off
 
 #ifdef __cplusplus
 }

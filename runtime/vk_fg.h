@@ -16,5 +16,8 @@ VkResult vk_fg_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem, uin
 VkResult vk_fg_present(const VkPresentInfoKHR *pi);   // on the game's queue, its lock held by the caller
 // Each present, before its command buffer is submitted: configures generation for this frame and records its
 // preparation (the frame's depth and motion vectors, vk_dlaa_fg_inputs) into cb.
-void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext);
+// hudless: this frame's picture without the HUD at the swapchain's size and format, in GENERAL (VK_NULL_HANDLE: none),
+// from which generation tells the HUD apart and keeps it out of the generated frames.
+void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless, VkImageView hudless_view);
+uint64_t vk_fg_presents(VkSwapchainKHR sc);   // frames the swapchain presented, generated ones included (0: off)
 void vk_fg_release(void);

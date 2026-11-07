@@ -759,10 +759,13 @@ static void row_upscaling(void) {
 
 // Frame generation (vk_fg.cpp), after a restart; it needs a temporal upscaler's motion vectors
 static void row_framegen(void) {
-    static const char *const values[] = {"off", "fsr3"};
-    const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), "AMD FSR 3.1"};
-    int cur = strcmp(cfg_value("NX2NAVI_FRAMEGEN"), "fsr3") ? 0 : 1;
-    int nv = opt_choice_index("NX2NAVI_FRAMEGEN", UI_MENU_FRAMEGEN, names, 2, cur, 1, UI_MENU_FRAMEGEN_DESC,
+    static const char *const values[] = {"off", "fsr3", "dlss"};
+    const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), "AMD FSR 3.1", "NVIDIA DLSS"};
+    const char *v = cfg_value("NX2NAVI_FRAMEGEN");
+    int cur = !strcmp(v, "fsr3") ? 1 : !strcmp(v, "dlss") ? 2 : 0;
+    // NVIDIA DLSS (vk_dlssg.c) is listed only while it is set: Streamline still fails in its plugin start-up here
+    int n = cur == 2 ? 3 : 2;
+    int nv = opt_choice_index("NX2NAVI_FRAMEGEN", UI_MENU_FRAMEGEN, names, n, cur, 0, UI_MENU_FRAMEGEN_DESC,
                               menu_text(UI_MENU_FRAMEGEN_NOTE));
     if (nv >= 0) opt_apply("NX2NAVI_FRAMEGEN", values[nv]);
 }
@@ -1166,7 +1169,11 @@ static void perf_tick(uint64_t now, const MenuTarget *t) {
         g_perf_frames++;
         if (d > g_perf_max_ns) g_perf_max_ns = d;
         if (g_perf_win_ns >= 500000000ull) {
-            snprintf(g_perf_text, sizeof g_perf_text, menu_text(UI_PERF_LINE_FPS), g_perf_frames * 1e9 / g_perf_win_ns);
+            double out = gfx_output_fps();   // with frame generation: the display's rate too
+            if (out > 0)
+                snprintf(g_perf_text, sizeof g_perf_text, menu_text(UI_PERF_LINE_FPS_FG), g_perf_frames * 1e9 / g_perf_win_ns, out);
+            else
+                snprintf(g_perf_text, sizeof g_perf_text, menu_text(UI_PERF_LINE_FPS), g_perf_frames * 1e9 / g_perf_win_ns);
             g_perf_win_ns = g_perf_max_ns = 0;
             g_perf_frames = 0;
         }
@@ -1323,6 +1330,12 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
         perf_cell(UI_MENU_OV_FMT_FPS, s.fps);
         perf_cell(UI_MENU_OV_LOW1, s.low1_fps);
         perf_cell(UI_MENU_OV_LOW01, s.low01_fps);
+        if (gfx_output_fps() > 0) {   // frame generation: what the display gets, generated frames included
+            perf_label(UI_MENU_OV_FG_LABEL, fps_c);
+            perf_cell(UI_MENU_OV_FMT_FPS, (float)gfx_output_fps());
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+        }
         perf_label(UI_MENU_OV_FRAME_LABEL, fps_c);
         perf_cell(UI_MENU_OV_FRAME_MS, s.frame_ms_avg);
         perf_cell(UI_MENU_OV_MAX_MS, s.frame_ms_max);
