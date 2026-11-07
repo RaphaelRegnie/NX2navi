@@ -724,6 +724,28 @@ static const char *present_note(void) {
 
 // ---- the tabs
 
+// One upscaling choice over two settings: NX2NAVI_UPSCALER (how the picture is fitted to the window) and NX2NAVI_DLAA
+// (DLSS on). DLSS runs at the game's own render scale (widescreen.c: the scene stays 3/4 of the picture, so DLSS's
+// quality modes would all render the same) and fits the picture with bilinear; its model is NVIDIA's own for the
+// scale (vk_dlaa.c evaluate, dlss_preset at its default).
+static void row_upscaling(void) {
+    const char *names[3] = {menu_text(UI_MENU_UPSCALER_BILINEAR), menu_text(UI_MENU_UPSCALER_FSR), "NVIDIA DLSS"};
+    int cur = cfg_bool("NX2NAVI_DLAA") ? 2 : strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") ? 0 : 1;
+    int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, 3, cur, 1, UI_MENU_UPSCALING_DESC,
+                              cur == 2 ? menu_text(UI_MENU_UPSCALING_DLSS_NOTE) : nullptr);
+    if (nv < 0) return;
+    opt_apply("NX2NAVI_UPSCALER", nv == 1 ? "fsr" : "bilinear");
+    opt_apply("NX2NAVI_DLAA", nv == 2 ? "1" : "0");
+    if (nv == 2) opt_apply("NX2NAVI_DLSS", "dlaa");
+}
+
+// The picture's height (widescreen.c picture_height): the game's 1440 or more.
+static void row_game_res(void) {
+    static const char *const values[] = {"1440", "1800", "2160", "2880", "window"};
+    const char *names[] = {"1440p", "1800p", "2160p (4K)", "2880p (5K)", menu_text(UI_MENU_GAME_RES_NATIVE)};
+    opt_choice_list("NX2NAVI_GAME_RES", UI_MENU_GAME_RES, values, names, 5, UI_MENU_GAME_RES_DESC);
+}
+
 static void tab_screen(float scale) {
     opt_begin("##screen", scale);
     opt_toggle("NX2NAVI_FULLSCREEN", UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC);
@@ -741,19 +763,13 @@ static void tab_screen(float scale) {
     static const UiTextId wide[] = {UI_MENU_GAME_ASPECT_16_9, UI_MENU_GAME_ASPECT_WINDOW, UI_MENU_GAME_ASPECT_21_9,
                                     UI_MENU_GAME_ASPECT_32_9};
     if (wide_available()) opt_choice("NX2NAVI_GAME_ASPECT", UI_MENU_GAME_ASPECT, wide, 4, UI_MENU_GAME_ASPECT_DESC);
-    static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
-    opt_choice("NX2NAVI_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
-    // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear the slider would do nothing
-    if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr")) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
+    if (wide_available()) row_game_res();
+    row_upscaling();
+    // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear or DLSS the slider would do nothing
+    if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("NX2NAVI_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
-    // DLSS at the game's own resolution (vk_dlaa.c). This build cannot change the scene size (no scene patch set), so
-    // the quality modes would all render the same: there is no mode row, only the switch and the model.
-    opt_toggle("NX2NAVI_DLAA", UI_MENU_DLAA, UI_MENU_DLAA_GAME_DESC);
-    static const UiTextId preset[] = {UI_MENU_DLSS_PRESET_DEFAULT, UI_MENU_DLSS_PRESET_K, UI_MENU_DLSS_PRESET_J};
-    if (!cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_DLSS_PRESET_NEEDS_DLAA);
-    opt_choice("NX2NAVI_DLSS_PRESET", UI_MENU_DLSS_PRESET, preset, 3, UI_MENU_DLSS_PRESET_DESC);
     opt_end();
 }
 

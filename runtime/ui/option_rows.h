@@ -45,6 +45,12 @@ bool opt_choice(const char *key, UiTextId label, const UiTextId *names, int n, U
 // unset. cur: the index in effect, -1 to find cfg_value(key) in values (no match: the value shown as it is).
 bool opt_choice_list(const char *key, UiTextId label, const char *const *values, const char *const *names, int n,
                      UiTextId desc, int cur = -1, const char *note = nullptr);
+// A choice whose value is spread over several settings: the caller gives the index in effect and the default's and
+// writes the settings itself (opt_apply) when this returns the new index; -1 while unchanged. key: the setting the row
+// stands for (its restart mark and the environment check).
+int opt_choice_index(const char *key, UiTextId label, const char *const *names, int n, int cur, int def, UiTextId desc,
+                     const char *note = nullptr);
+void opt_apply(const char *key, const char *value);   // what a row writes: "" unsets the key; saved a moment later
 // A row that runs an action: true on A or a click. id: unique on the page and not a setting ("##copy_info"); value:
 // shown on the right ("" none).
 bool opt_button(const char *id, UiTextId label, UiTextId desc, const char *value = "");

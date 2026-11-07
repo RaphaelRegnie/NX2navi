@@ -342,6 +342,27 @@ bool opt_choice_list(const char *key, UiTextId label, const char *const *values,
     return true;
 }
 
+int opt_choice_index(const char *key, UiTextId label, const char *const *names, int n, int cur, int def, UiTextId desc,
+                     const char *note) {
+    RowView v = {cur >= 0 && cur < n ? names[cur] : "", cur == def, true, note};
+    int step = row(key, label, desc, v);
+    if (!step || n <= 0) return -1;
+    int nv = cur < 0 ? 0 : step == 2 ? (cur + 1) % n : cur + step < 0 ? 0 : cur + step >= n ? n - 1 : cur + step;
+    if (nv == cur) return -1;
+    menu_sound_play(MENU_SOUND_CURSOR);
+    return nv;
+}
+
+void opt_apply(const char *key, const char *value) {   // as apply, without its sound: a row writing several keys
+    if (*value) {
+        cfg_set(key, value);
+    } else {
+        const char *k = key;
+        cfg_reset(&k, 1);
+    }
+    opt_save_soon();
+}
+
 bool opt_choice(const char *key, UiTextId label, const UiTextId *names, int n, UiTextId desc, const char *note) {
     enum { MAX = 32 };
     const CfgMeta *m = cfg_meta(key);

@@ -502,11 +502,20 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_CHEAT_UNSUPPORTED_DESC] = "This cheat cannot be used with this version of the game:",
     [UI_BOOT_TITLE] = "Preparing shaders", [UI_BOOT_HINT] = "This happens once after an update or a graphics driver change.",
     [UI_BOOT_STARTING] = "Starting", [UI_BOOT_SHADERS] = "Shaders: %lld of %lld", [UI_BOOT_PIPELINES] = "Pipelines: %lld of %lld",
-    [UI_MENU_DLAA_GAME_DESC] = "NVIDIA DLSS anti-aliasing for the 3D scene at the game's own resolution (NVIDIA RTX GPUs; "
-                               DLSS_FILE " next to the game's .exe). The HUD is not touched. Early version: it works on "
-                               "each frame on its own for now, without the motion history that makes DLSS sharpest. "
-                               "Takes effect after a restart.",
-    [UI_MENU_DLSS_PRESET_NEEDS_DLAA] = "only with DLSS on",
+    [UI_MENU_UPSCALING] = "Upscaling",
+    [UI_MENU_UPSCALING_DESC] = "How the picture is made smooth and fitted to the window. Bilinear: plain scaling. AMD FSR 1: "
+                               "sharper edges and detail when the window is larger than the picture (strength below). "
+                               "NVIDIA DLSS (RTX GPUs; " DLSS_FILE " next to the game's .exe): anti-aliasing of the 3D "
+                               "scene at the game's own render scale, with NVIDIA's newest model for it; the HUD is not "
+                               "touched. DLSS still works on each frame on its own for now, without motion history. "
+                               "Turning DLSS on or off takes effect after a restart.",
+    [UI_MENU_UPSCALING_DLSS_NOTE] = "DLSS: after restart",
+    [UI_MENU_GAME_RES] = "Resolution",
+    [UI_MENU_GAME_RES_DESC] = "The height of the game's picture: 1440p is the game's own; higher draws a sharper picture "
+                              "and its scene in proportion, at a matching cost on the graphics card. Native: the "
+                              "window's height (the monitor's in fullscreen), from 1440 up to 4320. The width follows "
+                              "the widescreen shape. Takes effect after a restart.",
+    [UI_MENU_GAME_RES_NATIVE] = "Native",
     [UI_MENU_CHEATS_REBUILD] = "Rebuild the game now",
     [UI_MENU_CHEATS_REBUILD_DESC] = "Some cheats change the game's code and are not built into it: they are new or "
                                     "edited, or their last rebuild failed or was cancelled. Closes the game; the setup "

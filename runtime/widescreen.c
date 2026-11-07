@@ -18,6 +18,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cfg.h"
@@ -30,42 +31,68 @@
 #define GAME_H 1440
 #define SCENE_H 1080
 
+// The window's size, or the monitor's in fullscreen; 0 when unknown.
+static int screen_size(int *w, int *h) {
+    *w = *h = 0;
+    if (gfx_cfg_fullscreen()) return gfx_window_monitor_size(w, h) && *h > 0;
+    gfx_cfg_window_size(w, h);
+    return *h > 0;
+}
+
 // The shape the setting asks for as width / height; 0 for the game's own.
 static double wanted_ratio(void) {
     const char *s = cfg_value("NX2NAVI_GAME_ASPECT");
     if (!strcmp(s, "21:9")) return 64.0 / 27.0;
     if (!strcmp(s, "32:9")) return 32.0 / 9.0;
     if (strcmp(s, "window")) return 0;
-    int w = 0, h = 0;
-    if (gfx_cfg_fullscreen()) {
-        if (!gfx_window_monitor_size(&w, &h)) {
-            rt_log("widescreen: the monitor's size is unknown; the game's own 16:9");
-            return 0;
-        }
-    } else {
-        gfx_cfg_window_size(&w, &h);
+    int w, h;
+    if (!screen_size(&w, &h)) {
+        rt_log("widescreen: the screen's size is unknown; the game's own 16:9");
+        return 0;
     }
-    return h > 0 ? (double)w / h : 0;
+    return (double)w / h;
 }
+
+// NX2NAVI_GAME_RES: the picture's height, from the game's 1440 up to 4320 ("window": the window's height, or the
+// monitor's in fullscreen).
+static unsigned picture_height(void) {
+    const char *s = cfg_value("NX2NAVI_GAME_RES");
+    int w = 0, h = GAME_H;
+    if (!strcmp(s, "window")) {
+        if (!screen_size(&w, &h)) h = GAME_H;
+    } else {
+        h = atoi(s);
+    }
+    return h < GAME_H ? GAME_H : h > 4320 ? 4320 : (unsigned)h;
+}
+
+
 
 void wide_init(void) {
     int so = rt_patch_set("wide_out"), ss = rt_patch_set("wide_scene"), sa = rt_patch_set("wide_aspect"),
         sh = rt_patch_set("wide_hud"), sm = rt_patch_set("wide_movie");
-    double r = wanted_ratio(), game = (double)GAME_W / GAME_H;
+    // The scene keeps the game's 3/4 of the picture. Its renderer takes the scene's size from the picture's by that
+    // share itself: writing another size into wide_scene's constant (main+0x31f3a00) left the light target at 3/4,
+    // so DLSS's quality modes, which need a smaller scene, have no lever here yet.
+    double r = wanted_ratio(), game = (double)GAME_W / GAME_H, f = 0.75;
+    unsigned oh = picture_height();
     if (r <= 0 || r < game * 1.01) {
-        if (r > 0) rt_log("widescreen: a %.4f picture is not wider than 16:9; the game's own 2560x1440", r);
-        return;
+        if (r > 0) rt_log("widescreen: a %.4f picture is not wider than 16:9; the game's 16:9", r);
+        r = game;
     }
+    if (r == game && oh == GAME_H && f == 0.75) return;   // the game's own sizes: every set stays off
     if (so < 0 || ss < 0 || sa < 0 || sh < 0 || sm < 0) {
         rt_log("widescreen: the generated C has no widescreen patch sets (gen.py --patches recomp/patches-v111.txt); "
-               "the game's own 16:9");
+               "the game's own 2560x1440 picture");
         return;
     }
     if (r > 32.0 / 9.0) r = 32.0 / 9.0;
-    // Widths in whole multiples of 8 pixels (the scene keeps the game's 3:4 of the picture), heights the game's.
-    unsigned ow = (unsigned)lround(GAME_H * r / 8) * 8, sw = (unsigned)lround(ow * 3.0 / 4 / 8) * 8;
-    uint64_t out = (uint64_t)GAME_H << 32 | ow, scene = (uint64_t)SCENE_H << 32 | sw;
-    float match = 16.0f / 9.0f, ratio = (float)ow / GAME_H, tolerance = 0.01f, squeeze = match / ratio;
+    // Widths in whole multiples of 8 pixels, the scene's height even: the picture oh high and as wide as its shape, the
+    // scene 3/4 of both.
+    unsigned ow = (unsigned)lround(oh * r / 8) * 8, sw = (unsigned)lround(ow * f / 8) * 8;
+    unsigned sch = (unsigned)lround(oh * f / 2) * 2;
+    uint64_t out = (uint64_t)oh << 32 | ow, scene = (uint64_t)sch << 32 | sw;
+    float match = 16.0f / 9.0f, ratio = (float)ow / oh, tolerance = 0.01f, squeeze = match / ratio;
     float ui[2] = {2.0f / 3840.0f, 2.0f / 2160.0f}, squeeze4[4] = {squeeze, squeeze, squeeze, squeeze};
     float margin = (1.0f - squeeze) / 2;
     // the screens whose UI keeps the whole picture (recomp/patches-v111.txt, set wide_hud): the item-wheel, pause and
@@ -88,8 +115,8 @@ void wide_init(void) {
     rt_patch_switch(sa, 1);
     rt_patch_switch(sh, 1);
     rt_patch_switch(sm, 1);
-    rt_log("widescreen: picture %ux%u, scene %ux%u, camera aspect ratio %.4f (16:9 is %.4f), UI and movies in the "
-           "middle %.1f%%", ow, GAME_H, sw, SCENE_H, ratio, game, squeeze * 100);
+    rt_log("widescreen: picture %ux%u, scene %ux%u (%.0f%% of it), camera aspect ratio %.4f (16:9 is %.4f), UI and movies "
+           "in the middle %.1f%%", ow, oh, sw, sch, f * 100, ratio, game, squeeze * 100);
 }
 
 // The generated C has the widescreen patch sets (the menu shows the row only then).

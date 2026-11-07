@@ -241,8 +241,10 @@ typedef enum {
     // the boot screen while the boot prewarm prepares shaders and pipelines (boot.c, ui/menu.cpp menu_boot_frame)
     UI_BOOT_TITLE, UI_BOOT_HINT, UI_BOOT_STARTING,
     UI_BOOT_SHADERS, UI_BOOT_PIPELINES,   // printf: "%lld" done, "%lld" total
-    // the settings menu's DLSS row for this game (ui/menu.cpp tab_screen): DLSS at the game's own resolution
-    UI_MENU_DLAA_GAME_DESC, UI_MENU_DLSS_PRESET_NEEDS_DLAA,
+    // the settings menu's Picture rows for this game (ui/menu.cpp tab_screen): one upscaling choice (bilinear, FSR 1
+    // or a DLSS mode) and the picture's resolution
+    UI_MENU_UPSCALING, UI_MENU_UPSCALING_DESC, UI_MENU_UPSCALING_DLSS_NOTE,
+    UI_MENU_GAME_RES, UI_MENU_GAME_RES_DESC, UI_MENU_GAME_RES_NATIVE,
     UI_TEXT_COUNT
 } UiTextId;
 
