@@ -232,6 +232,50 @@ static int player_pos(float xyz[3]) {
     return 0;
 }
 
+// Ocarina 1.1.1's time manager, **[main+0x4c7e890]: +0x1c0 the frame's base step in 60 Hz frames, +0x10 the game
+// speed (main+0x2c84c makes each time category's {frames, 1/frames, seconds, 1/seconds} from them and the category's
+// factor). Read by the speed lines of a free-running build: the game seconds a frame stepped, or -1.
+static double ocarina_step_s(void) {
+    uint64_t slot = read_ptr(MOD_MAIN_BASE + 0x4c7e890), mgr = slot ? read_ptr(slot) : 0;
+    float base = 0, speed = 0;
+    if (!mgr || !read_guest(mgr + 0x1c0, &base, 4) || !read_guest(mgr + 0x10, &speed, 4) || !isfinite(base) || !isfinite(speed))
+        return -1;
+    return base * speed / 60.0;
+}
+
+// Free-running builds (Ocarina): the time manager's base step follows the display interval (5-frame average, 1/1000 to
+// 1/15 s, in 60 Hz frames), written at each present. The game left it at one 60 Hz frame whatever the frame rate, so at
+// 144 fps it ran 2.4 times too fast. NX2NAVI_OCARINA_STEP=0 leaves it. Counts how often the game itself had changed
+// the value since the last write (diagnosis).
+static uint64_t ostep_writes, ostep_changed;
+static float ostep_last = -1;
+
+static void ocarina_step_write(double dt) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = cfg_get("NX2NAVI_OCARINA_STEP");
+        on = !(e && !strcmp(e, "0"));
+    }
+    if (!on || dt <= 0) return;
+    uint64_t slot = read_ptr(MOD_MAIN_BASE + 0x4c7e890), mgr = slot ? read_ptr(slot) : 0;
+    if (!mgr || !plat_mem_readable(mgr + 0x1c0, 4)) return;
+    _Atomic uint32_t *word = (_Atomic uint32_t *)(uintptr_t)(mgr + 0x1c0);
+    uint32_t now_bits = atomic_load_explicit(word, memory_order_relaxed);
+    float now_v;
+    memcpy(&now_v, &now_bits, 4);
+    if (ostep_last >= 0 && now_v != ostep_last) ostep_changed++;
+    if (dt < 1.0 / 1000) dt = 1.0 / 1000;
+    if (dt > STEP_MAX_S) dt = STEP_MAX_S;
+    float v = (float)(dt * 60.0);
+    uint32_t bits;
+    memcpy(&bits, &v, 4);
+    atomic_store_explicit(word, bits, memory_order_relaxed);
+    ostep_last = v;
+    if (++ostep_writes % 1200 == 0)
+        rt_log("frame step: Ocarina base step %.3f frames (%.2f ms); the game changed it %llu times in the last 1200 presents",
+               v, dt * 1000, (unsigned long long)ostep_changed), ostep_changed = 0;
+}
+
 static void speed_report(uint64_t now, double step, int interval) {
     if (!win_t0) {
         win_t0 = now;
@@ -256,7 +300,7 @@ static void speed_report(uint64_t now, double step, int interval) {
         memcpy(last_pos, p, sizeof p);
         last_pos_ns = now;
     }
-    if (step_word)
+    if (step_word || win_game > 0)
         rt_log("fps: %llu frames in %.3f s (%.1f fps), %.3f s game stepped, speed %.3f; interval 1/2/3+ %llu/%llu/%llu%s",
                (unsigned long long)win_frames, wall, (double)win_frames / wall, win_game, win_game / wall,
                (unsigned long long)win_hist[1], (unsigned long long)win_hist[2], (unsigned long long)win_hist[3], pos);
@@ -311,12 +355,27 @@ void frame_step_present(uint64_t display_ns, int interval) {
             step_store((float)step);
         }
     }
+    if (frame_free_running() && last_ns && dt > 0 && dt < STEP_RESET_S) {
+        static double os[STEP_SAMPLES];
+        static unsigned on_, ox;
+        os[ox++ % STEP_SAMPLES] = dt;
+        if (on_ < STEP_SAMPLES) on_++;
+        double sum = 0;
+        for (unsigned i = 0; i < on_; i++) sum += os[i];
+        ocarina_step_write(sum / on_);
+    }
     last_ns = display_ns;
     // The game clock of untimed script lines: what the game stepped this frame, the patch page's step with the
     // real-time step (kept through a reset), whole vsyncs without it.
-    double game = step_word ? step_now : (interval > 0 ? interval : 1) / 60.0;
+    double game = step_word ? step_now : ostep_last > 0 ? ostep_last / 60.0 : (interval > 0 ? interval : 1) / 60.0;
     atomic_store_explicit(&game_us, atomic_load_explicit(&game_us, memory_order_relaxed) + (uint64_t)(game * 1e6 + 0.5),
                           memory_order_relaxed);
     world_clock(dt, step);
-    if (rt_trace & RT_TRACE_PERF) speed_report(display_ns, step, interval);
+    if (rt_trace & RT_TRACE_PERF) {
+        if (frame_free_running()) {   // the game's own step, as its time manager holds it
+            double s = ocarina_step_s();
+            step = s > 0 ? s : 0;
+        }
+        speed_report(display_ns, step, interval);
+    }
 }

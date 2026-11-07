@@ -4,6 +4,9 @@
 //   nv::*        record the game's allocator callbacks and graphics work memory (guest addresses) for the NVN layer
 //   nn::vi::*    display, layer and native window identities; the vsync event is bound here
 //   nvnBootstrapLoader   the end of --boot (rt_boot_event "nvn"); otherwise the synthetic address of an NVN proc (nvn_procs.c)
+#include "cfg.h"
+#include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 #include "gfx.h"
@@ -143,14 +146,20 @@ static void ov_vi_paper_white(Cpu *c) {
 static void ov_vi_refresh_rate(Cpu *c) {
     uint32_t *rate = arg_p(c, 0);
     uint8_t *variable = arg_p(c, 1);
-    if (rate) *rate = 60;
-    if (variable) *variable = 0;
+    const char *hz = cfg_get("NX2NAVI_VI_HZ"), *vrr = cfg_get("NX2NAVI_VI_VRR");
+    if (rate) *rate = hz && *hz ? (uint32_t)atoi(hz) : 60;
+    if (variable) *variable = vrr && !strcmp(vrr, "1");
+    static int logged;
+    if (!logged++) rt_log("vi: QueryDisplayCurrentRefreshRate -> %u Hz, variable %d", rate ? *rate : 0, variable ? *variable : -1);
     ret_x(c, 0);
 }
 // Result QueryDisplayVrrSupported(bool *supported, const Display *)
 static void ov_vi_vrr_supported(Cpu *c) {
     uint8_t *out = arg_p(c, 0);
-    if (out) *out = 0;
+    const char *vrr = cfg_get("NX2NAVI_VI_VRR");
+    if (out) *out = vrr && !strcmp(vrr, "1");
+    static int logged;
+    if (!logged++) rt_log("vi: QueryDisplayVrrSupported -> %d", out ? *out : -1);
     ret_x(c, 0);
 }
 HOST_OVERRIDE("_ZN2nn2vi21QueryDisplayHdrStatusEPbPNS0_15HdrOutputFormatEPtPKNS0_7DisplayE", ov_vi_hdr_status);
