@@ -88,6 +88,8 @@ struct GfxShader {
     GfxShaderIo in[32], out[32];
     uint32_t local[3];
     uint32_t mvprev_banks;                                 // .res.json "mvprev_banks" (patch 0015), 0 none
+    uint32_t omap;                                         // FS: .res.json "frag_out_map", the colour components it writes
+                                                           // (4 bits per target, the SPH omap); 0 unknown (older translations)
 };
 
 static PlatMutex cache_lock = PLAT_MUTEX_INIT;                  // memory cache
@@ -861,6 +863,7 @@ static void reflect(GfxShader *s) {
     s->stage = !strcmp(stage, "cs") ? GFX_STAGE_CS : !strcmp(stage, "ps") ? GFX_STAGE_FS : !strcmp(stage, "ts") ? GFX_STAGE_TS
              : !strcmp(stage, "ms") ? GFX_STAGE_MS : GFX_STAGE_VS;
     s->mvprev_banks = (uint32_t)json_int(js, js + strlen(js), "mvprev_banks", 0);
+    s->omap = s->stage == GFX_STAGE_FS ? (uint32_t)json_int(js, js + strlen(js), "frag_out_map", 0) : 0;
     for (int k = 0; k < GFX_RES_KINDS; k++) {
         int count = json_objects(js, kinds[k], NULL, s, k);
         s->res[k] = calloc(count ? count : 1, sizeof *s->res[k]);
@@ -1885,6 +1888,8 @@ uint32_t gfx_shader_inputs(const GfxShader *s, GfxShaderIo io[32]) {
 }
 
 uint32_t gfx_shader_mvprev_banks(const GfxShader *s) { return s->mvprev_banks; }
+
+uint32_t gfx_shader_omap(const GfxShader *s) { return s->omap; }
 
 uint32_t gfx_shader_outputs(const GfxShader *s, GfxShaderIo io[32]) {
     if (io) memcpy(io, s->out, sizeof s->out);

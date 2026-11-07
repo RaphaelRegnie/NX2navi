@@ -75,8 +75,9 @@ typedef struct {
     view_t v;
     tex_t t;
 } TexSlot;
-typedef struct { samp_par p; VkSampler s, sp; uint8_t used; } SampSlot;   // s: vk_sampler_for(&p) once looked up; sp:
-                                                                           // its point-sampled form (vk_sampler_point_by_id_locked)
+typedef struct { samp_par p; VkSampler s, sp, sc; uint8_t used; } SampSlot;   // s: vk_sampler_for(&p) once looked up; sp:
+                                                                               // its point-sampled form (vk_sampler_point_by_id_locked),
+                                                                               // sc its comparing form (vk_sampler_compare_by_id_locked)
 
 static PlatRMutex tex_lock;
 static PlatOnce tex_once = PLAT_ONCE_INIT;
@@ -2023,7 +2024,7 @@ void vk_sampler_register(int id, const samp_par *s) {
         sslots = p, nsslots = n;
     }
     sslots[id].p = *s;
-    sslots[id].s = sslots[id].sp = VK_NULL_HANDLE;
+    sslots[id].s = sslots[id].sp = sslots[id].sc = VK_NULL_HANDLE;
     sslots[id].used = 1;
     samp_gen++;
     unlock();
@@ -2043,7 +2044,7 @@ void vk_sampler_dlss_bias(float b) {
     lock();
     if (b != dlss_bias) {
         dlss_bias = b;
-        for (int i = 0; i < nsslots; i++) sslots[i].s = sslots[i].sp = VK_NULL_HANDLE;   // looked up again (the key moves)
+        for (int i = 0; i < nsslots; i++) sslots[i].s = sslots[i].sp = sslots[i].sc = VK_NULL_HANDLE;   // looked up again (the key moves)
         samp_gen++;
     }
     unlock();
@@ -2098,6 +2099,30 @@ VkSampler vk_sampler_point_by_id_locked(int id) {
         s->sp = sampler_for(c, &k);
     }
     return s->sp;
+}
+
+// A depth-compare read through a sampler without a compare is undefined in Vulkan. NVIDIA's driver compares anyway; AMD's
+// returns the raw depth, so the game's shadow tests (which sample this way) come out wrong there. Such a read gets the
+// slot's sampler with the compare on: the game's function when it set a valid one, LEQUAL otherwise, as NVIDIA's driver
+// compares. NX2NAVI_SHADOW_COMPARE=0 binds the game's sampler as it is.
+VkSampler vk_sampler_compare_by_id_locked(int id) {
+    VkCtx *c = vk_ctx();
+    if (!c || id < 0 || id >= nsslots || !sslots[id].used) return VK_NULL_HANDLE;
+    SampSlot *s = &sslots[id];
+    static int on = -1;
+    if (on < 0) on = cfg_int("NX2NAVI_SHADOW_COMPARE") != 0;
+    if (s->p.cmp_mode || !on) return vk_sampler_by_id_locked(id);
+    if (!s->sc) {
+        samp_par k = s->p;
+        k.cmp_mode = 1;
+        if (k.cmp_func < NVN_COMPARE_FUNC_NEVER || k.cmp_func > NVN_COMPARE_FUNC_ALWAYS) k.cmp_func = NVN_COMPARE_FUNC_LEQUAL;
+        static int told;
+        if (told++ < 8)
+            rt_log("vk: a depth-compare read through sampler slot %d without a compare (function %u): compared with %u", id,
+                   (unsigned)s->p.cmp_func, (unsigned)k.cmp_func);
+        s->sc = sampler_for(c, &k);
+    }
+    return s->sc;
 }
 
 VkSampler vk_sampler_by_id(int id) {

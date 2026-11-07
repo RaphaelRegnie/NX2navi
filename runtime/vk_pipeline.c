@@ -1330,6 +1330,17 @@ static int target_count(const VkPipeState *s) {
 static int is_src1(unsigned f) { return f >= NVN_BLEND_FUNC_SRC1_COLOR && f <= NVN_BLEND_FUNC_ONE_MINUS_SRC1_ALPHA; }
 // Runs per draw (gkey_fill, target_wmask): only the blend factors of blend-enabled targets are read until one is SRC1,
 // which NX2navi never sets (0 of 876 pipelines in the field and fight saves).
+// NX2NAVI_VK_NOOPT=1: pipelines built without the driver's optimiser, for a driver whose shader compiler crashes on
+// one (the test switch for such a report); slower shaders, the same picture.
+static VkPipelineCreateFlags noopt_flag(void) {
+    static int on = -1;
+    if (on < 0) {
+        on = cfg_int("NX2NAVI_VK_NOOPT") != 0;
+        if (on) rt_log("vk_pipeline: pipelines built without the driver's optimiser (NX2NAVI_VK_NOOPT)");
+    }
+    return on ? VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT : 0;
+}
+
 static int uses_src1(const VkPipeState *s) {
     for (uint32_t m = s->color.blend_en & 0xffu; m; m &= m - 1) {
         int i = __builtin_ctz(m);
@@ -1347,9 +1358,16 @@ static int uses_src1(const VkPipeState *s) {
 // too: NX2NAVI's half-res transparency pass binds its linear depth (R32F) as target 7, samples it in the same draws and
 // writes only targets 0-2, 4 and 5; zeroed, the depth that later passes rebuild from it was 0 in tiles, and the fog
 // over distant geometry showed rectangles of clear sky.
+// The same holds per component: a shader that writes a target's RGB and not its alpha leaves the alpha alone on
+// Maxwell, while Vulkan writes undefined values, and AMD's driver writes whatever its export registers held (NaN and
+// saturated pixels the bloom then spreads). Components outside the shader's omap are masked out, where it is known.
 static uint32_t target_wmask(const VkPipeState *s, int i) {
     uint32_t m = s->chmask.mask >> (4 * i) & 0xf;
     if (s->fs && !(gfx_shader_outputs(s->fs, NULL) >> i & 1)) m = 0;
+    if (s->fs) {
+        uint32_t c = gfx_shader_omap(s->fs) >> (4 * i) & 0xf;
+        if (c) m &= c;
+    }
     if (i == 1 && s->fs && P.f_dual_src && uses_src1(s)) m = 0;   // output 1 is the second blend source (spirv_dual_source)
     return m;
 }
@@ -1563,7 +1581,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                                        .stageCount = n_stages, .pStages = stages, .pVertexInputState = mesh ? NULL : &vi,
                                        .pInputAssemblyState = mesh ? NULL : &ia, .pViewportState = &vp, .pRasterizationState = &rs,
                                        .pMultisampleState = &ms, .pDepthStencilState = &ds, .pColorBlendState = &cb,
-                                       .pDynamicState = &dy, .layout = l->layout};
+                                       .pDynamicState = &dy, .layout = l->layout, .flags = noopt_flag()};
     if (k->fbl & 1) pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     if (k->fbl & 2) pi.flags |= VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     uint64_t p0 = perf_begin();
@@ -1633,7 +1651,7 @@ static VkPipeline lib_create(int kind, const VkPipeState *s, const GKey *k, VkPi
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                            .dynamicStateCount = P.n_dyn, .pDynamicStates = P.dyn};
     VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri,
-                                       .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR, .pDynamicState = &dy};
+                                       .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR | noopt_flag(), .pDynamicState = &dy};
     VkShaderModule m = VK_NULL_HANDLE;
     VkPipelineShaderStageCreateInfo st = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .pName = "main"};
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo rq;
@@ -2728,7 +2746,7 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l) {
     VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
                                       .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                                                 .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = m, .pName = "main"},
-                                      .layout = l->layout};
+                                      .layout = l->layout, .flags = noopt_flag()};
     pin_subgroup32(&ci.stage, &rqc, code, words);
     // Subgroup operations in a workgroup whose width is a whole number of subgroups need every subgroup full: the
     // driver may otherwise run partial ones, and a ballot over the culling's candidates then counted differently from

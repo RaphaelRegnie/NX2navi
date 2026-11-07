@@ -256,13 +256,23 @@ static VkPresentModeKHR pick_present_mode(VkPhysicalDevice pd) {
     if (n > 16) n = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(pd, g_surface, &n, m);
     VkPresentModeKHR got = VK_PRESENT_MODE_FIFO_KHR;
-    for (uint32_t i = 0; i < n; i++) if (m[i] == want) got = want;
+    int relaxed = 0, immediate = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (m[i] == want) got = want;
+        relaxed |= m[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR, immediate |= m[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+    // Mailbox missing (several AMD drivers): plain FIFO holds a frame that misses a refresh to the next one, and the
+    // game, paced at 60 on a 60 Hz display, drops to 30 at every slow frame. Relaxed FIFO shows a late frame at once
+    // (a tear that once) and waits for the refresh otherwise; immediate where that is missing too.
+    if (want == VK_PRESENT_MODE_MAILBOX_KHR && got != want)
+        got = relaxed ? VK_PRESENT_MODE_FIFO_RELAXED_KHR : immediate ? VK_PRESENT_MODE_IMMEDIATE_KHR : got;
     const char *name = got == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : got == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo";
     __atomic_store_n(&g_present_got, name, __ATOMIC_RELEASE);
     static int logged = -1;   // the mode last logged: a change from the menu shows in the log
     if ((int)got != logged) {
         logged = (int)got;
-        rt_log("gfx: present mode %s (NX2NAVI_VK_PRESENT=%s)", name, e);
+        rt_log("gfx: present mode %s (NX2NAVI_VK_PRESENT=%s)",
+               got == VK_PRESENT_MODE_FIFO_RELAXED_KHR ? "fifo relaxed" : name, e);
     }
     return got;
 }

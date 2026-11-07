@@ -1564,7 +1564,8 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
             int sid = (int)(h >> 20 & 0xfff);
             int point = img && (img->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) && !(r->type & 0x400) &&
                         vk_exec_view_aspect(img, &v, hv) != VK_IMAGE_ASPECT_STENCIL_BIT;
-            samp = point ? vk_sampler_point_by_id_locked(sid) : vk_sampler_by_id_locked(sid);
+            samp = point ? vk_sampler_point_by_id_locked(sid)
+                 : r->type & 0x400 ? vk_sampler_compare_by_id_locked(sid) : vk_sampler_by_id_locked(sid);
         }
     }
     if (!view) {

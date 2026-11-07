@@ -407,6 +407,9 @@ VkSampler vk_sampler_by_id_locked(int id);
 // on the Switch although the game binds a linear sampler. VK_NULL_HANDLE
 // for an empty slot.
 VkSampler vk_sampler_point_by_id_locked(int id);
+// The slot's sampler with its compare on, for a depth-compare read (vk_texture.c, at the definition); the slot's own
+// sampler when it compares already. VK_NULL_HANDLE for an empty slot.
+VkSampler vk_sampler_compare_by_id_locked(int id);
 uint32_t vk_texture_slots_gen(void);
 int vk_texture_slot_count_locked(void);
 void vk_texture_create_budget_locked(int n);         // slot lookups create at most n entries (mapped storage only); -1 any
