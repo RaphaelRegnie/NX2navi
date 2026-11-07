@@ -638,9 +638,67 @@ static int pad_physical(uint8_t pd[PAD_COUNT]) {
 
 // Under lock, state 1: the open gamepad's buttons (Switch bits after NX2NAVI_PAD_LAYOUT and the NX2NAVI_BIND_* lines) and
 // sticks; 0 without a connected gamepad.
+#ifdef _WIN32
+// Without a gamepad SDL can open, Xbox controllers are read through XInput directly (xinput1_4, else xinput9_1_0):
+// SDL may miss a pad another program or driver presents only as XInput. Slots 0-3, the first connected one; a slot
+// found empty is asked again once a second, as XInputGetState on an empty slot takes milliseconds.
+typedef struct { uint16_t buttons; uint8_t lt, rt; int16_t lx, ly, rx, ry; } XiPad;
+typedef struct { uint32_t packet; XiPad pad; } XiState;
+typedef uint32_t(__stdcall *XiGetState)(uint32_t, XiState *);
+__declspec(dllimport) void *__stdcall LoadLibraryA(const char *);
+__declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
+
+// Under lock: the first connected XInput pad's inputs by position (input_map.h PAD_*) and sticks (y up); 0 without one.
+static int xinput_read(uint8_t pd[PAD_COUNT], int32_t *raw) {
+    static XiGetState get;
+    static int tried, slot = -1;
+    static uint64_t next_try;
+    if (!tried) {
+        tried = 1;
+        void *m = LoadLibraryA("xinput1_4.dll");
+        if (!m) m = LoadLibraryA("xinput9_1_0.dll");
+        if (m) get = (XiGetState)GetProcAddress(m, "XInputGetState");
+    }
+    if (!get) return 0;
+    XiState st;
+    if (slot >= 0 && get((uint32_t)slot, &st) != 0) {
+        rt_log("input: XInput controller %d disconnected", slot);
+        slot = -1;
+    }
+    if (slot < 0) {
+        uint64_t now = plat_now_ns();
+        if (now < next_try) return 0;
+        next_try = now + 1000000000ull;
+        for (int i = 0; i < 4 && slot < 0; i++)
+            if (get((uint32_t)i, &st) == 0) slot = i, rt_log("input: XInput controller %d (SDL has no gamepad)", i);
+        if (slot < 0) return 0;
+    }
+    uint16_t w = st.pad.buttons;
+    static const struct { uint16_t bit; uint8_t pad; } map[] = {
+        {0x1000, PAD_SOUTH}, {0x2000, PAD_EAST}, {0x4000, PAD_WEST}, {0x8000, PAD_NORTH}, {0x0040, PAD_LSTICK},
+        {0x0080, PAD_RSTICK}, {0x0100, PAD_L}, {0x0200, PAD_R}, {0x0010, PAD_START}, {0x0020, PAD_BACK},
+        {0x0004, PAD_DPAD_LEFT}, {0x0001, PAD_DPAD_UP}, {0x0008, PAD_DPAD_RIGHT}, {0x0002, PAD_DPAD_DOWN}};
+    for (size_t i = 0; i < sizeof map / sizeof *map; i++) pd[map[i].pad] = (w & map[i].bit) != 0;
+    pd[PAD_ZL] = st.pad.lt > 128, pd[PAD_ZR] = st.pad.rt > 128;
+    raw[0] = st.pad.lx, raw[1] = st.pad.ly, raw[2] = st.pad.rx, raw[3] = st.pad.ry;
+    return 1;
+}
+#endif
+
 static int pad_read(uint64_t *b, int32_t sl[2], int32_t sr[2]) {
     uint8_t pd[PAD_COUNT] = {0};
+#ifdef _WIN32
+    if (!pad_physical(pd)) {
+        int32_t raw[4];
+        if (!xinput_read(pd, raw)) return 0;
+        *b |= input_map_pad_buttons(pd, pad_layout_get());
+        input_pad_stick(raw[0], raw[1], stick_dead_get(0), sl);
+        input_pad_stick(raw[2], raw[3], stick_dead_get(1), sr);
+        return 1;
+    }
+#else
     if (!pad_physical(pd)) return 0;
+#endif
     *b |= input_map_pad_buttons(pd, pad_layout_get());
     stick(SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, stick_dead_get(0), sl);
     stick(SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY, stick_dead_get(1), sr);

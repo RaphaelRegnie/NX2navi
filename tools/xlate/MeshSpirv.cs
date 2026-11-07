@@ -252,13 +252,20 @@ static class MeshSpirv
         body.Add(new Insn(OpFunction, new[] { tVoid, entryFn, 0u, tFnVoid }));
         Label();
         uint tid = Emit(OpLoad, tUint, lii);
-        if (m.Stage == 7 && m.HasTask) { CopyPayload(tid, true); Barrier(); }
+        // The counts start at 0: a task that culls everything never writes its mesh count, and the word then held what
+        // the workgroup's shared memory last had, up to tens of thousands of mesh groups and a lost device; a mesh
+        // shader that emits nothing leaves its primitive count the same way.
+        uint countWord = C((uint)(m.Stage == 6 ? (m.Pay + 4) / 4 : m.Map / 4));
+        If(tid, C(1), () => Do(OpStore, Emit(OpAccessChain, pSharedUint, sharedVar, countWord), C(0)));
+        if (m.Stage == 7 && m.HasTask) CopyPayload(tid, true);
+        Barrier();
         Emit(OpFunctionCall, tVoid, mainFn);
         Barrier();
         var modes = new List<Insn>();
         if (m.Stage == 6)
         {
-            uint count = SharedWord(C((uint)(m.Pay + 4) / 4));
+            // one mesh group per task thread at most: a garbage count cannot launch more than the task could fill
+            uint count = UMin(SharedWord(C((uint)(m.Pay + 4) / 4)), C((uint)Math.Max(1, m.Threads)));
             CopyPayload(tid, false);
             Do(OpEmitMeshTasksEXT, count, C(1), C(1), payloadVar);
         }
