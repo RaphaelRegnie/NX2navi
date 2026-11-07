@@ -152,12 +152,14 @@ static int pick_device(void) {
     const char *e = cfg_get("NX2NAVI_GPU_INDEX");   // no fixed default: the best device when unset
     int want = e && *e ? atoi(e) : -1;
     const char *name = cfg_get("NX2NAVI_GPU_NAME");
-    int best = -1, best_score = -1;
+    int best = -1, best_score = -1, listed = 0;
+retry:
     for (uint32_t i = 0; i < n; i++) {
         VkPhysicalDeviceProperties p;
         vkGetPhysicalDeviceProperties(pd[i], &p);
-        rt_log("vk: gpu %u: %s (type %d, api %u.%u.%u)", i, p.deviceName, (int)p.deviceType, VK_API_VERSION_MAJOR(p.apiVersion),
-               VK_API_VERSION_MINOR(p.apiVersion), VK_API_VERSION_PATCH(p.apiVersion));
+        if (!listed)
+            rt_log("vk: gpu %u: %s (type %d, api %u.%u.%u)", i, p.deviceName, (int)p.deviceType,
+                   VK_API_VERSION_MAJOR(p.apiVersion), VK_API_VERSION_MINOR(p.apiVersion), VK_API_VERSION_PATCH(p.apiVersion));
         if (want >= 0 && (int)i != want) continue;
         if (name && *name && !name_has(p.deviceName, name)) continue;
         if (p.apiVersion < VK_API_VERSION_1_3) { rt_log("vk: gpu %u skipped: Vulkan below 1.3", i); continue; }
@@ -174,10 +176,16 @@ static int pick_device(void) {
                   : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2 : 1;
         if (score > best_score) { best_score = score; best = (int)i; }
     }
+    // A chosen GPU that is not usable or no longer there (the menu's GPU row, an unplugged card, a driver that lists the
+    // devices in another order): the best usable one instead, so the game still starts and the choice can be changed
+    if (best < 0 && (want >= 0 || (name && *name))) {
+        if (want >= 0) rt_log("vk: NX2NAVI_GPU_INDEX=%d is not usable (see above): the best usable gpu instead", want);
+        else rt_log("vk: no usable gpu matches NX2NAVI_GPU_NAME=%s (see above): the best usable gpu instead", name);
+        want = -1, name = NULL, listed = 1;
+        goto retry;
+    }
     if (best < 0) {
-        if (want >= 0) rt_log("vk: NX2NAVI_GPU_INDEX=%d is not usable (see above)", want);
-        else if (name && *name) rt_log("vk: no usable gpu matches NX2NAVI_GPU_NAME=%s (see above)", name);
-        else rt_log("vk: no device with Vulkan 1.3 and the required extensions (see above)");
+        rt_log("vk: no device with Vulkan 1.3 and the required extensions (see above)");
         free(pd);
         return 0;
     }

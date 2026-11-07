@@ -26,6 +26,7 @@
 #include "host.h"
 #include "layout.h"
 #include "ui/menu.h"
+#include "vk_dlaa.h"
 
 #define GAME_W 2560   // the picture, main+0x1202ee0 and main+0x31f39f4
 #define GAME_H 1440
@@ -75,8 +76,12 @@ static unsigned picture_height(void) {
 // picks. The share is written to +240 at every change of the setting (the menu switches the mode live); the set goes on
 // RES_FIXED_AFTER presents after the first, once the controller has filled the fields the fixed path keeps.
 #define RES_FIXED_AFTER 120
+// The share follows the upscaler that runs, not the setting: DLSS and FSR 3.1 start only after a restart
+// (vk_dlaa_wanted is read once) and DLSS only where NGX came up (vk_dlaa_available), so a mode picked in the menu, or one
+// this PC cannot run, no longer shrinks the scene with nothing to scale it back up. A mode change while one runs still
+// applies at once.
 static double dlss_share(void) {
-    if (!cfg_bool("NX2NAVI_DLAA")) return 0;
+    if (!vk_dlaa_wanted() || (!vk_dlaa_fsr3() && !vk_dlaa_available())) return 0;
     const char *m = cfg_value("NX2NAVI_DLSS");
     return !strcmp(m, "quality") ? 2.0 / 3 : !strcmp(m, "balanced") ? 0.58 : !strcmp(m, "performance") ? 0.5
          : !strcmp(m, "ultra_performance") ? 1.0 / 3 : 1.0;

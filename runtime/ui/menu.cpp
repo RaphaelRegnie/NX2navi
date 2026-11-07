@@ -101,9 +101,12 @@ static int change_open(int want) {
 static void set_open(int open) { change_open(open); }
 
 static int g_failed_flag();
+// The boot screen is up (menu_boot_set): the menu does not open, as it would not be drawn while its keys queued up and
+// changed settings once the game ran.
+static std::atomic<int> g_booting{0};
 extern "C" int menu_is_open(void) { return g_open.load(std::memory_order_relaxed); }
 extern "C" void menu_toggle(void) {
-    if (!g_failed_flag()) change_open(-1);
+    if (!g_failed_flag() && !g_booting.load(std::memory_order_acquire)) change_open(-1);
 }
 
 // ---- events from the window adapter, queued while the menu is open; the present path hands them to ImGui
@@ -753,6 +756,7 @@ static void row_upscaling(void) {
     if (nv < 0) return;
     opt_apply("NX2NAVI_UPSCALER", nv == 1 ? "fsr" : "bilinear");
     opt_apply("NX2NAVI_DLAA", nv >= 2 ? "1" : "0");
+    if (nv < 2) opt_apply("NX2NAVI_FRAMEGEN", "off");   // it needs DLSS's or FSR 3.1's motion vectors (row_framegen)
     if (nv >= 2) opt_apply("NX2NAVI_DLSS", modes[(nv - 2) % 5]);
     if (nv >= 2) opt_apply("NX2NAVI_TAA", nv >= 7 ? "fsr3" : "dlss");
 }
@@ -764,7 +768,7 @@ static void row_hdr(void) {
     const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), menu_text(UI_MENU_HDR_ENHANCED), menu_text(UI_MENU_HDR_NATIVE)};
     opt_choice_list("NX2NAVI_HDR", UI_MENU_HDR, values, names, 3, UI_MENU_HDR_DESC, -1, menu_text(UI_MENU_HDR_NOTE));
     if (!cfg_bool("NX2NAVI_HDR")) return;
-    opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 4000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
+    opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 10000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
     opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f nits");
     opt_slider("NX2NAVI_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f nits");
     // no hue slider: the hue correction belonged to the runtime's replacement tonemap, and Enhanced now extends the
@@ -1501,6 +1505,7 @@ extern "C" void menu_boot_set(int phase, long long done, long long total) {
     g_boot_done.store(done, std::memory_order_relaxed);
     g_boot_total.store(total, std::memory_order_relaxed);
     g_boot_phase.store(phase, std::memory_order_release);
+    g_booting.store(phase >= 0, std::memory_order_release);
 }
 
 // A panel in the middle of the screen in the menu's colours: the title, the step with its count and a bar, and why it

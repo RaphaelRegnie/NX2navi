@@ -57,6 +57,8 @@ extern "C" int menu_window_msg(HWND h, UINT m, WPARAM w, LPARAM l, LRESULT *res)
             *res = 0;
             return 1;
         }
+        // a held Esc's repeats: the press that opened the menu is not queued, so its first repeat would close it
+        if (w == VK_ESCAPE && (l & (1 << 30))) return 0;
         [[fallthrough]];
     case WM_KEYUP:
     case WM_SYSKEYUP:

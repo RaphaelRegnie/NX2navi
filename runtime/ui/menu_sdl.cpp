@@ -53,6 +53,8 @@ extern "C" void menu_sdl_event(const SDL_Event *e) {
             if (!e->key.repeat) menu_perf_cycle();
             return;
         }
+        // a held Esc's repeats: the press that opened the menu is not queued, so its first repeat would close it
+        if (e->key.scancode == SDL_SCANCODE_ESCAPE && e->key.repeat) return;
         [[fallthrough]];
     case SDL_EVENT_KEY_UP:
         if (!menu_is_open()) return;
