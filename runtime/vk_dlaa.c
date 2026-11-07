@@ -1333,7 +1333,12 @@ int vk_dlaa_skip_draw(VkExec *ex, const GfxShader *fs) {
     int known = 0;
     for (size_t i = 0; i < sizeof FXAA_FS / sizeof FXAA_FS[0]; i++) known |= h == FXAA_FS[i];
     if (!known) return 0;
-    if (!ex->depth.image) return D.up;   // the scaling pass, which DLSS replaced
+    if (!ex->depth.image) {   // the scaling pass, which DLSS replaced
+        static int told;
+        if (D.up && !told++) rt_log("dlaa: the game's scaling draw left out, DLSS wrote it (fragment shader %016llx)",
+                                    (unsigned long long)h);
+        return D.up;
+    }
     if (!fxaa && !fx_found) {
         fx_found = 1;
         rt_log("dlaa: fxaa = 0 skips the game's FXAA (fragment shader %016llx)", (unsigned long long)h);

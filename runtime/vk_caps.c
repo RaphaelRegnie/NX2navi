@@ -121,10 +121,10 @@ void vk_caps_init(VkCtx *c) {
     // (docs/maxwell.md 3.12). Mesa folds undefined values freely; NVIDIA's compiler gives such a read a value of another
     // lane of the warp: Ocarina's clustered-light loop reads registers that only some paths write, and on an RTX 5090
     // the Great Fairy Fountain floor took an extra light term in 4x8-pixel tiles (one 32-lane warp each) and Link went
-    // dark with green speckles. With DLAA on (vk_dlaa.c, which finds the game's FXAA by its SPIR-V hash) they stay
-    // undefined off Mesa, as before: zeroing moved that hash and the picture shook under DLAA (maxwell.md 3.12).
-    // NX2NAVI_ZERO_LOCALS=1 / 0 forces either.
-    uint32_t zero_locals = env_u32("NX2NAVI_ZERO_LOCALS", vk_caps.mesa || !cfg_bool("NX2NAVI_DLAA"));
+    // dark with green speckles. On with every setting: vk_dlaa.c knows the game's FXAA by its zeroed SPIR-V hash too,
+    // and the shader cache keys (which include this) stay the same whether DLSS is on or off, so shaders prepared
+    // with one setting serve the other. NX2NAVI_ZERO_LOCALS=0 turns it off.
+    uint32_t zero_locals = env_u32("NX2NAVI_ZERO_LOCALS", 1);
     // bda: global accesses the translator finds no storage buffer for go through the device address table (vk_gpa.c)
     gfx_shader_set_host(vk_caps.float64, vk_caps.sbuf_align, told, gather, zero_locals != 0, vk_gpa_wanted_ctx(c));
     if (gather) rt_log("vk caps: gather coordinates biased for %u sub-texel bits (NX2NAVI_GATHER_BIAS)", gather);
