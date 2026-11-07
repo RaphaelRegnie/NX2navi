@@ -505,11 +505,12 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_UPSCALING] = "Upscaling",
     [UI_MENU_UPSCALING_DESC] = "How the picture is made smooth and fitted to the window. Bilinear: plain scaling. AMD FSR 1: "
                                "sharper edges and detail when the window is larger than the picture (strength below). "
-                               "NVIDIA DLSS (RTX GPUs; " DLSS_FILE " next to the game's .exe): anti-aliasing of the 3D "
-                               "scene at the game's own render scale, with NVIDIA's newest model for it; the HUD is not "
-                               "touched. DLSS still works on each frame on its own for now, without motion history. "
-                               "Turning DLSS on or off takes effect after a restart.",
-    [UI_MENU_UPSCALING_DLSS_NOTE] = "DLSS: after restart",
+                               "NVIDIA DLSS (RTX GPUs; " DLSS_FILE " next to the game's .exe) renders the 3D scene at "
+                               "its mode's share of the picture and scales it up with NVIDIA's newest model for the mode: "
+                               "DLAA 100 %, Quality 67 %, Balanced 58 %, Performance 50 %, Ultra Performance 33 %. The "
+                               "HUD is not touched. Turning DLSS on or off takes effect after a restart; the mode changes "
+                               "at once.",
+    [UI_MENU_UPSCALING_DLSS_NOTE] = "DLSS on or off: after restart",
     [UI_MENU_GAME_RES] = "Resolution",
     [UI_MENU_GAME_RES_DESC] = "The height of the game's picture: 1440p is the game's own; higher draws a sharper picture "
                               "and its scene in proportion, at a matching cost on the graphics card. Native: the "

@@ -724,19 +724,31 @@ static const char *present_note(void) {
 
 // ---- the tabs
 
-// One upscaling choice over two settings: NX2NAVI_UPSCALER (how the picture is fitted to the window) and NX2NAVI_DLAA
-// (DLSS on). DLSS runs at the game's own render scale (widescreen.c: the scene stays 3/4 of the picture, so DLSS's
-// quality modes would all render the same) and fits the picture with bilinear; its model is NVIDIA's own for the
-// scale (vk_dlaa.c evaluate, dlss_preset at its default).
+// One upscaling choice over three settings: NX2NAVI_UPSCALER (how the picture is fitted to the window), NX2NAVI_DLAA
+// (DLSS on) and NX2NAVI_DLSS (its mode, the render scale: widescreen.c wide_present). A DLSS mode fits the picture with
+// bilinear, DLSS having made it; the model is NVIDIA's own for the mode (vk_dlaa.c evaluate, dlss_preset at its default).
 static void row_upscaling(void) {
-    const char *names[3] = {menu_text(UI_MENU_UPSCALER_BILINEAR), menu_text(UI_MENU_UPSCALER_FSR), "NVIDIA DLSS"};
-    int cur = cfg_bool("NX2NAVI_DLAA") ? 2 : strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") ? 0 : 1;
-    int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, 3, cur, 1, UI_MENU_UPSCALING_DESC,
-                              cur == 2 ? menu_text(UI_MENU_UPSCALING_DLSS_NOTE) : nullptr);
+    static const char *const modes[] = {"dlaa", "quality", "balanced", "performance", "ultra_performance"};
+    static const UiTextId mode_names[] = {UI_MENU_DLSS_DLAA, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED,
+                                          UI_MENU_DLSS_PERFORMANCE, UI_MENU_DLSS_ULTRA};
+    static char dl[5][96];
+    const char *names[7] = {menu_text(UI_MENU_UPSCALER_BILINEAR), menu_text(UI_MENU_UPSCALER_FSR)};
+    for (int i = 0; i < 5; i++) {
+        snprintf(dl[i], sizeof dl[i], i ? "DLSS %s" : "NVIDIA %s", menu_text(mode_names[i]));
+        names[2 + i] = dl[i];
+    }
+    int cur = strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") ? 0 : 1;
+    if (cfg_bool("NX2NAVI_DLAA")) {
+        cur = 2;
+        for (int i = 0; i < 5; i++)
+            if (!strcmp(cfg_value("NX2NAVI_DLSS"), modes[i])) cur = 2 + i;
+    }
+    int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, 7, cur, 1, UI_MENU_UPSCALING_DESC,
+                              cur >= 2 ? menu_text(UI_MENU_UPSCALING_DLSS_NOTE) : nullptr);
     if (nv < 0) return;
     opt_apply("NX2NAVI_UPSCALER", nv == 1 ? "fsr" : "bilinear");
-    opt_apply("NX2NAVI_DLAA", nv == 2 ? "1" : "0");
-    if (nv == 2) opt_apply("NX2NAVI_DLSS", "dlaa");
+    opt_apply("NX2NAVI_DLAA", nv >= 2 ? "1" : "0");
+    if (nv >= 2) opt_apply("NX2NAVI_DLSS", modes[nv - 2]);
 }
 
 // The picture's height (widescreen.c picture_height): the game's 1440 or more.

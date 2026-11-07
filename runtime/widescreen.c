@@ -68,15 +68,52 @@ static unsigned picture_height(void) {
 
 
 
+// ---- DLSS's render scale (recomp/patches-v111.txt, set res_fixed)
+// While DLSS is on, the scene is the DLSS mode's share of the picture (NVIDIA's ratios: DLAA all of it, Quality 2/3,
+// Balanced 0.58, Performance 1/2, Ultra Performance 1/3) instead of what the game's dynamic-resolution controller
+// picks. The share is written to +240 at every change of the setting (the menu switches the mode live); the set goes on
+// RES_FIXED_AFTER presents after the first, once the controller has filled the fields the fixed path keeps.
+#define RES_FIXED_AFTER 120
+static double dlss_share(void) {
+    if (!cfg_bool("NX2NAVI_DLAA")) return 0;
+    const char *m = cfg_value("NX2NAVI_DLSS");
+    return !strcmp(m, "quality") ? 2.0 / 3 : !strcmp(m, "balanced") ? 0.58 : !strcmp(m, "performance") ? 0.5
+         : !strcmp(m, "ultra_performance") ? 1.0 / 3 : 1.0;
+}
+
+void wide_present(void) {
+    static int set = -2;
+    static uint64_t presents;
+    static unsigned seen = ~0u;
+    if (set == -2) set = rt_patch_set("res_fixed");
+    if (set < 0) return;
+    unsigned v = cfg_version();
+    if (v != seen) {
+        seen = v;
+        float s = (float)dlss_share();
+        if (s > 0) memcpy((uint8_t *)rt_patch_page() + 240, &s, 4);
+        if (s <= 0 && rt_patch_enabled(set)) {
+            rt_patch_switch(set, 0);
+            rt_log("widescreen: DLSS off: the game's own render scale again");
+        } else if (s > 0 && rt_patch_enabled(set)) {
+            rt_log("widescreen: DLSS render scale %.0f%% of the picture", s * 100);
+        }
+    }
+    if (++presents == RES_FIXED_AFTER && dlss_share() > 0) {
+        rt_patch_switch(set, 1);
+        rt_log("widescreen: DLSS render scale %.0f%% of the picture (the game's dynamic resolution off)", dlss_share() * 100);
+    } else if (presents > RES_FIXED_AFTER && dlss_share() > 0 && !rt_patch_enabled(set)) {
+        rt_patch_switch(set, 1);   // DLSS switched on later in the run
+    }
+}
+
 void wide_init(void) {
     int so = rt_patch_set("wide_out"), ss = rt_patch_set("wide_scene"), sa = rt_patch_set("wide_aspect"),
         sh = rt_patch_set("wide_hud"), sm = rt_patch_set("wide_movie");
-    // The scene keeps the game's 3/4 of the picture, a share its renderer applies itself: writing another size into
-    // wide_scene's constant (main+0x31f3a00) or into the 1920x1080 / 1280x720 render sizes at main+0x108b688 left the
-    // light target at 3/4. Found so far (for DLSS's quality modes, which need a smaller scene): the scene targets come
-    // from the view objects' render-target descriptors ({u16 w, u16 h, ...} at +0x3ab0, made by main+0x2507b0 through
-    // main+0x3ed00), which main+0x6590d0 copies in from a float rectangle at +0x3a10 of another object (width
-    // [+0x3a18] - [+0x3a10]); where that rectangle's 2562 comes from is still open.
+    // The scene's share of the picture is not a size in this set: the game's GPU-time dynamic resolution sets it each
+    // frame (3/4 of the picture at most), and writing other sizes into wide_scene's constant or the 1920x1080 render
+    // sizes left the light target where the controller put it. DLSS's modes fix the share through res_fixed instead
+    // (wide_present).
     double r = wanted_ratio(), game = (double)GAME_W / GAME_H, f = 0.75;
     unsigned oh = picture_height();
     if (r <= 0 || r < game * 1.01) {

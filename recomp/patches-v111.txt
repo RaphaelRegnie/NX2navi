@@ -15,6 +15,7 @@ set wide_scene  NX2NAVI_PATCH_WIDE_SCENE  0
 set wide_aspect NX2NAVI_PATCH_WIDE_ASPECT 0
 set wide_hud    NX2NAVI_PATCH_WIDE_HUD    0
 set wide_movie  NX2NAVI_PATCH_WIDE_MOVIE  0
+set res_fixed   NX2NAVI_PATCH_RES_FIXED   0
 set ostep       NX2NAVI_OCARINA_REALTIME  1
 
 # Real-time step: the framework's per-frame update (main+0x6e6be0) gives the time manager **[main+0x4c7e890] its
@@ -38,6 +39,14 @@ site wide_out main 31f39f8 f2c0b408 f9403108   # movk x8, #0x5a0, lsl #32 -> ldr
 # Scene: the display settings object's scene size (+0xb70), 1920x1080, the picture the game's upscaler takes in.
 site wide_scene main 31f3a00 d280f008 @page:x8  # mov x8, #0x780 -> adrp x8, page
 site wide_scene main 31f3a04 f2c08708 f9403508  # movk x8, #0x438, lsl #32 -> ldr x8, [x8, #104]
+
+# Render scale: the game sizes its 3D scene by a dynamic-resolution controller that follows its GPU-time reports (3/4
+# of the picture here). Bit 0 of an engine config word at +0x94 picks it (main+0x805bd0); the other path takes a fixed
+# scale of 1.0 (main+0x806420). res_fixed always takes the fixed path and reads its scale from +240 (a float, written by
+# runtime/widescreen.c from the DLSS mode). It is switched on only once the controller has run for a while, as its
+# fields would otherwise stay unset and the scene stay black.
+site res_fixed main 805bd0 360041e8 1400020f            # tbz w8, #0, #0x80640c -> b #0x80640c
+site res_fixed main 806420 52a7f009 @page:x9 b940f129   # mov w9, #0x3f800000 -> adrp x9, page; ldr w9, [x9, #240]
 
 # Camera aspect ratio: the camera update (main+0x4c48c0, the same code as the camera update site in
 # recomp/patches-v143.txt) copies the camera's near, far, vertical angle and ratio (camera +0x134..+0x140) into the
