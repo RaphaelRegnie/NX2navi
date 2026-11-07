@@ -289,7 +289,8 @@ void *rt_patch_page(void);                                 // the page the patch
 void frame_step_init(void);                                // after rt_patches_init: the real-time step's first value
 int frame_step_realtime(void);                             // the real-time step is on: presents ignore the interval
 uint64_t frame_step_cap_ns(void);                          // with the real-time step: the shortest frame in ns
-int frame_limit_adjustable(void);                         // the build has the fps60 or realtime patch set
+int frame_limit_adjustable(void);                         // the frame limit setting changes the rate (always)
+int frame_free_running(void);                             // no fps60/realtime patch set: the game steps by the clock
 double frame_step_limit_hz(void);                         // the frame rate the limit gives (overlay); 0 unknown
 int64_t frame_step_world_us(void);                         // game time since the loaded save's first frame, -1 before
                                                            // (NX2NAVI_FPS_LIMIT, live)

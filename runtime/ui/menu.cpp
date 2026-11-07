@@ -56,6 +56,7 @@ int res_adjustable(void);
 const char *const *vk_color_preset(const char *name);
 double frame_step_limit_hz(void);
 int frame_limit_adjustable(void);
+int frame_free_running(void);
 extern const int rt_game_version;
 extern const char rt_port_version[];
 void cheats_frame(uint64_t frame);   // cheats.c
@@ -633,21 +634,24 @@ static void row_game_lang(void) {
 // The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
 static void row_fps_limit() {
     // 40 and 45: the Steam Deck's screen runs at 40 to 60 Hz (the OLED to 90); 40 divides 40 and 120 Hz evenly
-    static const char *const vals[] = {"30", "40", "45", "60", "90", "120", "144", "display"};
-    static const UiTextId ids[] = {UI_MENU_FPS_30, UI_MENU_FPS_40,  UI_MENU_FPS_45,  UI_MENU_FPS_60,
-                                   UI_MENU_FPS_90, UI_MENU_FPS_120, UI_MENU_FPS_144, UI_MENU_FPS_DISPLAY};
-    enum { N = sizeof vals / sizeof *vals };
-    const char *names[N];
-    for (int i = 0; i < N; i++) names[i] = menu_text(ids[i]);
+    // 165 and 240: common gaming monitors; unlimited only where the game steps by the clock (frame_rate.c)
+    static const char *const vals[] = {"30", "40", "45", "60", "90", "120", "144", "165", "240", "display", "unlimited"};
+    static const UiTextId ids[] = {UI_MENU_FPS_30,  UI_MENU_FPS_40,  UI_MENU_FPS_45,  UI_MENU_FPS_60,
+                                   UI_MENU_FPS_90,  UI_MENU_FPS_120, UI_MENU_FPS_144, UI_MENU_FPS_144,
+                                   UI_MENU_FPS_144, UI_MENU_FPS_DISPLAY, UI_MENU_FPS_UNLIMITED};
+    int n = frame_free_running() ? 11 : 10;
+    const char *names[11];
+    for (int i = 0; i < n; i++) names[i] = menu_text(ids[i]);
+    names[7] = "165 FPS", names[8] = "240 FPS";
     static char display[64];
     double hz = gfx_window_refresh_hz();
     if (hz > 0) {
         snprintf(display, sizeof display, menu_text(UI_MENU_FPS_DISPLAY_HZ), hz);
-        names[N - 1] = display;
+        names[9] = display;
     }
     const char *set = cfg_get("NX2NAVI_FPS_LIMIT"), *old = cfg_get("NX2NAVI_FPS60");
     int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : -1;
-    opt_choice_list("NX2NAVI_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, N, UI_MENU_FPS_LIMIT_DESC, cur);
+    opt_choice_list("NX2NAVI_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, n, UI_MENU_FPS_LIMIT_DESC, cur);
 }
 
 // The menu's name of a NX2NAVI_VK_PRESENT mode (gfx_window_present_mode); NULL for another.
@@ -727,9 +731,7 @@ static void tab_screen(float scale) {
 
 static void tab_game(float scale) {
     opt_begin("##game", scale);
-    // The limit needs the fps60 or realtime patch set (frame_rate.c frame_limit_adjustable): Ocarina's build has
-    // neither and runs at the rate it picks itself, so the row would change nothing
-    if (frame_limit_adjustable()) row_fps_limit();
+    row_fps_limit();   // frame_rate.c: Ocarina steps by the clock, so the pacer alone sets its rate
     row_game_lang();
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("NX2NAVI_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);

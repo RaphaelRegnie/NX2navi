@@ -366,8 +366,17 @@ void rt_boot(void) {
     ipc_applet_event_init();
     hostfn_seal();
     uint64_t held = plat_now_ms();
-    if (warm) plat_thread_join(warm);
-    else vk_pipeline_prewarm();
+    // At most NX2NAVI_PREWARM_WAIT_MS (default 3000): a warm start is ready in about 0.3 s, but a cold one (a new
+    // translator, a new driver) translated 2,132 shaders and built 1,579 pipelines for 9.8 s while the window stayed
+    // black, for shaders the game first needs in play, well after its intro. Past the wait the prewarm goes on in the
+    // background; 0 waits for all of it. A --shot image waits for all of it, so that it does not depend on build timing.
+    const char *pw = cfg_get("NX2NAVI_PREWARM_WAIT_MS");
+    uint64_t wait_ms = pw && *pw ? strtoull(pw, NULL, 10) : 3000;
+    if (warm && (rt_config()->shot || !wait_ms)) plat_thread_join(warm);
+    else if (warm && !plat_thread_join_ns(warm, wait_ms * 1000000ull)) {
+        plat_thread_detach(warm);
+        rt_log("boot: the prewarm goes on in the background after %llu ms", (unsigned long long)wait_ms);
+    } else if (!warm) vk_pipeline_prewarm();
     held = plat_now_ms() - held;
     rt_log("boot: guest starts %llu ms after process start (%llu ms of it waiting for the prewarm)",
            (unsigned long long)(plat_process_uptime_ns() / 1000000), (unsigned long long)held);

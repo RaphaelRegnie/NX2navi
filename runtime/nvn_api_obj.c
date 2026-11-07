@@ -735,7 +735,10 @@ NVN_API(nvnWindowSetCrop) {
 // 2nd or 3rd tick would only add latency and 50 ms frames.
 #define VSYNC_HZ 60ull
 static uint64_t present_period(const win_t *o) {
-    if (frame_step_realtime()) return frame_step_cap_ns();
+    if (frame_step_realtime() || frame_free_running()) return frame_step_cap_ns();   // frame_rate.c: the limit alone
+    static int pace_hz = -1;   // NX2NAVI_PACE_HZ=<n> (test runs): present at n per second whatever the game's interval
+    if (pace_hz < 0) pace_hz = cfg_get("NX2NAVI_PACE_HZ") ? atoi(cfg_get("NX2NAVI_PACE_HZ")) : 0;
+    if (pace_hz > 0) return 1000000000ull / (uint64_t)pace_hz;
     return (o->interval > 0 ? (uint64_t)o->interval : 1ull) * 1000000000ull / VSYNC_HZ;
 }
 

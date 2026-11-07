@@ -166,12 +166,13 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_FXAA_DESC] = "The game's own FXAA edge smoothing. It blurs fine detail a little; with DLAA on it is not needed.",
 
     [UI_MENU_FPS_LIMIT] = "Frame rate limit",
-    [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws. Above 60 is experimental and needs the "
-                               "real-time step (realtime = 1 in nx2navi.ini, the default).",
+    [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws. The game keeps time by the clock, so it "
+                               "plays at the same speed at any rate. Unlimited draws as fast as the PC can.",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     // the monitor's refresh rate; printf format with the rate in Hz when it is known
     [UI_MENU_FPS_DISPLAY] = "Monitor rate", [UI_MENU_FPS_DISPLAY_HZ] = "Monitor rate (%.0f Hz)",
+    [UI_MENU_FPS_UNLIMITED] = "Unlimited",
     [UI_MENU_REALTIME] = "Game speed follows the clock",
     [UI_MENU_REALTIME_DESC] = "Steps the game by real time, so a slow frame does not slow the game down.",
     [UI_MENU_CLOTH_REALTIME] = "Cloth on the clock",
@@ -640,11 +641,12 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_FXAA_DESC] = "Собственное сглаживание FXAA. Слегка размывает мелкие детали; с DLAA оно не нужно.",
 
     [UI_MENU_FPS_LIMIT] = "Ограничение частоты кадров",
-    [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду. Выше 60 — экспериментальный режим, нужен шаг по "
-                               "реальному времени (realtime = 1 в nx2navi.ini, по умолчанию).",
+    [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду. Игра идёт по часам, поэтому её скорость не "
+                               "зависит от частоты кадров. «Без ограничения» рисует так быстро, как может ПК.",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_FPS_DISPLAY] = "Как у монитора", [UI_MENU_FPS_DISPLAY_HZ] = "Как у монитора (%.0f Гц)",
+    [UI_MENU_FPS_UNLIMITED] = "Без ограничения",
     [UI_MENU_REALTIME] = "Скорость игры по часам",
     [UI_MENU_REALTIME_DESC] = "Игра идёт по реальному времени, медленный кадр её не замедляет.",
     [UI_MENU_CLOTH_REALTIME] = "Ткань по часам",
@@ -1068,8 +1070,8 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_SHARPNESS_NEEDS_FSR] = "só com AMD FSR 1",
 
     [UI_MENU_FPS_LIMIT] = "Limite de quadros",
-    [UI_MENU_FPS_LIMIT_DESC] = "O máximo de quadros por segundo que o jogo desenha. Acima de 60 é experimental e "
-                               "precisa do passo em tempo real (realtime = 1 no nx2navi.ini, o padrão).",
+    [UI_MENU_FPS_LIMIT_DESC] = "O máximo de quadros por segundo que o jogo desenha. O jogo segue o relógio, então a "
+                               "velocidade é a mesma em qualquer taxa. Sem limite desenha o mais rápido que o PC puder.",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_ASSUME_FOCUS] = "Continuar rodando fora de foco",
@@ -1078,6 +1080,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
                                   "a janela perde o foco, como no Switch ao apertar Home; um carregamento interrompido "
                                   "assim pode parar de vez.",
     [UI_MENU_FPS_DISPLAY] = "Taxa do monitor", [UI_MENU_FPS_DISPLAY_HZ] = "Taxa do monitor (%.0f Hz)",
+    [UI_MENU_FPS_UNLIMITED] = "Sem limite",
     [UI_MENU_REALTIME] = "Velocidade do jogo pelo relógio",
     [UI_MENU_REALTIME_DESC] = "Avança o jogo pelo tempo real, para que um quadro lento não deixe o jogo mais lento.",
     [UI_MENU_CLOTH_REALTIME] = "Tecidos pelo relógio",
@@ -1600,8 +1603,8 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_COLOR_GAMMA] = "伽马",
     [UI_MENU_COLOR_GAMMA_DESC] = "小于 1 提亮暗部与中间调，大于 1 压暗；1 表示不调整。",
     [UI_MENU_FPS_LIMIT] = "帧率上限",
-    [UI_MENU_FPS_LIMIT_DESC] = "游戏每秒绘制的最高帧数。高于 60 帧为实验性功能，"
-                               "需要实时步进（nx2navi.ini 中 realtime = 1，默认开启）。",
+    [UI_MENU_FPS_LIMIT_DESC] = "游戏每秒绘制的最高帧数。游戏按时钟计时，任何帧率下速度都相同。"
+                               "不限制时以电脑能达到的最快速度绘制。",
     [UI_MENU_FPS_30] = "30 FPS",
     [UI_MENU_FPS_40] = "40 FPS",
     [UI_MENU_FPS_45] = "45 FPS",
@@ -1611,6 +1614,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_FPS_DISPLAY] = "显示器刷新率",
     [UI_MENU_FPS_DISPLAY_HZ] = "显示器刷新率（%.0f Hz）",
+    [UI_MENU_FPS_UNLIMITED] = "不限制",
     [UI_MENU_REALTIME] = "游戏速度跟随时钟",
     [UI_MENU_REALTIME_DESC] = "按真实时间推进游戏，帧率低时游戏速度也不会变慢。",
     [UI_MENU_CLOTH_REALTIME] = "布料跟随时钟",

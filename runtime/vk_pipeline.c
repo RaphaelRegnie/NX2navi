@@ -2897,6 +2897,29 @@ static void journal_mark(int slot, const GfxWarmEnt *e) {
     plat_file_pwrite(SK.journal, rec, sizeof rec, (uint64_t)slot * JR_SLOT);
 }
 
+// Compute shaders whose pipeline a thread is compiling now (P.lock): a cold driver takes about 2 s for one of Ocarina's
+// large compute shaders. The replay used to compile under P.lock, which held every other pipeline lookup that long, and
+// compiled a second copy of a pipeline the boot prebuild (lb_compute) was already compiling.
+#define CS_FLIGHT 32
+static const GfxShader *cs_flight[CS_FLIGHT];
+
+static int cs_flight_has(const GfxShader *cs) {
+    for (int i = 0; i < CS_FLIGHT; i++)
+        if (cs_flight[i] == cs) return 1;
+    return 0;
+}
+
+static int cs_flight_add(const GfxShader *cs) {   // 0 when the table is full (the caller compiles anyway)
+    for (int i = 0; i < CS_FLIGHT; i++)
+        if (!cs_flight[i]) return cs_flight[i] = cs, 1;
+    return 0;
+}
+
+static void cs_flight_remove(const GfxShader *cs) {
+    for (int i = 0; i < CS_FLIGHT; i++)
+        if (cs_flight[i] == cs) cs_flight[i] = NULL;
+}
+
 VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info) {
     if (info) *info = NULL;
     if (!cs || !ensure_init()) return VK_NULL_HANDLE;
@@ -2904,6 +2927,12 @@ VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info) {
     uint64_t h = key_hash(&k, sizeof k);
     plat_mutex_lock(&P.lock);
     Pipe *p = pipe_find(&k, sizeof k, h);
+    while (!p && cs_flight_has(cs)) {   // another thread is compiling it: its result, not a second compile
+        plat_mutex_unlock(&P.lock);
+        plat_sleep_ms(1);
+        plat_mutex_lock(&P.lock);
+        p = pipe_find(&k, sizeof k, h);
+    }
     if (p) {
         P.stats.hits++;
     } else {
@@ -2912,19 +2941,27 @@ VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info) {
         Layout *l = compute_layout(cs, &B, &why);
         VkPipeline pipe = VK_NULL_HANDLE;
         if (!why) {
+            int flight = cs_flight_add(cs);
+            plat_mutex_unlock(&P.lock);   // the compile runs without the lock
             uint64_t p0 = perf_begin();
             pipe = compute_create(cs, l);
             perf_end(PERF_PIPE, p0);
+            plat_mutex_lock(&P.lock);
+            if (flight) cs_flight_remove(cs);
             if (!pipe) why = "pipeline creation failed";
         }
-        if (why) {
-            P.stats.failures++;
-            rt_log("vk_pipeline: compute pipeline not built: %s", why);
+        if ((p = pipe_find(&k, sizeof k, h))) {   // another thread added it meanwhile (no flight slot was free)
+            if (pipe) vkDestroyPipeline(P.device, pipe, NULL);
         } else {
-            P.stats.compute++;
-            LB.cs_draw++;
+            if (why) {
+                P.stats.failures++;
+                rt_log("vk_pipeline: compute pipeline not built: %s", why);
+            } else {
+                P.stats.compute++;
+                LB.cs_draw++;
+            }
+            p = pipe_add(&k, sizeof k, h, pipe, l, l ? &B : NULL, VK_PIPELINE_BIND_POINT_COMPUTE, 0);
         }
-        p = pipe_add(&k, sizeof k, h, pipe, l, l ? &B : NULL, VK_PIPELINE_BIND_POINT_COMPUTE, 0);
     }
     plat_mutex_unlock(&P.lock);
     if (!p) return VK_NULL_HANDLE;
@@ -2973,8 +3010,9 @@ static void lb_compute(const GfxShader *cs) {
     Bindings B = {0};
     const char *why = NULL;
     lb_lock();
-    Layout *l = pipe_find(&k, sizeof k, h) ? NULL : compute_layout(cs, &B, &why);
-    int have = !l && !why;
+    int busy = cs_flight_has(cs);   // the replay compiles it now (vk_pipeline_compute)
+    Layout *l = busy || pipe_find(&k, sizeof k, h) ? NULL : compute_layout(cs, &B, &why);
+    int have = !l && !why, flight = l ? cs_flight_add(cs) : 0;
     lb_unlock();
     if (!l) {
         lb_count(2, have ? 1 : 2, 0);
@@ -2984,6 +3022,7 @@ static void lb_compute(const GfxShader *cs) {
     VkPipeline pipe = compute_create(cs, l);
     double ms = now_ms() - t0;
     lb_lock();
+    if (flight) cs_flight_remove(cs);
     if (pipe && !pipe_find(&k, sizeof k, h)) {
         pipe_add(&k, sizeof k, h, pipe, l, &B, VK_PIPELINE_BIND_POINT_COMPUTE, 0);
         P.stats.compute++;
@@ -3131,7 +3170,7 @@ static void lb_state(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
 // Boot: compute shaders of the warm list (recorded and prepared), then the first KEEP recorded graphics variants.
 static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
     const char *e = cfg_value("NX2NAVI_LIB_PREBUILD"), *ke = cfg_get("NX2NAVI_LIB_PREBUILD_KEEP");
-    const char *te = cfg_get("NX2NAVI_LIB_PREBUILD_THREADS");   // no fixed default: a quarter of the CPUs when unset
+    const char *te = cfg_get("NX2NAVI_LIB_PREBUILD_THREADS");   // no fixed default: half the CPUs when unset
     if (!A.on || !cfg_bool("NX2NAVI_LIB_PREBUILD")) return;
     char dir[PLAT_PATH_MAX * 2];
     if (cache_dir(dir, sizeof dir)) skip_init(dir);
@@ -3154,7 +3193,7 @@ static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
     lb_state(pr_hist, fs_hist);
     LB.idle = 1;
     int cpus = (int)plat_cpu_usable();
-    int t = te && *te ? atoi(te) : cpus / 4;
+    int t = te && *te ? atoi(te) : cpus / 2;   // idle priority; a cold driver takes ~2 s per large compute shader
     t = t < 1 ? 1 : t > LB_MAX_THREADS ? LB_MAX_THREADS : t;
     if ((size_t)t > n) t = (int)n;
     LB.t0 = now_ms();

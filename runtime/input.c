@@ -513,9 +513,13 @@ static void binds_refresh(void) {
 
 // NX2NAVI_TEST_PAD=<lx>,<ly>,<rx>,<ry> (test runs): an SDL virtual gamepad whose sticks rest at these raw SDL axis values
 // (-32768..32767, down is +y), attached before the first scan so it is the gamepad the game reads: drift and full
-// deflection go through the same mapping and dead zone as a real pad.
-static void test_pad_attach(void) {
-    static SDL_Joystick *joy;   // kept open: a virtual joystick's axes are set through an open handle
+// deflection go through the same mapping and dead zone as a real pad. NX2NAVI_TEST_PAD_AT=<ms>: attached that long after
+// input starts instead, like a controller switched on in play, and its south button pressed for half a second one
+// second later (the log then shows the hot-plug and the press arriving: scan_pads, pad_physical).
+static SDL_Joystick *test_joy;     // kept open: a virtual joystick's axes and buttons are set through an open handle
+static uint64_t test_attach_ns, test_press_ns;   // NX2NAVI_TEST_PAD_AT: when to attach, when to press (0: done)
+
+static void test_pad_make(void) {
     const char *e = cfg_get("NX2NAVI_TEST_PAD");
     int v[4];
     if (!e || !*e) return;
@@ -530,16 +534,40 @@ static void test_pad_attach(void) {
     d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
     d.name = "NX2navi test gamepad";
     SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
-    joy = id ? SDL_OpenJoystick(id) : NULL;
-    if (!joy) {
+    test_joy = id ? SDL_OpenJoystick(id) : NULL;
+    if (!test_joy) {
         rt_log("input: test gamepad not attached (%s)", SDL_GetError());
         return;
     }
     static const SDL_GamepadAxis axes[4] = {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTX,
                                             SDL_GAMEPAD_AXIS_RIGHTY};
     for (int i = 0; i < 4; i++)
-        SDL_SetJoystickVirtualAxis(joy, axes[i], (Sint16)(v[i] < -32768 ? -32768 : v[i] > 32767 ? 32767 : v[i]));
+        SDL_SetJoystickVirtualAxis(test_joy, axes[i], (Sint16)(v[i] < -32768 ? -32768 : v[i] > 32767 ? 32767 : v[i]));
     rt_log("input: test gamepad attached, sticks at %d,%d %d,%d", v[0], v[1], v[2], v[3]);
+}
+
+static void test_pad_attach(void) {
+    const char *at = cfg_get("NX2NAVI_TEST_PAD_AT");
+    if (at && *at && cfg_get("NX2NAVI_TEST_PAD")) {
+        test_attach_ns = plat_now_ns() + strtoull(at, NULL, 10) * 1000000ull;
+        return;
+    }
+    test_pad_make();
+}
+
+// Under lock, every poll: the delayed attach and the press of NX2NAVI_TEST_PAD_AT.
+static void test_pad_tick(void) {
+    uint64_t now = plat_now_ns();
+    if (test_attach_ns && now >= test_attach_ns) {
+        test_attach_ns = 0;
+        test_pad_make();
+        if (test_joy) test_press_ns = now + 1000000000ull;
+    }
+    if (test_press_ns && test_joy && now >= test_press_ns) {
+        int down = now < test_press_ns + 500000000ull;
+        SDL_SetJoystickVirtualButton(test_joy, SDL_GAMEPAD_BUTTON_SOUTH, down);
+        if (!down) test_press_ns = 0;
+    }
 }
 
 static void start(void) {
@@ -591,6 +619,7 @@ static int32_t shake_stick(int held) {
 
 // Under lock, state 1: the open gamepad's inputs by position (pd[PAD_*] != 0 held); 0 without a connected gamepad.
 static int pad_physical(uint8_t pd[PAD_COUNT]) {
+    test_pad_tick();
     // every RESCAN_MS, not only without a gamepad: a second controller, or one that wakes up after the start, is found
     if (plat_now_ns() / 1000000u >= next_scan) { next_scan = plat_now_ns() / 1000000u + RESCAN_MS; scan_pads(); }
     SDL_UpdateGamepads();

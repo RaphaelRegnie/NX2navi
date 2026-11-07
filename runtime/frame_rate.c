@@ -115,26 +115,37 @@ int frame_step_realtime(void) { return step_word != NULL; }
 static int fps60_set = -2;
 static int game_interval = 1;   // the present interval of the newest frame (frame_step_present)
 
-// The limit can change anything only with the fps60 or realtime patch set (NX2navi's builds). Without them (Ocarina) the
-// game picks its own present interval and the pacer follows it (nvn_api_obj.c present_period).
-int frame_limit_adjustable(void) { return rt_patch_set("fps60") >= 0 || rt_patch_set("realtime") >= 0; }
+// A build without the fps60 and realtime patch sets (Ocarina) steps its game by the clock itself: walked by the same
+// frame-numbered input script, Link covered half the distance at 120 fps that he covers at 60. There the pacer holds
+// frames to the limit alone (nvn_api_obj.c present_period), the game's own 60 Hz interval aside, and the limit may be
+// any rate or none (LIMIT_FREE_MAX_HZ, "unlimited"); NX2navi's physics fails past LIMIT_MAX_HZ, Ocarina has no such floor.
+#define LIMIT_FREE_MAX_HZ 1000
+int frame_free_running(void) { return rt_patch_set("fps60") < 0 && rt_patch_set("realtime") < 0; }
+int frame_limit_adjustable(void) { return 1; }
 static unsigned limit_seen;
 static int limit_read;
-static int limit_hz = -1;   // 0: display; -1 before the first read
+static int limit_hz = -1;   // 0: display; -2: unlimited (free-running builds); -1 before the first read
 
 static int limit_parse(void) {
     const char *e = cfg_get("NX2NAVI_FPS_LIMIT"), *old = cfg_get("NX2NAVI_FPS60");
     if (!e || !*e) return old && !strcmp(old, "0") ? 30 : 60;
     if (!strcmp(e, "display")) return 0;
+    int free_run = frame_free_running();
+    if (!strcmp(e, "unlimited")) {
+        if (free_run) return -2;
+        rt_log("frame rate: NX2NAVI_FPS_LIMIT=unlimited needs a game that steps by the clock; %d", LIMIT_MAX_HZ);
+        return LIMIT_MAX_HZ;
+    }
     char *end;
     long n = strtol(e, &end, 10);
+    if (!*end && free_run && n >= LIMIT_MIN_HZ) return n > LIMIT_FREE_MAX_HZ ? LIMIT_FREE_MAX_HZ : (int)n;
     if (!*end && n > LIMIT_MAX_HZ) {
         rt_log("frame rate: NX2NAVI_FPS_LIMIT=%s is above %d, where the game's physics runs out of memory; %d", e,
                LIMIT_MAX_HZ, LIMIT_MAX_HZ);
         return LIMIT_MAX_HZ;
     }
     if (!*end && n >= LIMIT_MIN_HZ) return (int)n;
-    rt_log("frame rate: NX2NAVI_FPS_LIMIT=%s is not %d..%d or display; 60", e, LIMIT_MIN_HZ, LIMIT_MAX_HZ);
+    rt_log("frame rate: NX2NAVI_FPS_LIMIT=%s is not %d..%d, display or unlimited; 60", e, LIMIT_MIN_HZ, LIMIT_MAX_HZ);
     return 60;
 }
 
@@ -146,10 +157,10 @@ static void frame_limit_live(void) {
     int hz = limit_parse();
     if (hz == limit_hz) return;
     limit_hz = hz;
-    if (!frame_limit_adjustable()) {
-        if (hz != 60)
-            rt_log("frame rate: NX2NAVI_FPS_LIMIT=%s does nothing in this build (no fps60 or realtime patch set); the "
-                   "game sets its own rate", cfg_value("NX2NAVI_FPS_LIMIT"));
+    if (frame_free_running()) {
+        if (hz == -2) rt_log("frame rate: unlimited (the game steps by the clock)");
+        else if (hz) rt_log("frame rate: limit %d fps (the game steps by the clock)", hz);
+        else rt_log("frame rate: limit at the monitor's refresh rate (the game steps by the clock)");
         return;
     }
     if (fps60_set == -2) fps60_set = rt_patch_set("fps60");
@@ -163,9 +174,11 @@ static void frame_limit_live(void) {
 
 uint64_t frame_step_cap_ns(void) {
     frame_limit_live();
+    if (limit_hz == -2) return 0;   // unlimited: the pacer does not hold frames
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
-    if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
+    double max = frame_free_running() ? LIMIT_FREE_MAX_HZ : LIMIT_MAX_HZ;
+    if (hz > max) hz = max;
     return (uint64_t)(1e9 / hz + 0.5);
 }
 
@@ -173,7 +186,12 @@ uint64_t frame_step_cap_ns(void) {
 // most without the real-time step; the game's own rate (60 Hz over its present interval) in a build without the patch
 // sets; 0 before the first frame read the setting.
 double frame_step_limit_hz(void) {
-    if (!frame_limit_adjustable()) return 60.0 / game_interval;
+    if (frame_free_running()) {   // 0 for unlimited, as before the first read
+        frame_limit_live();
+        if (limit_hz == -2 || limit_hz == -1) return 0;
+        double r = limit_hz ? limit_hz : gfx_window_refresh_hz();
+        return r < LIMIT_MIN_HZ ? 60 : r;
+    }
     int hz = limit_hz;
     if (hz < 0) return 0;
     double r = hz ? hz : gfx_window_refresh_hz();
