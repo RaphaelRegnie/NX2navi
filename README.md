@@ -12,16 +12,22 @@ version 1.1.1) into a native x86-64 application for Windows, with a Vulkan rende
 
 ## Status
 
-Early development. Kokiri Forest and the areas around it play at 60 fps; visual bugs and crashes are still expected.
+Early development. Kokiri Forest and the areas around it play at 60 fps and above; visual bugs and crashes are still
+expected.
+
+## Screenshots
+
+<!-- Screenshots are attached through GitHub (drag the PNG files into this section when editing the README on
+github.com); no image file is committed. -->
 
 Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Features
 
 - Native code, not emulation
-- 60 fps, at the game's own resolution
+- 60 fps by default, or a limit of 30 to 240 fps, the display's refresh rate or unlimited
+- Native widescreen and ultrawide (the window's shape, 21:9 or 32:9) with the HUD, menus and movies kept 16:9
 - AMD FSR 1 or bilinear scaling to the window, with a sharpness setting; black bars or stretch
-- Colour profiles and brightness, contrast, saturation and gamma settings
 - In-game settings menu (F1, or Minus and Plus together on a gamepad) and performance overlay (F10)
 - Keyboard, mouse and gamepads with remapping, Nintendo or Xbox button layout, rumble and gyro; the game follows
   whichever connected gamepad you press

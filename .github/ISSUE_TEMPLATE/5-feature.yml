@@ -2,13 +2,9 @@ name: Feature request
 description: A setting, option or support for something the port does not do yet.
 labels: [enhancement]
 body:
-  - type: checkboxes
-    id: duplicates
+  - type: markdown
     attributes:
-      label: Existing issues
-      options:
-        - label: I [searched open and closed issues](https://github.com/another recompilation project/issues?q=is%3Aissue) and the Planned section of the README for this request.
-          required: true
+      value: Search the open and closed issues for this request first.
   - type: textarea
     id: request
     attributes:

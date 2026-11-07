@@ -36,8 +36,8 @@
 # game waits for the GPU; adds up to a frame of latency.
 # replay_async = 0
 # EXPERIMENTAL, THE GAME CRASHES WITH 1. 1 lifts the virtual core gate: guest threads run without the console's limit
-# of one thread per core, and the game keeps per-core data without locks. With 1, 1.2.1 and 1.4.3 crash or hang,
-# usually at start (#212). Keep 0 to play.
+# of one thread per core, and the game keeps per-core data without locks. With 1 the game crashes or hangs,
+# usually at start. Keep 0 to play.
 # free_cores = 0
 # Windows timer resolution of 1 ms for steadier frame pacing (0 = the Windows default).
 # timer_1ms = 1
@@ -158,22 +158,10 @@
 # window is no longer stretched as it used to be; stretch fills the window. Changes while the game runs take effect at
 # once.
 # aspect = fit
-# Field of view, in percent of the game's own: 70 to 140, 100 (the default) leaves the camera as it is. Higher shows
-# more of the world around Link. Game version 1.4.3 only. Changes while the game runs take effect at once.
-# fov = 100
 # Anisotropic filtering of surface textures: game (the level the game asks for, as on the Switch) or 2, 4, 8, 16. Keeps
 # ground, roads and walls seen at a shallow angle sharp into the distance. Only filtered, mipmapped textures that tile
 # are raised; shadow maps, data maps and screen-sized buffers keep the game's setting. Read at start.
 # aniso = game
-# Colour adjustment of the picture, HUD included, before it is scaled to the window: brightness (-30 to 30, added in %),
-# contrast and saturation (70 to 150 and 50 to 200 %), gamma (0.8 to 1.2, below 1 brightens dark tones). At 0, 100,
-# 100 and 1 nothing runs. color_preset is the menu's profile (default, vivid, clarity, custom), which sets the four.
-# Changes while the game runs take effect at once.
-# color_preset = default
-# color_brightness = 0
-# color_contrast = 100
-# color_saturation = 100
-# color_gamma = 1
 # Sun shadow map size: game (the game's own, which changes with the view and drops to about 400 near the ground, so
 # leaf shadows look blocky and jump) or a fixed 256, 512, 768, 1024, 1536 or 2048. Above 960 the texture heap grows with
 # it. 256 is coarser than the game's own and is for integrated GPUs short of memory bandwidth. Read at start.
@@ -204,7 +192,7 @@
 # What DLSS works from: dlaa (the 3D scene at full size), quality, balanced, performance or ultra_performance (the
 # scene at 67, 58, 50 or 33 % of the output, scaled up by DLSS; these replace render_scale and sharpen texture filtering
 # to match). They apply only with dlaa = 1 and the DLSS model next to the executable; otherwise the scene follows
-# render_scale. Changes while the game runs take effect at once (1.4.3; 1.2.1 at the next start).
+# render_scale. Changes while the game runs take effect at once.
 # dlss = dlaa
 # The DLSS model: default (NVIDIA's advice per mode: K for dlaa, quality and balanced, M for performance, L for
 # ultra_performance), k (K in every mode) or j (the other transformer model: slightly less ghosting behind moving
@@ -227,7 +215,7 @@
 # HDR output: hdr = 1 sends the picture as HDR10 (needs HDR on in Windows, "Use HDR", or a Wayland compositor with
 # colour management; without it the picture stays SDR). The game's tonemap keeps highlights up to hdr_peak_nits (your
 # display's peak); hdr_game_nits is the picture's white (paper white, 203 is the HDR reference) and hdr_ui_nits the
-# HUD's and the menu's. hdr is read at start, the nits at once. The colour profile above is for SDR only.
+# HUD's and the menu's. hdr is read at start, the nits at once.
 # hdr = 0
 # hdr_peak_nits = 1000
 # hdr_game_nits = 203
@@ -301,13 +289,9 @@
 # lstick_deadzone = 8
 # rstick_deadzone = 8
 # Mouse camera mode: direct (default) or stick. Direct turns the camera by the raw mouse motion, the same on both axes,
-# with no stick dead zone or response curve (game 1.4.3; other game versions use stick emulation). Stick makes the
+# with no stick dead zone or response curve. Stick makes the
 # mouse a right stick. Neither changes the gamepad. The Controls tab changes this while the game runs.
 # mouse_mode = direct
-# The mouse in the game's menus, 1.4.3 only (title, inventory, System tab, Options, shops, dialogue choices): while a
-# menu has the game's focus box the pointer shows, the item under it takes the focus, a left click is A on it and a
-# right click is B. 0 leaves the menus to the keys and the pad. Changes while the game runs.
-# menu_cursor = 1
 # Mouse camera sensitivity (0 to 10; 0 = no mouse camera and no cursor capture).
 # mouse_sens = 1
 # The keyboard's sticks are all or nothing, so the game only sees a full tilt from them; while this key is held the

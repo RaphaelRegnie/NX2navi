@@ -25,7 +25,8 @@ GPL projects (the hardware, suyu, OpenSmash-Ultimate, Unicorn inside the game bi
 
 ## Reporting bugs
 
-Use the issue form. Include the port version and game update from the title line of the settings menu (F1), your GPU and driver (Copy system info in the menu's Advanced tab copies them), the log (`logs\nx2navi.log` next to `nx2navi.exe`; after a crash, copy it before you start the game again), and the steps to reproduce. Screenshots are fine; recordings of long gameplay are not needed.
+Use the issue form. Include the port version and game update from the title line of the settings menu (F1), your GPU and driver, the log (`logs
+x2navi.log` in the game folder; after a crash, copy it before you start the game again), and the steps to reproduce. Screenshots are fine; recordings of long gameplay are not needed.
 
 ## Pull requests
 
