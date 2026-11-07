@@ -164,6 +164,20 @@ extern "C" int vk_ffx_upscale(VkCommandBuffer cb, const VkFfxImage *color, const
     return 1;
 }
 
+extern "C" ffxReturnCode_t vk_ffx_create(ffxContext *ctx, ffxCreateContextDescHeader *desc) {
+    return vk_ffx_load() ? A.create(ctx, desc, nullptr) : FFX_API_RETURN_ERROR;
+}
+extern "C" ffxReturnCode_t vk_ffx_destroy(ffxContext *ctx) { return A.ok ? A.destroy(ctx, nullptr) : FFX_API_RETURN_ERROR; }
+extern "C" ffxReturnCode_t vk_ffx_configure(ffxContext *ctx, const ffxConfigureDescHeader *desc) {
+    return A.ok ? A.configure(ctx, desc) : FFX_API_RETURN_ERROR;
+}
+extern "C" ffxReturnCode_t vk_ffx_query(ffxContext *ctx, ffxQueryDescHeader *desc) {
+    return A.ok ? A.query(ctx, desc) : FFX_API_RETURN_ERROR;
+}
+extern "C" ffxReturnCode_t vk_ffx_dispatch(ffxContext *ctx, const ffxDispatchDescHeader *desc) {
+    return A.ok ? A.dispatch(ctx, desc) : FFX_API_RETURN_ERROR;
+}
+
 extern "C" void vk_ffx_release(void) {
     if (!A.ok) return;
     for (Up &u : U)

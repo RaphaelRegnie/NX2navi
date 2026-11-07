@@ -1,13 +1,18 @@
 // DLAA (vk_dlaa.c): NVIDIA DLSS at the scene's own size, behind NX2NAVI_DLAA (nx2navi.ini dlaa = 1).
 #pragma once
 #include "vk.h"
+#include "vk_ffx.h"
 
 // The narrowest scene the DLSS pass and the motion passes recognise by its D32F depth: Ultra Performance at a 1080p
 // output renders 640 wide, smaller windows less.
 #define DLAA_SCENE_MIN_W 320u
 
 int vk_dlaa_wanted(void);   // the setting is on (the device may still lack DLSS)
-int vk_dlaa_fsr3(void);     // ... and its temporal upscaler is AMD FSR 3.1 (NX2NAVI_TAA = fsr3) instead of DLSS
+int vk_dlaa_fsr3(void);
+// Frame generation (vk_fg.cpp): the depth and motion vectors of the frame DLSS or FSR 3.1 last ran on, with its jitter
+// and whether its history reset; 1 once per evaluation (0: none since the last call). The images stay valid until the
+// next frame's scene draws over them, after this present.
+int vk_dlaa_fg_inputs(VkFfxImage *depth, VkFfxImage *mv, float *jx, float *jy, int *reset);     // ... and its temporal upscaler is AMD FSR 3.1 (NX2NAVI_TAA = fsr3) instead of DLSS
 // vk_device.c: NGX's instance and device extensions join the lists (room for max names); vk_dlaa_init after the
 // device exists brings NGX up and checks that DLSS is available.
 void vk_dlaa_instance_exts(const char **ext, uint32_t *n, uint32_t max);

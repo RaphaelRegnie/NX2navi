@@ -16,3 +16,15 @@ int vk_ffx_load(void);   // 1 when the library is there with its entry points (l
 int vk_ffx_upscale(VkCommandBuffer cb, const VkFfxImage *color, const VkFfxImage *depth, const VkFfxImage *mv,
                    const VkFfxImage *out, float jx, float jy, int reset, float dt_ms, float fov_y);
 void vk_ffx_release(void);   // before the device goes away
+
+#ifdef __cplusplus
+// The API's calls themselves, for vk_fg.cpp (0 = FFX_API_RETURN_OK): the library loaded first (vk_ffx_load).
+#include "third_party/ffx_api/ffx_api.h"
+extern "C" {
+ffxReturnCode_t vk_ffx_create(ffxContext *ctx, ffxCreateContextDescHeader *desc);
+ffxReturnCode_t vk_ffx_destroy(ffxContext *ctx);
+ffxReturnCode_t vk_ffx_configure(ffxContext *ctx, const ffxConfigureDescHeader *desc);
+ffxReturnCode_t vk_ffx_query(ffxContext *ctx, ffxQueryDescHeader *desc);
+ffxReturnCode_t vk_ffx_dispatch(ffxContext *ctx, const ffxDispatchDescHeader *desc);
+}
+#endif

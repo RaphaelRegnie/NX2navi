@@ -1,0 +1,20 @@
+// Frame generation with AMD FSR 3.1 (vk_fg.cpp): AMD's frame generation swapchain in gfx_present.c's place.
+#pragma once
+#include <stdint.h>
+#include <vulkan/vulkan.h>
+
+int vk_fg_wanted(void);                      // NX2NAVI_FRAMEGEN = fsr3 with DLSS or FSR 3.1 upscaling on (read once)
+uint32_t vk_fg_queue_count(void);            // graphics-family queues the device creates: 3 with frame generation, else 1
+void vk_fg_queues(VkQueue present, VkQueue acquire);   // vk_device.c, after the device exists
+int vk_fg_active(void);                      // the frame generation swapchain exists
+// gfx_present.c's swapchain calls while vk_fg_wanted: the first create makes AMD's swapchain context, later ones
+// (window resizes) its swapchain again. Non-success from the first: the plain swapchain path stays.
+VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR *sc);
+void vk_fg_destroy_swapchain(VkSwapchainKHR sc);
+VkResult vk_fg_get_images(VkSwapchainKHR sc, uint32_t *n, VkImage *img);
+VkResult vk_fg_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem, uint32_t *idx);
+VkResult vk_fg_present(const VkPresentInfoKHR *pi);   // on the game's queue, its lock held by the caller
+// Each present, before its command buffer is submitted: configures generation for this frame and records its
+// preparation (the frame's depth and motion vectors, vk_dlaa_fg_inputs) into cb.
+void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext);
+void vk_fg_release(void);

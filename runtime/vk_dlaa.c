@@ -354,7 +354,17 @@ static struct {
     int ids_ok;
     unsigned cfg_seen;           // cfg_version when preset was read
     uint64_t last_eval_ns;       // plat_now_ns of the previous evaluation (FrameTimeDeltaInMsec)
+    VkFfxImage fg_depth, fg_mv;  // the last evaluation's depth and motion vectors, for frame generation
+    float fg_jx, fg_jy;
+    int fg_fresh, fg_reset;      // fresh: not handed out yet (vk_dlaa_fg_inputs)
 } D = {.mv_ok = -1, .cfg_seen = ~0u};
+
+int vk_dlaa_fg_inputs(VkFfxImage *depth, VkFfxImage *mv, float *jx, float *jy, int *reset) {
+    if (!D.fg_fresh || D.failed) return 0;
+    D.fg_fresh = 0;
+    *depth = D.fg_depth, *mv = D.fg_mv, *jx = D.fg_jx, *jy = D.fg_jy, *reset = 0;
+    return 1;
+}
 
 const VkTexImage *vk_dlaa_swap_img;
 VkImageView vk_dlaa_swap_view;
@@ -1172,6 +1182,10 @@ evaluated:
     ex->recorded += 4;
     vk_exec_draw_new_cb();   // NGX bound pipelines and descriptor sets of its own: the next draw binds everything again
     D.jdepth = z->image;
+    // for frame generation at this frame's present (vk_dlaa_fg_inputs)
+    D.fg_depth = (VkFfxImage){z->image, z->format, w, h, 0};
+    D.fg_mv = (VkFfxImage){e->mv, VK_FORMAT_R16G16_SFLOAT, w, h, 1};
+    D.fg_jx = jx, D.fg_jy = jy, D.fg_fresh = 1;
     next_jitter(w, ow);
     if (++D.evals == 1 || D.evals == 300 || D.evals % 3600 == 0)   // 300: one early line with the frames counted
         rt_log("dlaa: %llu frames anti-aliased (scene %ux%u, output %ux%u; %llu frames without the DLAA point, %llu with camera "

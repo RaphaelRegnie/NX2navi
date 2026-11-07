@@ -24,6 +24,7 @@
 #include "platform/platform.h"
 #include "ui/menu.h"
 #include "vk.h"
+#include "vk_fg.h"
 
 #define FRAMES 2
 #define MAX_IMAGES 16
@@ -289,7 +290,7 @@ static void flip_locked(void) {
                            .pWaitSemaphores = &g_render_done[g_flip_idx], .swapchainCount = 1, .pSwapchains = &g_sc,
                            .pImageIndices = &g_flip_idx};
     vk_queue_lock();
-    VkResult r = vkQueuePresentKHR(vk_ctx()->gfx_queue, &pi);
+    VkResult r = vk_fg_active() ? vk_fg_present(&pi) : vkQueuePresentKHR(vk_ctx()->gfx_queue, &pi);
     vk_queue_unlock();
     vk_device_fault_report(r);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
@@ -343,7 +344,17 @@ static int create_swapchain(void) {
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = pick_present_mode(c->phys), .clipped = VK_TRUE,
         .oldSwapchain = old};
-    VkResult r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
+    // Frame generation (vk_fg.cpp): AMD's swapchain in this one's place. Its swapchain is replaced only after the old
+    // one is gone; a first creation that fails leaves the plain swapchain below.
+    VkResult r = VK_ERROR_FEATURE_NOT_PRESENT;
+    if (vk_fg_wanted()) {
+        if (old && vk_fg_active()) vk_fg_destroy_swapchain(old);
+        else if (old) vkDestroySwapchainKHR(c->device, old, NULL);
+        ci.oldSwapchain = VK_NULL_HANDLE;
+        old = g_sc = VK_NULL_HANDLE;
+        r = vk_fg_create_swapchain(&ci, &g_sc);
+    }
+    if (r != VK_SUCCESS) r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
     if (r != VK_SUCCESS) {
         rt_log("gfx: vkCreateSwapchainKHR failed (%d)", (int)r);
         g_sc = old;
@@ -359,10 +370,16 @@ static int create_swapchain(void) {
     g_sc_fmt = sf.format;
     g_sc_hdr = hdr;
     vk_hdr_set_active(hdr);
-    if (hdr) vk_hdr_metadata(g_sc, 1);
+    if (hdr && !vk_fg_active()) vk_hdr_metadata(g_sc, 1);
     g_sc_ext = ext;
     g_sc_n = MAX_IMAGES;
-    vkGetSwapchainImagesKHR(c->device, g_sc, &g_sc_n, g_sc_img);
+    if (vk_fg_active()) {   // AMD's swapchain: the count first (a larger capacity is not cut down to it)
+        uint32_t n = 0;
+        vk_fg_get_images(g_sc, &n, NULL);
+        g_sc_n = n < MAX_IMAGES ? n : MAX_IMAGES;
+        memset(g_sc_img, 0, sizeof g_sc_img);
+        vk_fg_get_images(g_sc, &g_sc_n, g_sc_img);
+    } else vkGetSwapchainImagesKHR(c->device, g_sc, &g_sc_n, g_sc_img);
     VkSemaphoreCreateInfo semi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint32_t i = 0; i < g_sc_n; i++) {
         vkCreateSemaphore(c->device, &semi, NULL, &g_render_done[i]);
@@ -730,17 +747,19 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         goto out;
     }
     uint32_t idx = 0;
-    VkResult r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
+    VkResult r = vk_fg_active() ? vk_fg_acquire(g_sc, 1000000000ull, g_acquire[slot], &idx)
+                                : vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         plat_xchg32(&g_dirty, 1);
         if (!create_swapchain()) goto out;
-        r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
+        r = vk_fg_active() ? vk_fg_acquire(g_sc, 1000000000ull, g_acquire[slot], &idx)
+                           : vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
     }
     vk_device_fault_report(r);
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) goto out;     // lost, not ready: skip the frame
     if (r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
     vkResetFences(c->device, 1, &g_fence[slot]);
-    if (g_sc_hdr) vk_hdr_metadata(g_sc, 0);   // a changed peak or white goes to the display
+    if (g_sc_hdr && !vk_fg_active()) vk_hdr_metadata(g_sc, 0);   // a changed peak or white goes to the display
     if (g_th_pending[slot]) {   // that fence has signalled: the thumbnail its submission wrote is complete
         g_th_tag[g_th_pending[slot] % (uint64_t)g_th_n] = g_th_pending[slot];
         g_th_pending[slot] = 0;
@@ -882,6 +901,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         last_write = 0;
         record_thumb(cb, dst, slot);
     }
+    if (src) vk_fg_frame(cb, g_sc, g_sc_fmt, g_sc_ext);   // frame generation: this frame's preparation (vk_fg.cpp)
     sync_barrier(cb, dst, last, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, last_stage, last_write, VK_PIPELINE_STAGE_2_NONE, 0);
     vk_crumb(cb, VK_CRUMB_PRESENT_END, crumb);
     vkEndCommandBuffer(cb);
@@ -970,7 +990,8 @@ void gfx_window_release_vk(void) {
             g_sc_view[i] = VK_NULL_HANDLE;
         }
         if (g_pool) vkDestroyCommandPool(c->device, g_pool, NULL);
-        if (g_sc) vkDestroySwapchainKHR(c->device, g_sc, NULL);
+        if (g_sc && vk_fg_active()) vk_fg_destroy_swapchain(g_sc), vk_fg_release();
+        else if (g_sc) vkDestroySwapchainKHR(c->device, g_sc, NULL);
         if (g_surface) vkDestroySurfaceKHR(c->instance, g_surface, NULL);
         g_sc = VK_NULL_HANDLE; g_surface = VK_NULL_HANDLE; g_pool = VK_NULL_HANDLE; g_sc_n = 0;
         g_started = 0;     // the window and its thread stay; the next gfx_window_start makes a new surface

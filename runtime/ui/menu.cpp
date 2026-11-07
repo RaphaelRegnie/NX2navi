@@ -757,6 +757,16 @@ static void row_upscaling(void) {
     if (nv >= 2) opt_apply("NX2NAVI_TAA", nv >= 7 ? "fsr3" : "dlss");
 }
 
+// Frame generation (vk_fg.cpp), after a restart; it needs a temporal upscaler's motion vectors
+static void row_framegen(void) {
+    static const char *const values[] = {"off", "fsr3"};
+    const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), "AMD FSR 3.1"};
+    int cur = strcmp(cfg_value("NX2NAVI_FRAMEGEN"), "fsr3") ? 0 : 1;
+    int nv = opt_choice_index("NX2NAVI_FRAMEGEN", UI_MENU_FRAMEGEN, names, 2, cur, 1, UI_MENU_FRAMEGEN_DESC,
+                              menu_text(UI_MENU_FRAMEGEN_NOTE));
+    if (nv >= 0) opt_apply("NX2NAVI_FRAMEGEN", values[nv]);
+}
+
 // The picture's height (widescreen.c picture_height): the game's 1440 or more.
 static void row_game_res(void) {
     static const char *const values[] = {"1440", "1800", "2160", "2880", "window"};
@@ -783,6 +793,7 @@ static void tab_screen(float scale) {
     if (wide_available()) opt_choice("NX2NAVI_GAME_ASPECT", UI_MENU_GAME_ASPECT, wide, 4, UI_MENU_GAME_ASPECT_DESC);
     if (wide_available()) row_game_res();
     row_upscaling();
+    row_framegen();
     // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear or DLSS the slider would do nothing
     if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");

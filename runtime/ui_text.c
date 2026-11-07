@@ -513,6 +513,13 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                "Turning DLSS or FSR 3.1 on or off, or changing between them, takes effect after a "
                                "restart; the mode changes at once.",
     [UI_MENU_UPSCALING_DLSS_NOTE] = "DLSS or FSR 3.1 on or off: after restart",
+    [UI_MENU_FRAMEGEN] = "Frame generation",
+    [UI_MENU_FRAMEGEN_DESC] = "Shows a generated frame between every two the game draws, for about twice the frame rate "
+                              "on a fast display. It needs DLSS or FSR 3.1 under Upscaling (any mode), whose motion "
+                              "vectors it uses. AMD FSR 3.1 frame generation runs on any GPU (amd_fidelityfx_vk.dll next "
+                              "to the game's .exe). It pauses while this menu is open. Takes effect after a restart.",
+    [UI_MENU_FRAMEGEN_OFF] = "Off",
+    [UI_MENU_FRAMEGEN_NOTE] = "after restart; needs DLSS or FSR 3.1",
     [UI_MENU_GAME_RES] = "Resolution",
     [UI_MENU_GAME_RES_DESC] = "The height of the game's picture: 1440p is the game's own; higher draws a sharper picture "
                               "and its scene in proportion, at a matching cost on the graphics card. Native: the "

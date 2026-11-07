@@ -243,7 +243,8 @@ typedef enum {
     UI_BOOT_SHADERS, UI_BOOT_PIPELINES,   // printf: "%lld" done, "%lld" total
     // the settings menu's Picture rows for this game (ui/menu.cpp tab_screen): one upscaling choice (bilinear, FSR 1
     // or a DLSS mode) and the picture's resolution
-    UI_MENU_UPSCALING, UI_MENU_UPSCALING_DESC, UI_MENU_UPSCALING_DLSS_NOTE,
+    UI_MENU_UPSCALING, UI_MENU_UPSCALING_DESC, UI_MENU_UPSCALING_DLSS_NOTE, UI_MENU_FRAMEGEN, UI_MENU_FRAMEGEN_DESC,
+    UI_MENU_FRAMEGEN_OFF, UI_MENU_FRAMEGEN_NOTE,
     UI_MENU_GAME_RES, UI_MENU_GAME_RES_DESC, UI_MENU_GAME_RES_NATIVE,
     UI_TEXT_COUNT
 } UiTextId;
