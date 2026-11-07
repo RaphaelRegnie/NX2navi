@@ -157,7 +157,7 @@ static bool hdr_format(VkFormat f) {
 }
 
 extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless,
-                            VkImageView hudless_view) {
+                            VkImageView hudless_view, const int pic[4]) {
     (void)hudless_view;
     if (!vk_fg_active()) return;
     vk_dlaa_hudless_wanted = 1;   // the upscaling pass keeps a copy of the picture before the HUD (vk_dlaa.c hudless)
@@ -205,7 +205,10 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
     cfg.frameGenerationCallbackUserContext = &F.fg;
     cfg.frameGenerationEnabled = on != 0;
     cfg.allowAsyncWorkloads = false;
-    cfg.generationRect = {0, 0, (int32_t)ext.width, (int32_t)ext.height};
+    // the picture's rectangle: with black bars beside or below it (a window of another shape) a generation over the
+    // whole swapchain warped the picture's edges into the bars
+    cfg.generationRect = pic && pic[2] > 0 && pic[3] > 0 ? FfxApiRect2D{pic[0], pic[1], pic[2], pic[3]}
+                                                         : FfxApiRect2D{0, 0, (int32_t)ext.width, (int32_t)ext.height};
     if (on && hudless) {
         VkFfxImage h = {hudless, fmt, ext.width, ext.height, 1};
         cfg.HUDLessColor = image(&h);

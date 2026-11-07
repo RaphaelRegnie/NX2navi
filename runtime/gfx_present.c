@@ -1040,7 +1040,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         last_write = 0;
         record_thumb(cb, dst, slot);
     }
-    if (src) vk_fg_frame(cb, g_sc, g_sc_fmt, g_sc_ext, hudless, g_hl_view);   // frame generation: this frame's preparation
+    if (src) vk_fg_frame(cb, g_sc, g_sc_fmt, g_sc_ext, hudless, g_hl_view, to);   // frame generation: this frame's preparation
     if (src) output_rate();
     if (src) vk_dlssg_frame(cb, g_sc_ext);                // DLSS Frame Generation: constants and tags (vk_dlssg.c)
     sync_barrier(cb, dst, last, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, last_stage, last_write, VK_PIPELINE_STAGE_2_NONE, 0);

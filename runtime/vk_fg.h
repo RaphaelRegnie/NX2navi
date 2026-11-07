@@ -18,7 +18,10 @@ VkResult vk_fg_present(const VkPresentInfoKHR *pi);   // on the game's queue, it
 // preparation (the frame's depth and motion vectors, vk_dlaa_fg_inputs) into cb.
 // hudless: this frame's picture without the HUD at the swapchain's size and format, in GENERAL (VK_NULL_HANDLE: none),
 // from which generation tells the HUD apart and keeps it out of the generated frames.
-void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless, VkImageView hudless_view);
+// pic: the picture's rectangle in the swapchain {x, y, w, h} (black bars around it when the window has another shape);
+// frames are generated inside it only.
+void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt, VkExtent2D ext, VkImage hudless, VkImageView hudless_view,
+                 const int pic[4]);
 uint64_t vk_fg_presents(VkSwapchainKHR sc);   // frames the swapchain presented, generated ones included (0: off)
 PFN_vkSetHdrMetadataEXT vk_fg_hdr_metadata_fn(void);   // AMD's replacement for vkSetHdrMetadataEXT while active, else NULL
 void vk_fg_release(void);
