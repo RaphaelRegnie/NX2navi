@@ -1,6 +1,6 @@
-# Ocarina Recomp
+# NX2navi
 
-**Ocarina Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2 (game
+**NX2navi** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2 (game
 version 1.1.1) into a native x86-64 application for Windows, with a Vulkan renderer
 ([docs/architecture.md](docs/architecture.md)).
 
