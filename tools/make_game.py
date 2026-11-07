@@ -381,8 +381,15 @@ def step_compile(out, cache, msys, jobs):
         for src, err in bad[:3]:
             print(f'--- {src}\n{err}', file=sys.stderr)
         fail(f'{len(bad)} files did not compile')
+    # the manifest (per-monitor DPI awareness: the picture at the monitor's real size, not one Windows stretches) and the
+    # icon, runtime/nx2navi.rc through MSYS2's windres
+    rco = obj / 'nx2navi_rc.o'
+    r = subprocess.run([str(msys / 'bin' / 'windres.exe'), '-I', str(rt), '-O', 'coff', '-i', str(rt / 'nx2navi.rc'),
+                        '-o', str(rco)], capture_output=True, text=True, env=env)
+    if r.returncode:
+        fail(f'windres failed on runtime/nx2navi.rc: {r.stderr.strip()[:400]}')
     rsp = cache / 'link.rsp'
-    rsp.write_text('\n'.join('"%s"' % o.as_posix() for _, o in srcs), encoding='utf-8')
+    rsp.write_text('\n'.join('"%s"' % o.as_posix() for o in [o for _, o in srcs] + [rco]), encoding='utf-8')
     exe = out / 'ocarina.exe'
     say('  linking')
     p = subprocess.run([str(clangxx), '-o', str(exe), '@' + str(rsp), '-L', str(msys / 'lib'), *LINK_LIBS],

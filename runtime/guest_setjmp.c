@@ -145,6 +145,16 @@ static void ov_longjmp(Cpu *c) {
         char at[160];
         rt_log("longjmp to buffer %#llx from %s: back into the guest function that called setjmp",
                (unsigned long long)env, ldr_describe(c->x[30], at, sizeof at));
+        // the guest frames that led here (the frame-pointer chain), to name what failed
+        // (from the setjmp's caller: its return address, then the frame-pointer chain of x29 as setjmp saw it)
+        rt_log("  setjmp called from %s", ldr_describe(e.x[11], at, sizeof at));
+        uint64_t fp = e.x[10];
+        for (int k = 0; k < 10 && fp && mem_readable(fp, 16); k++) {
+            const uint64_t *f = (const uint64_t *)(uintptr_t)fp;
+            rt_log("  caller %d: %s", k, ldr_describe(f[1], at, sizeof at));
+            if (f[0] <= fp) break;
+            fp = f[0];
+        }
     }
     for (int i = 0; i < 12; i++) c->x[19 + i] = e.x[i];
     for (int i = 0; i < 8; i++) c->v[8 + i] = e.d[i];

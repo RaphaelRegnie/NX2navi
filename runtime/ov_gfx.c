@@ -125,20 +125,33 @@ __attribute__((constructor)) static void ov_nvn_procs_register(void) { nvn_procs
 // through them (main+0x4dc1e0 hit a null virtual in ClearLayerExtendedSwapInterval). A desktop window is SDR,
 // fixed 60 Hz, without VRR; HDR metadata and swap-interval changes are accepted and dropped.
 static void vi_ok(Cpu *c) { ret_x(c, 0); }
+static void vi_hdr_meta(Cpu *c) {   // the game's HDR content metadata (native HDR): the swapchain's comes from the settings
+    static int n;
+    if (!n++) rt_log("vi: the game sets HDR content metadata (luminance %llu..%llu)", (unsigned long long)c->x[1],
+                     (unsigned long long)c->x[2]);
+    ret_x(c, 0);
+}
 // Result QueryDisplayHdrStatus(bool *enabled, HdrOutputFormat *format, uint16_t *peak, const Display *)
 static void ov_vi_hdr_status(Cpu *c) {
     uint8_t *on = arg_p(c, 0);
     uint32_t *format = arg_p(c, 1);
     uint16_t *peak = arg_p(c, 2);
-    if (on) *on = 0;
-    if (format) *format = 0;
-    if (peak) *peak = 0;
+    // Native HDR (vk_hdr.c vk_hdr_native): an HDR10 display (format 1, which makes the game present PQ in 10 bits) of
+    // the settings' peak; otherwise SDR, as a desktop window is
+    int hdr = vk_hdr_native();
+    int nits = cfg_int("NX2NAVI_HDR_PEAK_NITS");
+    if (on) *on = (uint8_t)hdr;
+    if (format) *format = hdr ? 1 : 0;
+    if (peak) *peak = hdr ? (uint16_t)(nits > 0 && nits < 65535 ? nits : 1000) : 0;
+    static int logged;
+    if (!logged++) rt_log("vi: QueryDisplayHdrStatus -> %s", hdr ? "HDR10 (the game's native HDR)" : "SDR");
     ret_x(c, 0);
 }
 // Result QueryDisplayHdrPaperWhite(uint16_t *nits, const Display *): the SDR reference white
 static void ov_vi_paper_white(Cpu *c) {
     uint16_t *nits = arg_p(c, 0);
-    if (nits) *nits = 203;
+    int w = cfg_int("NX2NAVI_HDR_GAME_NITS");   // native HDR: the paper white of the settings
+    if (nits) *nits = (uint16_t)(vk_hdr_native() && w > 0 && w < 10000 ? w : 203);
     ret_x(c, 0);
 }
 // Result QueryDisplayCurrentRefreshRate(RefreshRate *rate, bool *variable, const Display *): RefreshRate is taken
@@ -166,10 +179,10 @@ HOST_OVERRIDE("_ZN2nn2vi21QueryDisplayHdrStatusEPbPNS0_15HdrOutputFormatEPtPKNS0
 HOST_OVERRIDE("_ZN2nn2vi25QueryDisplayHdrPaperWhiteEPtPKNS0_7DisplayE", ov_vi_paper_white);
 HOST_OVERRIDE("_ZN2nn2vi30QueryDisplayCurrentRefreshRateEPNS0_11RefreshRateEPbPKNS0_7DisplayE", ov_vi_refresh_rate);
 HOST_OVERRIDE("_ZN2nn2vi24QueryDisplayVrrSupportedEPbPKNS0_7DisplayE", ov_vi_vrr_supported);
-HOST_OVERRIDE("_ZN2nn2vi52SetLayerNextHdrStandardContentLuminanceRangeMetadataEPNS0_5LayerEtt", vi_ok);
-HOST_OVERRIDE("_ZN2nn2vi52SetLayerNextHdrExtendedContentLuminanceRangeMetadataEPNS0_5LayerEtt", vi_ok);
-HOST_OVERRIDE("_ZN2nn2vi35SetLayerNextHdrContentGamutMetadataEPNS0_5LayerENS0_15HdrContentGamutE", vi_ok);
-HOST_OVERRIDE("_ZN2nn2vi39SetLayerNextHdrToSdrToneMappingMetadataEPNS0_5LayerENS0_14HdrToneMappingE", vi_ok);
+HOST_OVERRIDE("_ZN2nn2vi52SetLayerNextHdrStandardContentLuminanceRangeMetadataEPNS0_5LayerEtt", vi_hdr_meta);
+HOST_OVERRIDE("_ZN2nn2vi52SetLayerNextHdrExtendedContentLuminanceRangeMetadataEPNS0_5LayerEtt", vi_hdr_meta);
+HOST_OVERRIDE("_ZN2nn2vi35SetLayerNextHdrContentGamutMetadataEPNS0_5LayerENS0_15HdrContentGamutE", vi_hdr_meta);
+HOST_OVERRIDE("_ZN2nn2vi39SetLayerNextHdrToSdrToneMappingMetadataEPNS0_5LayerENS0_14HdrToneMappingE", vi_hdr_meta);
 HOST_OVERRIDE("_ZN2nn2vi28SetLayerExtendedSwapIntervalEPNS0_5LayerEii", vi_ok);
 HOST_OVERRIDE("_ZN2nn2vi30ClearLayerExtendedSwapIntervalEPNS0_5LayerE", vi_ok);
 HOST_OVERRIDE("_ZN2nn2vi36SetDisplay120HzRefreshRateCapabilityEPNS0_7DisplayEb", vi_ok);

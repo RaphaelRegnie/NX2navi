@@ -46,6 +46,16 @@ int vk_hdr_wanted(void) {
     return g_wanted;
 }
 
+// NX2NAVI_HDR = native: the game's own HDR. The display is reported as HDR10 (ov_gfx.c QueryDisplayHdrStatus, with
+// the peak and paper white of the settings), and the game then renders its HDR picture itself and presents it as
+// PQ-encoded Rec. 2020 in A2B10G10R10 (format 64), which goes to the HDR10 swapchain as it is: no tonemap swap, no
+// float picture, no encode (pictures still presented in 8 bits, before the switch, are encoded as for 1).
+static int g_native = -1;
+int vk_hdr_native(void) {
+    if (g_native < 0) g_native = !strcmp(cfg_value("NX2NAVI_HDR"), "native");
+    return g_native && vk_hdr_wanted();
+}
+
 void vk_hdr_off(void) { g_wanted = 0; }
 
 // The three nits, read again when the settings change. The replay (every draw's support buffer) and the present
@@ -152,7 +162,7 @@ static int fsr_unclamp(uint32_t *w, uint64_t *words) {
 }
 
 void vk_hdr_shader_swap(uint32_t **spirv, uint64_t *words) {
-    if (!vk_hdr_wanted() || !*spirv || *words < 5) return;
+    if (!vk_hdr_wanted() || vk_hdr_native() || !*spirv || *words < 5) return;
     int unclamped = fsr_unclamp(*spirv, words);
     if (unclamped > 0) {
         static volatile int32_t fsrs;
@@ -281,7 +291,7 @@ void vk_hdr_draw(VkExec *ex, const VkPipeInfo *info) {
 }
 
 void vk_hdr_present_source(const VkTexImage *win, VkImage *image, VkFormat *format) {
-    if (!vk_hdr_wanted()) return;
+    if (!vk_hdr_wanted() || vk_hdr_native()) return;
     vk_hdr_track = 1;
     plat_mutex_lock(&rec_lock);
     int r = -1;
@@ -477,6 +487,12 @@ static int init(VkCtx *c) {
 
 VkImage vk_hdr_encode(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, const int crop[4]) {
     VkCtx *c = vk_ctx();
+    // native HDR: the game's picture holds PQ codes already; the present scales it into the swapchain as it is
+    if (vk_hdr_native() && (fmt == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32)) {
+        static int told;
+        if (!told++) rt_log("hdr: native: the game's own HDR10 picture goes to the swapchain as it is");
+        return VK_NULL_HANDLE;
+    }
     if (!H.tried) init(c);
     if (!H.ok || !img_ensure(c, &H.out, (uint32_t)crop[2], (uint32_t)crop[3], VK_FORMAT_R16G16B16A16_SFLOAT,
                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT))

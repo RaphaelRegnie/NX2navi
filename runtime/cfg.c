@@ -130,7 +130,7 @@ static const CfgMeta metas[] = {
     {"COLOR_CONTRAST", "100", "70..150", LIVE}, {"COLOR_SATURATION", "100", "50..200", LIVE},
     {"COLOR_GAMMA", "1", "0.8..1.2", LIVE},
     // HDR output (vk_hdr.c): on at start (the tonemap shader is swapped as shaders load); the nits apply at once
-    {"HDR", "0", "0|1", RESTART}, {"HDR_PEAK_NITS", "1000", "400..10000", LIVE}, {"HDR_GAME_NITS", "203", "80..500", LIVE},
+    {"HDR", "0", "0|1|native", RESTART}, {"HDR_PEAK_NITS", "1000", "400..10000", LIVE}, {"HDR_GAME_NITS", "203", "80..500", LIVE},
     {"HDR_UI_NITS", "203", "80..500", LIVE}, {"HDR_HUE", "80", "0..100", LIVE},
     {"DEVICE_PROFILE", "auto", "auto|desktop|deck", RESTART},
     {"SHADOW_RES", "game", "game|256|512|768|1024|1536|2048", RESTART},

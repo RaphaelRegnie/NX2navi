@@ -119,8 +119,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_HDR_GROUP] = "HDR",
     [UI_MENU_HDR] = "HDR output",
     [UI_MENU_HDR_DESC] = "Bright highlights on an HDR display. Needs HDR turned on in Windows (\"Use HDR\") or in a "
-                         "Wayland compositor with colour management; without it the picture stays SDR. Applies after a "
-                         "restart. The colour profile above is for SDR and is not used in HDR.",
+                         "Wayland compositor with colour management; without it the picture stays SDR. Native: the "
+                         "game's own HDR, as on a Switch 2 on an HDR TV. Enhanced: the game's picture with its highlights "
+                         "kept above the SDR white. Applies after a restart. The colour profile above is for SDR and is "
+                         "not used in HDR.",
     [UI_MENU_HDR_PEAK] = "Peak brightness",
     [UI_MENU_HDR_PEAK_DESC] = "Your display's peak in nits; the brightest highlights stop there.",
     [UI_MENU_HDR_GAME] = "Game brightness",
@@ -522,6 +524,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                               "NVIDIA's Streamline files next to the .exe. It pauses while this menu is open. Takes "
                               "effect after a restart.",
     [UI_MENU_FRAMEGEN_OFF] = "Off",
+    [UI_MENU_HDR_NOTE] = "after restart",
+    [UI_MENU_HDR_ENHANCED] = "Enhanced", [UI_MENU_HDR_NATIVE] = "Native (the game's)",
     [UI_MENU_FRAMEGEN_NOTE] = "after restart; needs DLSS or FSR 3.1",
     [UI_MENU_GAME_RES] = "Resolution",
     [UI_MENU_GAME_RES_DESC] = "The height of the game's picture: 1440p is the game's own; higher draws a sharper picture "

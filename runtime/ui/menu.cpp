@@ -757,6 +757,20 @@ static void row_upscaling(void) {
     if (nv >= 2) opt_apply("NX2NAVI_TAA", nv >= 7 ? "fsr3" : "dlss");
 }
 
+// HDR (vk_hdr.c), after a restart: off, the runtime's own (the game's tonemap kept above SDR white) or the game's native
+// HDR. The brightness rows follow while it is on.
+static void row_hdr(void) {
+    static const char *const values[] = {"0", "1", "native"};
+    const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), menu_text(UI_MENU_HDR_ENHANCED), menu_text(UI_MENU_HDR_NATIVE)};
+    opt_choice_list("NX2NAVI_HDR", UI_MENU_HDR, values, names, 3, UI_MENU_HDR_DESC, -1, menu_text(UI_MENU_HDR_NOTE));
+    if (!cfg_bool("NX2NAVI_HDR")) return;
+    opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 4000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
+    opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f nits");
+    opt_slider("NX2NAVI_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f nits");
+    // the hue correction belongs to the runtime's own HDR tonemap; the native one has the game's
+    if (strcmp(cfg_value("NX2NAVI_HDR"), "native")) opt_slider("NX2NAVI_HDR_HUE", UI_MENU_HDR_HUE, 0, 100, UI_MENU_HDR_HUE_DESC, 5, "%.0f %%");
+}
+
 // Frame generation (vk_fg.cpp), after a restart; it needs a temporal upscaler's motion vectors
 static void row_framegen(void) {
     static const char *const values[] = {"off", "fsr3", "dlss"};
@@ -797,6 +811,7 @@ static void tab_screen(float scale) {
     if (wide_available()) row_game_res();
     row_upscaling();
     row_framegen();
+    row_hdr();
     // RCAS runs only under FSR (vk_fsr.c vk_fsr_record): with bilinear or DLSS the slider would do nothing
     if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") || cfg_bool("NX2NAVI_DLAA")) opt_disable_next(UI_MENU_SHARPNESS_NEEDS_FSR);
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");

@@ -36,6 +36,7 @@
 #include "cfg.h"
 #include "gfx.h"
 #include "host.h"
+#include "nvn_api.h"
 #include "platform/platform.h"
 
 #define R_NO_FRAME 0x7bu
@@ -586,6 +587,10 @@ static void ov_acquire(Cpu *c) {
     uint64_t ysz = (uint64_t)p.w * p.h, uvsz = ysz / 2;
     if (p.nv12 && buf && cap >= ysz + uvsz) {
         memcpy(buf, p.nv12, (size_t)(ysz + uvsz));
+        // The game's YUV pass reads this buffer on the GPU. A host write into pool storage is one the page write
+        // tracking may not see in time (a mirror or texture over it kept its older or still-empty bytes: frames
+        // with stripes of zeros, which NV12 shows as green), so the back end is told directly.
+        nvn_guest_written((uint64_t)(uintptr_t)buf, ysz + uvsz);
         uint64_t uvp = (uint64_t)(uintptr_t)(buf + ysz);
         memcpy(fr + 0x10, &uvp, 8);
         memcpy(fr + 0x28, &ysz, 8), memcpy(fr + 0x30, &uvsz, 8);

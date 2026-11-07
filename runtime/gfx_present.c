@@ -835,6 +835,10 @@ static VkImage hudless_record(VkCommandBuffer cb, unsigned slot, int w, int h, c
 
 static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int h, const int crop[4], int defer) {
     int general = layout == VK_IMAGE_LAYOUT_GENERAL;
+    {   // the presented image's format, when it changes (an HDR picture comes in another one)
+        static VkFormat last = VK_FORMAT_UNDEFINED;
+        if (src && fmt != last) last = fmt, rt_log("gfx: the game presents %dx%d images of format %d", w, h, (int)fmt);
+    }
     gfx_window_start();
     VkCtx *c = vk_ctx();
     plat_rmutex_lock(&g_pl);
