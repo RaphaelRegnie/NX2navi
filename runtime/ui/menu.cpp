@@ -675,35 +675,6 @@ static const char *present_note(void) {
 }
 
 // ---- the tabs
-// Colour adjustment (vk_color.c): a profile's values (vk_color_preset; STS78721's presets, issue #136) win over the four
-// settings, which the rows keep equal to them so the sliders show what is applied: when the profile changes here, and
-// when it came from nx2navi.ini or a test hook with other values. Moving a slider makes the profile Custom.
-static void rows_color(void) {
-    static const UiTextId names[] = {UI_MENU_COLOR_DEFAULT, UI_MENU_COLOR_VIVID, UI_MENU_COLOR_CLARITY,
-                                     UI_MENU_COLOR_CUSTOM};
-    static const char *const keys[4] = {"NX2NAVI_COLOR_BRIGHTNESS", "NX2NAVI_COLOR_CONTRAST", "NX2NAVI_COLOR_SATURATION",
-                                        "NX2NAVI_COLOR_GAMMA"};
-    opt_group(UI_MENU_COLOR);
-    opt_choice("NX2NAVI_COLOR_PRESET", UI_MENU_COLOR_PRESET, names, 4, UI_MENU_COLOR_PRESET_DESC);
-    if (const char *const *p = vk_color_preset(cfg_value("NX2NAVI_COLOR_PRESET"))) {
-        bool differ = false;
-        for (int i = 0; i < 4; i++) differ |= strtod(cfg_value(keys[i]), nullptr) != strtod(p[i], nullptr);
-        if (differ) {
-            for (int i = 0; i < 4; i++) cfg_set(keys[i], p[i]);
-            cfg_save();
-        }
-    }
-    bool moved = opt_slider("NX2NAVI_COLOR_BRIGHTNESS", UI_MENU_COLOR_BRIGHTNESS, -30, 30, UI_MENU_COLOR_BRIGHTNESS_DESC, 1,
-                            "%+.0f %%");
-    moved |= opt_slider("NX2NAVI_COLOR_CONTRAST", UI_MENU_COLOR_CONTRAST, 70, 150, UI_MENU_COLOR_CONTRAST_DESC, 5, "%.0f %%");
-    moved |= opt_slider("NX2NAVI_COLOR_SATURATION", UI_MENU_COLOR_SATURATION, 50, 200, UI_MENU_COLOR_SATURATION_DESC, 5,
-                        "%.0f %%");
-    moved |= opt_slider("NX2NAVI_COLOR_GAMMA", UI_MENU_COLOR_GAMMA, 0.8f, 1.2f, UI_MENU_COLOR_GAMMA_DESC, 0.02f, "%.2f");
-    if (moved && strcmp(cfg_value("NX2NAVI_COLOR_PRESET"), "custom")) {
-        cfg_set("NX2NAVI_COLOR_PRESET", "custom");
-        cfg_save();
-    }
-}
 
 static void tab_screen(float scale) {
     opt_begin("##screen", scale);
@@ -725,7 +696,6 @@ static void tab_screen(float scale) {
     opt_slider("NX2NAVI_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("NX2NAVI_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
-    rows_color();
     opt_end();
 }
 

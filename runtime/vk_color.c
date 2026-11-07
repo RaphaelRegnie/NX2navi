@@ -125,6 +125,9 @@ const char *const *vk_color_preset(const char *name) {
 // The four values from the profile, or from their own settings under custom (or an unknown profile name); re-read when
 // the settings change. 1 when any differs from "unchanged".
 static int adjusting(void) {
+    // The menu has no colour rows (ui/menu.cpp tab_screen): values left in nx2navi.ini could not be undone there, so
+    // the pass is off and the picture is the game's own
+    return 0;
     unsigned v = cfg_version();
     if (v != C.seen) {
         C.seen = v;
