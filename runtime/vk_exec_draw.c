@@ -1049,6 +1049,10 @@ static VkDescriptorBufferInfo c0_info(VkExec *ex, int st) {
         nvn2_cs_tables(pctl, &nu, &ns);
         uint32_t pn = ta - 0x10 < sizeof ex->cs_push ? ta - 0x10 : sizeof ex->cs_push;
         memcpy(tmp + 0x10, ex->cs_push, pn < VK_C0_BYTES - 0x10 ? pn : VK_C0_BYTES - 0x10);
+        // Bytes 0-0xb of an NVN2 compute bank are the dispatch's group counts (x, y, z). The fog pass after the
+        // integration (passes 0115/0116 of a Kokiri frame) maps each thread to tid / (groups * 16 - 1): with zeros
+        // there every thread read the same point. An indirect dispatch leaves them 0 (op_dispatch_indirect).
+        memcpy(tmp, c0_dim, 12);
         for (uint32_t k = 0; k < nu + ns && ta + 16 * k + 12 <= VK_C0_BYTES; k++) {
             const p_bind_buf *sb = k < nu ? (k < 18 ? &ex->ubo[st][k] : NULL) : (k - nu < 16 ? &ex->ssbo[st][k - nu] : NULL);
             if (!sb) continue;
@@ -1603,6 +1607,7 @@ static struct {
     uint64_t logn;                     // writes so far
     uint64_t *last;                    // per entry: the log position of its newest write (catch-up writes it once, there)
     uint64_t switches, waits, catchup, written, rewrites, catch_ns, sync_ns, n_slots, n_refill, n_fresh;
+    uint64_t n_by_reg, n_by_addr;      // refills whose token changed by a registration, by an address generation only
     uint64_t dirty_pos;                // vk_texture_dirty_slots_locked position (0: the next sync walks every slot)
     int ready, uab;
     uint32_t kinds, gen, epoch, sgen;
@@ -1755,6 +1760,8 @@ static int pool_take_set(VkExec *ex, uint64_t *from) {
 }
 
 // The current set gets the entries written into other sets in [from, to) of the log, as PL.view / PL.samp hold them now.
+static uint64_t pool_memo_hits;   // pool_fill: slots that shared another slot's lookup (defined with pool_memo below)
+
 static void pool_catch_up(uint64_t from, uint64_t to) {
     VkDescriptorSet set = PL.set;
     if (to - from > POOL_LOG) {   // the log has wrapped since: every entry
@@ -1771,15 +1778,22 @@ static void pool_catch_up(uint64_t from, uint64_t to) {
     }
     pool_flush();
     PL.switches++;
+    if (PL.switches % 3600 == 0) {   // diagnosis: what invalidates the slots (vk_texture.c vk_texture_bucket_stats)
+        char bs[320];
+        vk_texture_bucket_stats(bs, sizeof bs);
+        rt_log("vk: texture pool buckets over 3600 switches: %s", bs);
+    }
     if (PL.switches % 3600 == 0)
         rt_log("vk: texture pool sets: %llu switches, %llu waited for the GPU, %.1f log entries and %.1f writes per "
                "catch-up, %llu whole rewrites; %.3f ms catch-up and %.3f ms entry refresh per switch (%.0f slots, %.0f "
-               "refilled, %.0f checked)",
+               "refilled: %.0f registered, %.0f address changes, %.0f shared a lookup; %.0f checked); %llu identical registrations kept",
                (unsigned long long)PL.switches, (unsigned long long)PL.waits, (double)PL.catchup / (double)PL.switches,
                (double)PL.written / (double)PL.switches, (unsigned long long)PL.rewrites,
                PL.catch_ns / 1e6 / (double)PL.switches, PL.sync_ns / 1e6 / (double)PL.switches,
                (double)PL.n_slots / (double)PL.switches, (double)PL.n_refill / (double)PL.switches,
-               (double)PL.n_fresh / (double)PL.switches);
+               (double)PL.n_by_reg / (double)PL.switches, (double)PL.n_by_addr / (double)PL.switches,
+               (double)pool_memo_hits / (double)PL.switches,
+               (double)PL.n_fresh / (double)PL.switches, (unsigned long long)vk_texture_same_regs());
 }
 
 // Entry id of every kind in mask: the slot's view of that kind or the kind's stand-in. Texture lock held. 0: the
@@ -1821,8 +1835,28 @@ static int pool_on(void) {
     return on;
 }
 
+// Slots that resolve alike share one lookup (vk_texture_slot_khash_locked): Ocarina keeps ~400 descriptors of each
+// transient render target registered over its storage, and every finalize and initialize of that target changes their
+// tokens, so a refill looked up the same texture ~400 times, ~15,000 lookups a frame in Kokiri Forest. An entry holds the
+// views one slot got, for the slots with its hash, address generation and entry generation.
+#define POOL_MEMO 4096
+static struct { uint64_t kh; uint32_t agen, egen, mask; VkImageView view[VK_POOL_KINDS]; } pool_memo[POOL_MEMO];
+static uint64_t pool_memo_hits;
+
 static int pool_fill(VkExec *ex, uint32_t id, uint32_t mask, uint64_t tok) {
     vk_texture_create_deferred_locked();
+    uint64_t kh = tok ? vk_texture_slot_khash_locked((int)id) : 0;
+    uint32_t ag = (uint32_t)tok;
+    typeof(pool_memo[0]) *m = kh ? &pool_memo[(kh >> 20) % POOL_MEMO] : NULL;
+    if (m && m->kh == kh && m->agen == ag && m->egen == vk_texture_entry_gen() && (m->mask & mask) == mask) {
+        for (int k = 0; k < VK_POOL_KINDS; k++) {
+            if (!(mask >> k & 1)) continue;
+            VkImageView *e = &PL.view[(size_t)k * VK_POOL_TEX + id];
+            if (*e != m->view[k]) *e = m->view[k], pool_write((uint32_t)k, id, m->view[k], VK_NULL_HANDLE);
+        }
+        pool_memo_hits++;
+        return 1;
+    }
     for (int k = 0; k < VK_POOL_KINDS; k++) {
         if (!(mask >> k & 1)) continue;
         GfxShaderRes r = {0};
@@ -1833,7 +1867,15 @@ static int pool_fill(VkExec *ex, uint32_t id, uint32_t mask, uint64_t tok) {
         VkImageView *e = &PL.view[(size_t)k * VK_POOL_TEX + id];
         if (*e != ii.imageView) *e = ii.imageView, pool_write((uint32_t)k, id, ii.imageView, VK_NULL_HANDLE);
     }
-    return !vk_texture_create_deferred_locked();
+    int ok = !vk_texture_create_deferred_locked();
+    if (m && ok) {   // the generation after the lookups: an entry they created is part of what they resolved
+        uint32_t eg = vk_texture_entry_gen();
+        if (m->kh != kh || m->agen != ag || m->egen != eg) m->kh = kh, m->agen = ag, m->egen = eg, m->mask = 0;
+        for (int k = 0; k < VK_POOL_KINDS; k++)
+            if (mask >> k & 1) m->view[k] = PL.view[(size_t)k * VK_POOL_TEX + id];
+        m->mask |= mask;
+    }
+    return ok;
 }
 
 static void pool_sync_entries(VkExec *ex);
@@ -1863,6 +1905,8 @@ static void pool_dirty_slot(int id, void *arg) {   // vk_texture_dirty_slots_loc
     uint64_t t = vk_texture_slot_token(id);
     if (t == PL.tok[id]) return;
     PL.n_refill++;
+    if (t >> 32 != PL.tok[id] >> 32) PL.n_by_reg++;
+    else PL.n_by_addr++;
     if (pool_fill(d->ex, (uint32_t)id, d->used, t)) PL.tok[id] = t;
     else d->retry = 1;
 }
@@ -1897,6 +1941,8 @@ static void pool_sync_entries(VkExec *ex) {
             uint64_t t = vk_texture_slot_token(id);
             if (t != PL.tok[id]) {
                 PL.n_refill++;
+                if (t >> 32 != PL.tok[id] >> 32) PL.n_by_reg++;
+                else PL.n_by_addr++;
                 if (pool_fill(ex, (uint32_t)id, used, t)) PL.tok[id] = t;
                 else retry = 1;
             } else if (t && fresh) {
@@ -2502,6 +2548,9 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
         }
         nd += cnt;
     }
+    // An empty set 1 (a fragment stage without resources: depth and shadow draws) starts past the last binding, which
+    // the loop never reaches: d0[1] stayed 0 and set 0 was pushed with 0 bytes, so the driver read stale descriptors
+    if (n_sets == 2 && lo[1] == hi[1]) d0[1] = nd;
     // Under the validation layer, a new graphics layout binds set 1 before set 0 is pushed or bound. The layer (SDK
     // 1.4.363, PipelineLayoutCompatDef::operator==) takes any two INDEPENDENT_SETS layouts as compatible, so
     // vkCmdPushDescriptorSetKHR keeps the push set it made for an earlier layout and drops writes to bindings that
@@ -3747,10 +3796,43 @@ static void op_draw_mesh(VkExec *ex, const p_draw_mesh *d) {
     ex->recorded++;
 }
 
-// DrawMeshTasksIndirect: the arguments are written by the GPU earlier in the frame (they never come back to guest
-// memory), so the draw reads them from the device copy, taken as VkDrawMeshTasksIndirectCommandEXT {x, y, z}. If the
-// game's layout were NV's {count, first} instead, y would be 0 and the draw would draw nothing. One draw; x2-x4 of the
-// call vary like leftovers, so they are not read as a count or stride.
+// The record NVN's DrawMeshTasksIndirect reads is {count, first} (as NV_mesh_shader's), and Vulkan's {x, y, z}: read as
+// it is, y = first (0) drew nothing. Each draw gets an entry of this ring, {count, 1, 1}: y and z filled with 1 and x
+// copied from the game's record on the GPU, between the pass's end and the draw (the record is written by the culling
+// compute earlier in the frame and never comes back to guest memory). `first` is not applied: the game leaves it 0.
+// MESH_RING entries outlast the frames in flight: an entry is rewritten only after a barrier behind its last draw.
+enum { MESH_RING = 4096 };
+static VkBuffer mesh_ring;
+static uint32_t mesh_ring_next;
+
+static int mesh_ring_entry(VkExec *ex, const VkMemSpan *src, VkDeviceSize *at) {
+    if (!mesh_ring) {
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = 12ull * MESH_RING,
+                                 .usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VmaAllocation a;
+        if (vmaCreateBuffer(vk_ctx()->vma, &bi, &ai, &mesh_ring, &a, NULL) != VK_SUCCESS) {
+            mesh_ring = VK_NULL_HANDLE;
+            return 0;
+        }
+    }
+    *at = 12ull * (mesh_ring_next++ % MESH_RING);
+    vk_exec_barrier(ex);   // ends the pass (the next draw opens it again) and orders the culling's writes before the copy
+    vkCmdFillBuffer(ex->cb, mesh_ring, *at + 4, 8, 1);
+    VkBufferCopy cp = {src->offset, *at, 4};
+    vkCmdCopyBuffer(ex->cb, src->buffer, mesh_ring, 1, &cp);
+    VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                           .srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                           .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
+    vkCmdPipelineBarrier2(ex->cb, &di);
+    ex->recorded += 3;
+    return 1;
+}
+
+// DrawMeshTasksIndirect: one draw from its ring entry (mesh_ring_entry); x2-x4 of the call vary like leftovers, so they
+// are not read as a count or stride.
 static void op_draw_mesh_ind(VkExec *ex, const p_draw_mesh_ind *d) {
     static PFN_vkCmdDrawMeshTasksIndirectEXT fn;
     static int looked;
@@ -3768,6 +3850,9 @@ static void op_draw_mesh_ind(VkExec *ex, const p_draw_mesh_ind *d) {
         return warn_once(W_INDIRECT, "indirect mesh draw arguments at %#llx are not backed or not aligned: skipped",
                          (unsigned long long)d->ind);
     c0_binst = 0;
+    VK_MEM_USE(ip);
+    VkDeviceSize at;
+    if (!mesh_ring_entry(ex, &ip, &at)) return warn_once(W_MESH, "the indirect mesh ring could not be created: skipped");
     if (!prepare_draw_ex(ex, NVN_DRAW_PRIMITIVE_TRIANGLES, 0x7fffffff, 0, 1)) return;
     vk_exec_frame.draws++;
     static uint32_t n_logged;
@@ -3776,10 +3861,9 @@ static void op_draw_mesh_ind(VkExec *ex, const p_draw_mesh_ind *d) {
         rt_log("vk: indirect mesh draw: arguments at %#llx, program %llu", (unsigned long long)d->ind,
                (unsigned long long)ex->prog->serial);
     }
-    VK_MEM_USE(ip);
-    rec_draw_mesh_ind(fn, ex->cb, ip.buffer, ip.offset, 1, 12);
+    rec_draw_mesh_ind(fn, ex->cb, mesh_ring, at, 1, 12);
     ex->recorded++;
-    vk_mem_count(ip.cls, VK_MUSE_IND, 12);
+    vk_mem_count(ip.cls, VK_MUSE_IND, 4);
     VK_MEM_BOUND(ip);
 }
 
@@ -4206,7 +4290,12 @@ static void op_dispatch_ind(VkExec *ex, const p_dispatch_ind *d) {
     bind_resources(ex, info);
     twin_dispatch = 0;
     if (B.c0_valid[2]) {   // the shader binds c0
-        VkBufferCopy cp = {ip.offset, B.c0_off[2] + 0x200, sizeof(VkDispatchIndirectCommand)};
+        // NVN2 programs read the group counts from c0 byte 0 (c0_info); at 0x200 their bank holds pushed constants
+        // or the driver's tables, which the copy would overwrite
+        const uint8_t *pctl, *pcode;
+        uint32_t plen;
+        int nvn2 = find_stage(ex->prog, NVN_STAGE_CS, &pctl, &pcode, &plen) && ctl_nvn2(pctl);
+        VkBufferCopy cp = {ip.offset, B.c0_off[2] + (nvn2 ? 0 : 0x200), sizeof(VkDispatchIndirectCommand)};
         vkCmdCopyBuffer(ex->cb, ip.buffer, B.c0_buf[2], 1, &cp);
         ex->recorded++;
         vk_exec_barrier(ex);

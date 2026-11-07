@@ -363,6 +363,9 @@ int prof_sampler_start(void) {
 // dump of a present at least slow_ns after the previous one (d 0 on the first present).
 void prof_sampler_frame(uint64_t frame, uint64_t now, uint64_t d) {
     cur_frame = frame;
+    // the end of a NX2NAVI_PROFILE_FRAMES window writes the profile then: a test run ended by a timeout never reaches
+    // the exit handlers (prof_write)
+    if (frame_hi && frame > frame_hi && !written) prof_sampler_write();
     if (slow_ns && d >= slow_ns && !dump_hi) {
         dump_lo = (LONG64)(now - d - 20000000ull);
         dump_frame = (LONG64)frame;

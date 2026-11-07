@@ -301,16 +301,17 @@ static int create_pipeline(VkCtx *c) {
 }
 
 // NX2NAVI_ASTC_BC=1: the BC3 encoder, when the device samples BC3 (every desktop GPU does); 0 leaves ASTC as RGBA8.
-// Unset: on when the largest device-local heap is under 5 GiB. There RGBA8 ASTC, four times the size of BC3, fills
-// video memory (a GTX 1650 4 GiB went from 10-23 to 3-12 ms of GPU time a frame, issue #87); BC3 loses some precision
-// (normal maps), so GPUs with more memory keep RGBA8.
+// Unset: on when the largest device-local heap is under 20 GiB. There RGBA8 ASTC, four times the size of BC3, fills
+// video memory (a GTX 1650 4 GiB went from 10-23 to 3-12 ms of GPU time a frame, issue #87). Ocarina in Kokiri Forest
+// holds 15.9 GiB of VRAM with RGBA8 and 8.2 GiB with BC3, at the same GPU time and no difference to see in the frame,
+// so 8-16 GiB cards take BC3 too; BC3 loses some precision (normal maps), so 24 and 32 GiB cards keep RGBA8.
 static int create_bc_pipeline(VkCtx *c) {
     const char *e = cfg_get("NX2NAVI_ASTC_BC");
     VkDeviceSize vram = 0;
     for (uint32_t h = 0; h < c->mem_props.memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
         if (c->mem_props.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT && c->mem_props.memoryHeaps[h].size > vram)
             vram = c->mem_props.memoryHeaps[h].size;
-    int on = e && *e ? *e != '0' : vram < (5ull << 30);
+    int on = e && *e ? *e != '0' : vram < (20ull << 30);
     if (!(e && *e))
         rt_log("vk: NX2NAVI_ASTC_BC unset: BC3 %s (largest device-local heap %llu MiB)", on ? "on" : "off",
                (unsigned long long)(vram >> 20));

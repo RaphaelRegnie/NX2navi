@@ -286,6 +286,15 @@ static void job_done(void *arg) {
     VmaAllocator vma = vk_ctx()->vma;
     vmaInvalidateAllocation(vma, j->alloc, 0, VK_WHOLE_SIZE);
     write_images(j);
+    // A BC texture's raw blocks also go to <name>.bin, packed rows of blocks, so a script can decode them: the PNG
+    // shows the block words through the integer mapping, which loses their bits.
+    size_t nl = strlen(j->name);
+    if (nl > 7 && !strcmp(j->name + nl - 7, "_blocks")) {
+        char path[600];
+        snprintf(path, sizeof path, "%s/%s.bin", dir, j->name);
+        FILE *f = fopen(path, "wb");
+        if (f) fwrite(j->map, 1, j->bytes, f), fclose(f);
+    }
     vmaDestroyBuffer(vma, j->buf, j->alloc);
     plat_add64(&inflight, -(int64_t)j->bytes);
     free(j);
@@ -582,7 +591,12 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
                 memcpy(&pa, ex->cs_push + r->handle * 4 - 0x10, 8), memcpy(&ps, ex->cs_push + r->handle * 4 - 0x10 + 8, 4);
                 sp(b, " (push pointer %#llx+%#x)", (unsigned long long)pa, ps);
             }
-            if (st == 5) sp(b, " -> %#llx", (unsigned long long)vk_exec_cs_storage_addr(ex, r));
+            if (st == 5) {   // the address and how far its backing span reaches (what a size-0 binding covers)
+                uint64_t ca = vk_exec_cs_storage_addr(ex, r);
+                VkMemSpan ms;
+                sp(b, " -> %#llx", (unsigned long long)ca);
+                if (ca && vk_mem_resolve(ca, 1, &ms)) sp(b, " (span %#llx)", (unsigned long long)ms.avail);
+            }
             for (int k = 0; k < 16; k++)
                 if (ex->ssbo[st][k].addr) {
                     VkDescriptorBufferInfo cb;   // "(copy)": a binding that only reads it uses the submit-time copy (vk_usnap.c)

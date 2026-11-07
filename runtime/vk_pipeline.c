@@ -79,7 +79,7 @@ static struct {
     struct { uint64_t links, wlinks, dlinks, requeued, link_fail, defer, lib_n[4], lib_fail, swaps, slow, pre_used[4]; double link_ms, link_max, lib_ms[4], lib_max[4], dlink_ms, dlink_max; } g;
     int vs_outs_all;                   // NX2NAVI_VS_OUTS: 0 union of paired fragment inputs, 1 (all) all 32 output locations
     int dyn_vi, dyn_clamp, dyn_poly, dyn_blend_en, dyn_blend_eq, dyn_wmask, dyn_a2c;
-    int f_logic_op, f_depth_clamp, f_fill_non_solid, f_dual_src;
+    int f_logic_op, f_depth_clamp, f_fill_non_solid, f_dual_src, f_full_subgroups;
     int pv_last;                       // provokingVertexLast enabled: NVN's default is the last vertex
     VkShaderStageFlags sg32_stages;    // stages that accept requiredSubgroupSize = 32 (0: not available)
     VkDynamicState dyn[32];
@@ -239,6 +239,7 @@ static int ensure_init(void) {
         rt_log("vk_pipeline: subgroup size %u-%u, requiredSubgroupSizeStages %#x, pinning %u on %#x", p13.minSubgroupSize,
                p13.maxSubgroupSize, (unsigned)p13.requiredSubgroupSizeStages, vk_caps.sg_size, (unsigned)P.sg32_stages);
     }
+    P.f_full_subgroups = v13.computeFullSubgroups;
     P.f_logic_op = f2.features.logicOp;
     P.f_depth_clamp = f2.features.depthClamp;
     P.f_fill_non_solid = f2.features.fillModeNonSolid;
@@ -875,6 +876,18 @@ static void pin_subgroup32(VkPipelineShaderStageCreateInfo *st, VkPipelineShader
     *rq = (VkPipelineShaderStageRequiredSubgroupSizeCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO, .requiredSubgroupSize = vk_caps.sg_size};
     st->pNext = rq;
+}
+
+// The x of a compute module's LocalSize (OpExecutionMode 17), 0 when it has none.
+static uint32_t local_size_x(const uint32_t *w, uint64_t words) {
+    for (uint64_t i = 5; w && i < words;) {
+        uint32_t op = w[i] & 0xffff, n = w[i] >> 16;
+        if (!n || i + n > words) return 0;
+        if (op == 16 && n >= 6 && w[i + 2] == 17) return w[i + 3];
+        if (op == 54) return 0;   // OpFunction: the execution modes are all before it
+        i += n;
+    }
+    return 0;
 }
 
 // Pool arrays (the translator's bindless texture and sampler arrays of VK_POOL_TEX / VK_POOL_SAMP elements, found by
@@ -2692,6 +2705,12 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l) {
                                                 .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = m, .pName = "main"},
                                       .layout = l->layout};
     pin_subgroup32(&ci.stage, &rqc, code, words);
+    // Subgroup operations in a workgroup whose width is a whole number of subgroups need every subgroup full: the
+    // driver may otherwise run partial ones, and a ballot over the culling's candidates then counted differently from
+    // one frame to the next
+    uint32_t lx = local_size_x(code, words);
+    if (P.f_full_subgroups && vk_caps.sg_size && lx && lx % vk_caps.sg_size == 0 && uses_subgroup_ops(code, words))
+        ci.stage.flags |= VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;
     VkPipeline pipe = VK_NULL_HANDLE;
     crash_note("a compute pipeline", cs, NULL, NULL);
     if (vkCreateComputePipelines(P.device, P.cache, 1, &ci, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;

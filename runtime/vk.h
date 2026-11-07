@@ -429,6 +429,10 @@ VkImage vk_tonemap_record(VkCommandBuffer cb, VkImage src, VkFormat sf, uint32_t
 // its storage address is created, dropped, released or taken back into use. Unlocked; read it before the lookup it
 // guards (a lookup may create an entry). 0 when the slot was never registered: nothing is kept under 0.
 uint64_t vk_texture_slot_token(int id);
+uint64_t vk_texture_same_regs(void);
+void vk_texture_bucket_stats(char *out, size_t n);   // diagnosis for the pool log (vk_texture.c)
+uint64_t vk_texture_slot_khash_locked(int id);       // vk_texture.c: descriptor hash of a GPU-written slot, 0 otherwise
+uint32_t vk_texture_entry_gen(void);                 // vk_texture.c: bumped by every entry change   // registrations that changed nothing (vk_texture_register), for the pool log
 // Slots whose token may have changed since *pos (0 at first; then the value these calls leave): fn is called for each
 // (some more than once) and *pos advanced. 0 when too many changes came since: the caller looks at every slot. *pos
 // from vk_texture_dirty_pos_locked after such a walk. Texture lock held.

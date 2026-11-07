@@ -291,6 +291,11 @@ NVN_API(nvnColorStateSetAlphaTest) {
     unsigned f = (unsigned)arg_x(c, 1);
     if (f > 15) rt_fatal("nvn: alpha func %u", f);
     ST(color_st)->alpha_func = f;
+    // the replay does not apply the test (vk_pipeline.c): say once that the game asks for one
+    if (f && f != NVN_ALPHA_FUNC_ALWAYS) {
+        static int once_;
+        if (!once_++) rt_log("nvn: SetAlphaTest %u: the alpha test is not applied", f);
+    }
 }
 // NVNboolean nvnColorStateGetBlendEnable(const NVNcolorState *s, int index)
 NVN_API(nvnColorStateGetBlendEnable) {
@@ -395,7 +400,10 @@ NVN_API(nvnCommandBufferSetSampleMask) {
 }
 // void nvnCommandBufferSetAlphaRef(NVNcommandBuffer *cmd, float ref): used only with the alpha test, which the replay
 // reports
-NVN_API(nvnCommandBufferSetAlphaRef) { (void)c; }
+NVN_API(nvnCommandBufferSetAlphaRef) {
+    static int once_;
+    if (!once_++) rt_log("nvn: SetAlphaRef %g: the alpha test is not applied", (double)arg_s(c, 0));
+}
 // void nvnCommandBufferSetDepthBounds(NVNcommandBuffer *cmd, NVNboolean enable, float min, float max): disabling is
 // exact; an enabled range is drawn without the test and reported
 NVN_API(nvnCommandBufferSetDepthBounds) {

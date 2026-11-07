@@ -74,6 +74,7 @@ typedef struct {
     uint32_t cepoch;
     view_t cview;
     uint8_t chas_view, used, has_view;
+    uint64_t khash;               // hash of the descriptor key and view, 0 for CPU-written textures (vk_texture_slot_khash_locked)
     view_t v;
     tex_t t;
 } TexSlot;
@@ -127,6 +128,7 @@ static uint32_t agen[AGEN_N];
 // 20 bits), unlike tslots, which moves when it grows.
 static uint64_t *sinfo;
 static uint32_t reg_serial;
+static uint64_t n_same_regs;   // vk_texture_register calls that changed nothing (vk_texture_same_regs)
 
 static uint32_t agen_idx(uint64_t addr) { return (uint32_t)(addr * 0x9E3779B97F4A7C15ull >> 48); }
 
@@ -145,7 +147,12 @@ static uint16_t *slot_bucket;
 
 static void dirty_push(uint32_t x) { dirty[ndirty++ % DIRTY_N] = x; }
 
+static uint64_t n_bumps, n_site[4];   // tex_gen_bump calls, by site: destroy, create, take-back, release   // tex_gen_bump calls, take-backs that undid a release's bump (vk_texture_bucket_stats)
+static uint32_t bump_count[AGEN_N];
+
 static void tex_gen_bump(uint64_t addr) {
+    n_bumps++;
+    bump_count[agen_idx(addr)]++;
     if (!++tex_gen) tex_gen = 1;
     slots_gen++;
     uint32_t b = agen_idx(addr);
@@ -617,6 +624,7 @@ static void rel_unlink(Tex *e) {
 
 static void destroy_tex(Tex *e) {
     own_remove(e);
+    n_site[0]++;
     tex_gen_bump(e->key.addr);
     nvn_hm_del(&by_key, &e->key);
     Tex *head = nvn_hm_get(&by_addr, &e->key.addr);
@@ -1062,9 +1070,10 @@ static Tex *entry_of(const tex_t *t) {
         e->next_at = nvn_hm_get(&by_addr, &k.addr);
         nvn_hm_put(&by_addr, &k.addr, e);
         nvn_hm_put(&by_key, &k, e);
+        n_site[1]++;
         tex_gen_bump(k.addr);
     }
-    if (e->released) e->released = 0, nreleased--, rel_unlink(e), tex_gen_bump(k.addr);
+    if (e->released) e->released = 0, nreleased--, rel_unlink(e), n_site[2]++, tex_gen_bump(k.addr);
     e->t = *t;
     return e;
 }
@@ -1158,6 +1167,7 @@ void vk_texture_release(const tex_t *t) {
         e->rel_serial = reg_serial;
         nreleased++;
         rel_append(e);
+        n_site[3]++;
         tex_gen_bump(k.addr);
         sweep_released();
     }
@@ -1199,6 +1209,16 @@ void vk_texture_register(int id, const tex_t *t, const view_t *v) {
         __atomic_store_n(&sinfo, p, __ATOMIC_RELEASE);
     }
     TexSlot *s = &tslots[id];
+    // The same texture and view registered again (Ocarina rewrites much of its descriptor pool every frame): the slot
+    // keeps its serial and resolved entry, so the texture pool refresh (vk_exec_draw.c pool_sync_entries) does not
+    // resolve it again. Only while that entry is live: after a release, a registration is what makes a slot current
+    // again (slot_resolve's stale rule), so it goes the full way.
+    if (s->used && s->ce && !s->ce->released && !memcmp(&s->t, t, sizeof *t) && s->has_view == (v != NULL) &&
+        (!v || !memcmp(&s->v, v, sizeof *v))) {
+        n_same_regs++;
+        unlock();
+        return;
+    }
     s->t = *t;
     s->used = 1;
     s->ce = NULL;
@@ -1210,8 +1230,25 @@ void vk_texture_register(int id, const tex_t *t, const view_t *v) {
     s->has_view = v != NULL;
     if (v) s->v = *v;
     else memset(&s->v, 0, sizeof s->v);
+    s->khash = 0;
+    if (!tex_mirrored(t)) {   // FNV-1a over the key (make_key zeroes its padding) and the view
+        TexKey k;
+        make_key(t, &k);
+        uint64_t h = 0xcbf29ce484222325ull;
+        const uint8_t *b = (const uint8_t *)&k;
+        for (size_t i = 0; i < sizeof k; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+        b = (const uint8_t *)&s->v;
+        for (size_t i = 0; i < sizeof s->v; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+        s->khash = (h ^ s->has_view) | 1;
+    }
     unlock();
 }
+
+// The descriptor hash of a GPU-written slot: two slots with equal hashes, the same address generation and no entry
+// created, destroyed, released or taken back between their lookups (vk_texture_entry_gen) resolve alike. 0 for an
+// unregistered or CPU-written slot (its resolution depends on when it was registered: slot_resolve's stale rule).
+uint64_t vk_texture_slot_khash_locked(int id) { return id >= 0 && id < ntslots && tslots[id].used ? tslots[id].khash : 0; }
+uint32_t vk_texture_entry_gen(void) { return tex_gen; }
 
 // The entry slot s resolves to, and the view and has_view a caller gets with it (the slot's, with the descriptor's
 // swizzle when the entry is another descriptor at the same storage). NULL when the slot names no texture.
@@ -1289,6 +1326,35 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
 void vk_texture_lock(void) { lock(); }
 void vk_texture_unlock(void) { unlock(); }
 uint32_t vk_texture_slots_gen(void) { return slots_gen; }
+uint64_t vk_texture_same_regs(void) { return __atomic_load_n(&n_same_regs, __ATOMIC_RELAXED); }
+
+// Diagnosis for the texture pool log: address-generation bumps since the last call, the slots of the fullest buckets
+// and the bumps those buckets took. Texture lock held by none: takes it.
+void vk_texture_bucket_stats(char *out, size_t n) {
+    lock();
+    static uint32_t occ[AGEN_N];
+    memset(occ, 0, sizeof occ);
+    for (int i = 0; i < ntslots && sinfo; i++)
+        if (tslots[i].used) occ[sinfo[i] & 0xffff]++;
+    int top[4] = {-1, -1, -1, -1};
+    for (int b = 0; b < AGEN_N; b++)
+        for (int k = 0; k < 4; k++)
+            if (top[k] < 0 || occ[b] > occ[top[k]]) {
+                for (int j = 3; j > k; j--) top[j] = top[j - 1];
+                top[k] = b;
+                break;
+            }
+    uint64_t hot = 0;   // bumps weighted by the slots they invalidate
+    for (int b = 0; b < AGEN_N; b++) hot += (uint64_t)bump_count[b] * occ[b];
+    snprintf(out, n, "%llu bumps (destroy %llu, create %llu, take-back %llu, release %llu), %llu slot invalidations; fullest buckets %u/%u/%u/%u slots, bumped %u/%u/%u/%u",
+             (unsigned long long)n_bumps, (unsigned long long)n_site[0], (unsigned long long)n_site[1],
+             (unsigned long long)n_site[2], (unsigned long long)n_site[3], (unsigned long long)hot, occ[top[0]], occ[top[1]], occ[top[2]], occ[top[3]],
+             bump_count[top[0]], bump_count[top[1]], bump_count[top[2]], bump_count[top[3]]);
+    n_bumps = 0;
+    memset(n_site, 0, sizeof n_site);
+    memset(bump_count, 0, sizeof bump_count);
+    unlock();
+}
 
 uint64_t vk_texture_slot_token(int id) {
     const uint64_t *si = __atomic_load_n(&sinfo, __ATOMIC_ACQUIRE);
