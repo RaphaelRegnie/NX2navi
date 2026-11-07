@@ -25,6 +25,7 @@
 #include "vk.h"
 #include "vk_dlaa.h"
 #include "vk_exec.h"
+#include "vk_ffx.h"
 #include "vk_rec.h"
 #include "dlaa_mv_spv.h"
 
@@ -111,6 +112,16 @@ int vk_dlaa_wanted(void) {
     return wanted;
 }
 
+// The temporal upscaler behind dlaa (NX2NAVI_TAA, read once: like dlaa it applies after a restart): NVIDIA DLSS through
+// NGX, or AMD FSR 3.1 through amd_fidelityfx_vk.dll (vk_ffx.cpp), which takes the same inputs and needs no device
+// extensions. The DLSS mode setting (NX2NAVI_DLSS) is the render scale for both.
+static int fsr3(void) {
+    static int on = -1;
+    if (on < 0) on = !strcmp(cfg_value("NX2NAVI_TAA"), "fsr3");
+    return on;
+}
+int vk_dlaa_fsr3(void) { return vk_dlaa_wanted() && fsr3(); }
+
 static int core_load(void) {
     if (N.tried) return N.loaded;
     N.tried = 1;
@@ -166,7 +177,7 @@ static int listed(const char *const *list, uint32_t n, const char *s) {
 void vk_dlaa_instance_exts(const char **ext, uint32_t *n, uint32_t max) {
     unsigned ni = 0, nd = 0;
     const char **ie = NULL, **de = NULL;
-    if (!vk_dlaa_wanted() || !core_load() || !NGX_OK(N.req_ext(&ni, &ie, &nd, &de))) return;
+    if (!vk_dlaa_wanted() || fsr3() || !core_load() || !NGX_OK(N.req_ext(&ni, &ie, &nd, &de))) return;
     for (unsigned i = 0; i < ni; i++)
         if (!listed(ext, *n, ie[i]) && *n < max) ext[(*n)++] = ie[i];
 }
@@ -175,7 +186,7 @@ void vk_dlaa_device_exts(const VkExtensionProperties *have, uint32_t nhave, cons
                          uint32_t max) {
     unsigned ni = 0, nd = 0;
     const char **ie = NULL, **de = NULL;
-    if (!vk_dlaa_wanted() || !core_load() || !NGX_OK(N.req_ext(&ni, &ie, &nd, &de))) return;
+    if (!vk_dlaa_wanted() || fsr3() || !core_load() || !NGX_OK(N.req_ext(&ni, &ie, &nd, &de))) return;
     for (unsigned i = 0; i < nd; i++) {
         int ok = 0;
         for (uint32_t k = 0; k < nhave && !ok; k++) ok = !strcmp(have[k].extensionName, de[i]);
@@ -225,6 +236,11 @@ static int utf8_to_wide(const char *in, wchar_t *out, size_t cap) {
 #endif
 
 void vk_dlaa_init(void) {
+    if (vk_dlaa_wanted() && fsr3()) {
+        N.available = vk_ffx_load();
+        rt_log("dlaa: the temporal upscaler is AMD FSR 3.1%s", N.available ? "" : ", which is missing: the game's own scaling");
+        return;
+    }
     if (!vk_dlaa_wanted() || !core_load()) return;
 #ifdef _WIN32
     wchar_t wdir[MAX_PATH];
@@ -378,7 +394,7 @@ static void free_size(struct Size *e) {
         if (e->chars_view[i]) vkDestroyImageView(c->device, e->chars_view[i], NULL);
         if (e->chars[i]) vmaDestroyImage(c->vma, e->chars[i], e->chars_mem[i]);
     }
-    if (e->feat) N.release(e->feat);
+    if (e->feat && N.release) N.release(e->feat);
     memset(e, 0, sizeof *e);
 }
 
@@ -1027,7 +1043,7 @@ static void evaluate(VkExec *ex, const VkExecTarget *dst) {
     struct Size *e = size_for(cb, w, h, ow, oh);
     if (!e) return dl_fail("work image creation", 0);
     if (e != D.last) D.reset = 1, D.why[0]++, e->chars_ok = 0;   // another size's history is from another moment
-    if (!D.params && !NGX_OK(N.alloc_params(&D.params))) return dl_fail("parameter allocation", 0);
+    if (!fsr3() && !D.params && !NGX_OK(N.alloc_params(&D.params))) return dl_fail("parameter allocation", 0);
     NgxParam *p = D.params;
     VkImageView zv = vk_exec_target_view(z->img, z->format, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT, z->level,
                                          z->base_layer, 1, 0);
@@ -1050,6 +1066,21 @@ static void evaluate(VkExec *ex, const VkExecTarget *dst) {
     uint64_t c0 = timed ? kern_now_ns() : 0;
     rec_drain();   // NGX records into the command buffer itself: the recorder thread must have made every call so far
     if (timed) T.cpu_drain += kern_now_ns() - c0;
+    if (fsr3()) {   // FSR 3.1 (vk_ffx.cpp) in DLSS's place: the same images, then the same blit below
+        if (t->level || t->base_layer || z->level || z->base_layer) return dl_fail("FSR 3.1 on a target that is not level 0, layer 0", 0);
+        if (D.last_color != t->image) D.reset = 1, D.why[2]++, D.last_color = t->image;
+        uint64_t now = plat_now_ns();
+        double dt = D.last_eval_ns ? (now - D.last_eval_ns) / 1e6 : 0;
+        D.last_eval_ns = now;
+        VkFfxImage fc = {t->image, t->format, w, h, 0}, fz = {z->image, z->format, w, h, 0},
+                   fm = {e->mv, VK_FORMAT_R16G16_SFLOAT, w, h, 1}, fo = {e->out, VK_FORMAT_R16G16B16A16_SFLOAT, ow, oh, 1};
+        if (!vk_ffx_upscale(cb, &fc, &fz, &fm, &fo, jx, jy, D.reset, dt > 0 && dt < 100 ? (float)dt : 16.67f, 0))
+            return dl_fail("FSR 3.1", 0);
+        static int told;
+        if (!told++) rt_log("dlaa: FSR 3.1 at %ux%u -> %ux%u (scene format %d, depth format %d)", w, h, ow, oh,
+                            (int)t->format, (int)z->format);
+        goto evaluated;
+    }
     if (!e->feat) {
         p_setu(p, "CreationNodeMask", 1);
         p_setu(p, "VisibilityNodeMask", 1);
@@ -1115,6 +1146,7 @@ static void evaluate(VkExec *ex, const VkExecTarget *dst) {
     NgxResult r = N.evaluate(cb, e->feat, p, NULL);
     if (timed) T.cpu_ngx += kern_now_ns() - c0;
     if (!NGX_OK(r)) return dl_fail("DLSS evaluation", r);
+evaluated:
     if (timed) times_mark(cb, T_DL1);   // through the recorder, after NGX's own commands
     D.reset = 0;
     D.last = e, e->used = D.evals + 1;
@@ -1177,7 +1209,13 @@ void vk_dlaa_pass(VkExec *ex) {
     // The G-buffer: several colour targets with the D32F scene depth. Only the light target drawn after it arms the
     // frame; at night the game draws into the light target alone with the scene depth before the G-buffer too, and
     // DLAA then ran at a small pass ahead of the whole scene, which reached the screen jittered.
-    if (ex->pass_ncolor >= 3 && scene) {
+    // A pass of that shape smaller than the light target already armed is not one: Ocarina draws a half-size effect
+    // into three targets with a half-size D32F depth after its scene, and taking that for a G-buffer switched every
+    // later frame to the deferred shape, where DLSS's and FSR 3.1's smaller modes never found their output pass.
+    if (ex->pass_ncolor >= 3 && scene && !(D.armed && (z->width < D.color.width || z->height < D.color.height))) {
+        if (!deferred)
+            rt_log("dlaa: a G-buffer pass (%d colour targets, depth %ux%u, target 0 format %d): the deferred frame shape",
+                   ex->pass_ncolor, z->width, z->height, c->image ? (int)c->format : 0);
         D.gbuf = 1, D.armed = 0, deferred = 1;
         // target 0 is the object-class buffer (RGBA8, the scene size): the characters' bias mask reads its green. A
         // smaller pass of the same shape (640x360, seen while loading) does not replace the scene's in the same frame.
@@ -1195,6 +1233,10 @@ void vk_dlaa_pass(VkExec *ex) {
         (!D.armed || (c->width >= D.color.width && c->height >= D.color.height)) && c->samples <= 1 && !c->is3d) {
         int first = !D.armed;
         D.color = *c, D.depth = *z, D.armed = 1;
+        static int told;
+        if (first && !told++)
+            rt_log("dlaa: first scene armed: light target %ux%u format %d, depth %ux%u", c->width, c->height, (int)c->format,
+                   z->width, z->height);
         if (first) mask_snapshot(ex);   // the lit scene, before the transparents (reactive mask)
         return;
     }

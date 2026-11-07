@@ -7,6 +7,7 @@
 #define DLAA_SCENE_MIN_W 320u
 
 int vk_dlaa_wanted(void);   // the setting is on (the device may still lack DLSS)
+int vk_dlaa_fsr3(void);     // ... and its temporal upscaler is AMD FSR 3.1 (NX2NAVI_TAA = fsr3) instead of DLSS
 // vk_device.c: NGX's instance and device extensions join the lists (room for max names); vk_dlaa_init after the
 // device exists brings NGX up and checks that DLSS is available.
 void vk_dlaa_instance_exts(const char **ext, uint32_t *n, uint32_t max);

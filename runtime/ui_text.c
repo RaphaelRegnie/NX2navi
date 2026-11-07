@@ -165,7 +165,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_DLSS_DESC] = "DLAA draws the 3D scene at full resolution. Quality, Balanced, Performance and Ultra "
                           "Performance draw it at 67, 58, 50 and 33 % and let DLSS scale it up, which saves GPU time; "
                           "they replace the 3D render scale. Takes effect at once.",
-    [UI_MENU_DLSS_DLAA] = "DLAA (native)", [UI_MENU_DLSS_QUALITY] = "Quality", [UI_MENU_DLSS_BALANCED] = "Balanced",
+    [UI_MENU_DLSS_DLAA] = "DLAA (native)", [UI_MENU_FSR3_NATIVE] = "Native AA", [UI_MENU_DLSS_QUALITY] = "Quality", [UI_MENU_DLSS_BALANCED] = "Balanced",
     [UI_MENU_DLSS_PERFORMANCE] = "Performance", [UI_MENU_DLSS_ULTRA] = "Ultra Performance",
     [UI_MENU_FXAA] = "Game anti-aliasing (FXAA)",
     [UI_MENU_FXAA_DESC] = "The game's own FXAA edge smoothing. It blurs fine detail a little; with DLAA on it is not needed.",
@@ -508,9 +508,11 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                "NVIDIA DLSS (RTX GPUs; " DLSS_FILE " next to the game's .exe) renders the 3D scene at "
                                "its mode's share of the picture and scales it up with NVIDIA's newest model for the mode: "
                                "DLAA 100 %, Quality 67 %, Balanced 58 %, Performance 50 %, Ultra Performance 33 %. The "
-                               "HUD is not touched. Turning DLSS on or off takes effect after a restart; the mode changes "
-                               "at once.",
-    [UI_MENU_UPSCALING_DLSS_NOTE] = "DLSS on or off: after restart",
+                               "HUD is not touched. AMD FSR 3.1 (any GPU; amd_fidelityfx_vk.dll next to the game's .exe) "
+                               "works the same way, with Native AA at 100 % and the same shares for its other modes. "
+                               "Turning DLSS or FSR 3.1 on or off, or changing between them, takes effect after a "
+                               "restart; the mode changes at once.",
+    [UI_MENU_UPSCALING_DLSS_NOTE] = "DLSS or FSR 3.1 on or off: after restart",
     [UI_MENU_GAME_RES] = "Resolution",
     [UI_MENU_GAME_RES_DESC] = "The height of the game's picture: 1440p is the game's own; higher draws a sharper picture "
                               "and its scene in proportion, at a matching cost on the graphics card. Native: the "

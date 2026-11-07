@@ -393,6 +393,8 @@ def step_compile(out, cache, msys, jobs):
     shutil.copy2(gen / 'romfs-index.bin', out / 'romfs-index.bin')
     for name in ('nx2navi_xlate.exe', 'nx2navi_xlate.id'):
         shutil.copy2(KIT / 'bin' / name, out / name)
+    if (KIT / 'bin' / 'amd_fidelityfx_vk.dll').is_file():   # FSR 3.1 (runtime/vk_ffx.cpp)
+        shutil.copy2(KIT / 'bin' / 'amd_fidelityfx_vk.dll', out / 'amd_fidelityfx_vk.dll')
     say(f'  ocarina.exe {exe.stat().st_size / 1e6:.0f} MB; beside it: {", ".join(copy_dlls(exe, msys / "bin", out))}')
     (out / 'profile').mkdir(exist_ok=True)
 

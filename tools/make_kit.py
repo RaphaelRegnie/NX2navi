@@ -33,6 +33,7 @@ def copy_tree(src, dst):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--xlate', type=Path, required=True, help='folder with nx2navi_xlate.exe and nx2navi_xlate.id')
+    ap.add_argument('--ffx', type=Path, help='AMD's signed amd_fidelityfx_vk.dll (FidelityFX SDK 1.1.4, MIT) for FSR 3.1')
     ap.add_argument('--out', type=Path, default=ROOT / 'build' / 'kit')
     ap.add_argument('--zip', action='store_true')
     a = ap.parse_args()
@@ -52,6 +53,8 @@ def main():
     (kit / 'bin').mkdir()
     for n in ('nx2navi_xlate.exe', 'nx2navi_xlate.id'):
         shutil.copy2(a.xlate / n, kit / 'bin' / n)
+    if a.ffx:   # FSR 3.1 loads it from beside the game (runtime/vk_ffx.cpp); its licence is runtime/third_party/ffx_api
+        shutil.copy2(a.ffx, kit / 'bin' / 'amd_fidelityfx_vk.dll')
     sys.path.insert(0, str(ROOT / 'tools'))
     import check_content
     bad = [f'{p.relative_to(kit)}: {m}' for p in sorted(kit.rglob('*')) if p.is_file()

@@ -731,24 +731,30 @@ static void row_upscaling(void) {
     static const char *const modes[] = {"dlaa", "quality", "balanced", "performance", "ultra_performance"};
     static const UiTextId mode_names[] = {UI_MENU_DLSS_DLAA, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED,
                                           UI_MENU_DLSS_PERFORMANCE, UI_MENU_DLSS_ULTRA};
-    static char dl[5][96];
-    const char *names[7] = {menu_text(UI_MENU_UPSCALER_BILINEAR), menu_text(UI_MENU_UPSCALER_FSR)};
+    // FSR 3.1's modes take the same render scales as DLSS's (Native AA is FSR's name for DLAA's full size)
+    static const UiTextId fsr_names[] = {UI_MENU_FSR3_NATIVE, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED,
+                                         UI_MENU_DLSS_PERFORMANCE, UI_MENU_DLSS_ULTRA};
+    static char dl[10][96];
+    const char *names[12] = {menu_text(UI_MENU_UPSCALER_BILINEAR), menu_text(UI_MENU_UPSCALER_FSR)};
     for (int i = 0; i < 5; i++) {
         snprintf(dl[i], sizeof dl[i], i ? "DLSS %s" : "NVIDIA %s", menu_text(mode_names[i]));
-        names[2 + i] = dl[i];
+        snprintf(dl[5 + i], sizeof dl[5 + i], "AMD FSR 3.1 %s", menu_text(fsr_names[i]));
+        names[2 + i] = dl[i], names[7 + i] = dl[5 + i];
     }
     int cur = strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") ? 0 : 1;
     if (cfg_bool("NX2NAVI_DLAA")) {
-        cur = 2;
+        int base = strcmp(cfg_value("NX2NAVI_TAA"), "fsr3") ? 2 : 7;
+        cur = base;
         for (int i = 0; i < 5; i++)
-            if (!strcmp(cfg_value("NX2NAVI_DLSS"), modes[i])) cur = 2 + i;
+            if (!strcmp(cfg_value("NX2NAVI_DLSS"), modes[i])) cur = base + i;
     }
-    int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, 7, cur, 1, UI_MENU_UPSCALING_DESC,
+    int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, 12, cur, 1, UI_MENU_UPSCALING_DESC,
                               cur >= 2 ? menu_text(UI_MENU_UPSCALING_DLSS_NOTE) : nullptr);
     if (nv < 0) return;
     opt_apply("NX2NAVI_UPSCALER", nv == 1 ? "fsr" : "bilinear");
     opt_apply("NX2NAVI_DLAA", nv >= 2 ? "1" : "0");
-    if (nv >= 2) opt_apply("NX2NAVI_DLSS", modes[nv - 2]);
+    if (nv >= 2) opt_apply("NX2NAVI_DLSS", modes[(nv - 2) % 5]);
+    if (nv >= 2) opt_apply("NX2NAVI_TAA", nv >= 7 ? "fsr3" : "dlss");
 }
 
 // The picture's height (widescreen.c picture_height): the game's 1440 or more.
