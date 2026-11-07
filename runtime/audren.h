@@ -1,5 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/audio_renderer.h and audio_mixer.h @ b75be8c (MIT, Copyright (c)
-// 2026 MacNativeGames contributors). Wire layouts follow the public audren:u wire format.
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+// Wire layouts follow the public audren:u wire format.
 // audren:u, the audio renderer service: RequestUpdate wire formats, the server-side
 // renderer state, and the mixer interface (audio_mixer.c: the real mixer with SDL3 output).
 #pragma once

@@ -1,5 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/ipc.h @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors). Message framing per the HIPC, CMIF and TIPC wire layouts.
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+// Message framing per the HIPC, CMIF and TIPC wire layouts.
 // In-process Horizon IPC: HIPC messages with CMIF or TIPC payloads, answered in
 // place in the caller's message buffer. Services are host implementations looked up by name through sm:.
 #pragma once

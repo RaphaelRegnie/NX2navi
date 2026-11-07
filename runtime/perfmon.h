@@ -2,9 +2,8 @@
 // from the perf counters, and the machine's CPU, memory and GPU load and temperatures. A value the machine does not give
 // is negative.
 //
-// Adapted from SavageWindRecomp's runtime/perfmon.h (https://github.com/Revivedx/SavageWindRecomp @
-// 575ad88e02f9a89a9a885d90039d48af33c982f4, MIT, Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors,
-// Copyright (c) 2026 Peiikai).
+// Contains code Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors, Copyright (c) 2026 Peiikai (MIT; see
+// THIRD_PARTY_NOTICES.md).
 #pragma once
 #include <stdint.h>
 

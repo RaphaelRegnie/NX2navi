@@ -1,5 +1,5 @@
-﻿// Adapted from MacNativeGames games/<game>/runtime/ipc.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors). Message framing per the HIPC, CMIF and TIPC wire layouts.
+﻿// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+// Message framing per the HIPC, CMIF and TIPC wire layouts.
 // In-process Horizon IPC: SVCs 0x15, 0x1F, 0x21, 0x22, the sm: service manager
 // and the service table. The SDK client code runs unchanged: requests are read from the calling thread's message
 // buffer (TLR, or the user buffer of 0x22) and answered in place. Unknown ports, services and commands stop with their

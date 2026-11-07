@@ -3,12 +3,9 @@
 // re-uploads when page write generations (vk_memory.c) show the storage written, ReadTexels / WriteTexels, the texture
 // and sampler descriptor slots, and VkSamplers.
 //
-// Behaviour ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn @ b75be8cf (MIT, Copyright (c) 2026
-// jhaizhou; origin d2r-mobile): which textures mirror their pool memory (nvn_mtl.m tex_mirrored, 3347-3362), the
-// "GPU-owned" rule that stops re-uploads once the GPU rendered into a mirrored texture (nvn_mtl.m tex_mtl, 3366-3372),
-// the live texture at a storage address that a slot of a finalized texture follows (hle_nvn.c:373-393), and
-// ReadTexels / WriteTexels (nvn_mtl.m:10105-10195). Image creation, upload regions and samplers are ported from LAS
-// Recomp runtime/nvn/vulkan/textures.c:235-330, 778-844 @ da35b83a (MIT, Copyright (c) 2026 Peiikai).
+// A texture that mirrors its pool memory (tex_mirrored) stops re-uploading once the GPU rendered into it (the
+// "GPU-owned" rule); a slot of a finalized texture follows the live texture at its storage address.
+// Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 //
 // Every image lives in VK_IMAGE_LAYOUT_GENERAL. Uploads are recorded into the upload batch of vk_memory.c; the replay
 // submits it (vk_upload_flush) before a submission that samples the textures.

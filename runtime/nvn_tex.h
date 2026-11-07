@@ -1,5 +1,5 @@
 // NVN texture storage layout (Tegra X1 block-linear), see nvn_tex.c.
-// Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_tex.h @ b75be8cf (zlib, deko3d-derived; see nvn_tex.c).
+// Contains altered code Copyright (C) 2018-2020 fincs (zlib, license text in nvn_tex.c; see THIRD_PARTY_NOTICES.md).
 // nvn_texdesc and nvn_texlayout are defined in nvn_obj.h.
 #pragma once
 #include <stdint.h>

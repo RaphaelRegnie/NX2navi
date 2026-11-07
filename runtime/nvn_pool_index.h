@@ -1,5 +1,4 @@
-// Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_pool_index.h @ b75be8cf (MIT, Copyright (c)
-// 2026 jhaizhou; origin d2r-mobile); code unchanged, the Metal residency note of `res` generalised.
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 #pragma once
 /* NX2NAVI: memory pools sorted by guest address.
    The world scene keeps about 3,200 pools alive, and the replay resolves several dozen buffer addresses per draw

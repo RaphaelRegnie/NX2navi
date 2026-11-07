@@ -1,6 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/frontend.m (nn::vi, lines 345-359) and gfx_bridge.c (nv, lines
-// 74-86) @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames contributors). The nvnBootstrapLoader stop is the entry
-// to the NVN layer.
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+// The nvnBootstrapLoader stop is the entry to the NVN layer.
 // Graphics bring-up:
 //   nv::*        record the game's allocator callbacks and graphics work memory (guest addresses) for the NVN layer
 //   nn::vi::*    display, layer and native window identities; the vsync event is bound here

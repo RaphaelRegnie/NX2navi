@@ -241,7 +241,7 @@ static void test_cv_key_order(Cpu *c) {
     r = cv_order_case(c, 1);
     seen = g_seen_key;
     int lost = seen == 0 && r == KERN_R_TIMEOUT;
-    printf("condvar key order, negative control (MNG's old order, release then set the key): signaller saw key %d, "
+    printf("condvar key order, negative control (the old order, release then set the key): signaller saw key %d, "
            "waiter result %#x: %s\n", seen, r, lost ? "lost wakeup, fails as expected" : "FAIL (the control did not "
            "fail)");
     CHECK(lost, "the old-order negative control did not lose the wakeup");

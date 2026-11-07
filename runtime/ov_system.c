@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/services.c (lines 208-302), applet_host.c, account.c, time_host.c and
-// shared_font.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // System service overrides: nn::oe, applet, am, prepo, nfp, err, aoc, pctl, diag,
 // account, time and pl, and the six observers. Nothing here talks to a Horizon service; each call is answered by the
 // host. Stub rule: queries and initialisation succeed with neutral values, data paths stop with a named fatal.

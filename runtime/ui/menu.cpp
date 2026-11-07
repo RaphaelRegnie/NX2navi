@@ -2,14 +2,14 @@
 // end on our device and the menu's pages. Free of any window system (menu.h). ImGui runs on the present path only,
 // under gfx_present.c's present lock; the event functions only queue.
 //
-// The Vulkan set-up follows LAS Recomp's runtime/nvn/vulkan/imgui_glue.cpp (https://github.com/peiikai/LASRecomp @
-// da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai): dynamic rendering into the swapchain
-// image, an internal descriptor pool, vertex buffers rotated over more frames than are in flight.
+// The Vulkan set-up: dynamic rendering into the swapchain image, an internal descriptor pool, vertex buffers rotated
+// over more frames than are in flight.
 //
-// The look (colours, rounding, the tab bar with L / R and Q / E, the window over a dimmed game) follows
-// SavageWindRecomp's runtime/ui/menu.mm (https://github.com/Revivedx/SavageWindRecomp @
-// 575ad88e02f9a89a9a885d90039d48af33c982f4, MIT, Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors,
-// Copyright (c) 2026 Peiikai); the pages are rows of option_rows.cpp.
+// The look: colours, rounding, the tab bar with L / R and Q / E, the window over a dimmed game. The pages are rows of
+// option_rows.cpp.
+//
+// Contains code Copyright (c) 2026 Peiikai, Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors (MIT; see
+// THIRD_PARTY_NOTICES.md).
 #include <atomic>
 #include <limits.h>
 #include <math.h>

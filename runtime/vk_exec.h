@@ -3,8 +3,7 @@
 // (vk_exec_draw.c) and copies, counters, events and conditional rendering (vk_exec_xfer.c) plug in through the two
 // hooks at the bottom.
 // Runs on the submitting thread under vk_sync_submit's lock: no locking inside.
-// The op loop follows MacNativeGames nvn_mtl.m (MIT, Copyright (c) 2026 jhaizhou) and the pass handling LAS Recomp
-// (MIT, Copyright (c) 2026 Peiikai); vk_exec.c names the sources.
+// Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 #pragma once
 #include <stdint.h>
 

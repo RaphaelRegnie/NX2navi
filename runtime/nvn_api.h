@@ -1,6 +1,6 @@
 // Internal header of the NVN front end, shared by nvn_api_core.c and the other
-// slices (textures, samplers, programs, windows, state objects, command buffers). Adapted from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/hle_nvn.c and nvn_impl.h @ b75be8cf
-// (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile).
+// slices (textures, samplers, programs, windows, state objects, command buffers).
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 #pragma once
 #include <stdint.h>
 

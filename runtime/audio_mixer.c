@@ -1,7 +1,7 @@
-// Adapted from MacNativeGames games/<game>/runtime/audio_mixer.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors): the mixing stage (voice decode and resampling, splitters, mixes, effects, sinks) and the IAudioDevice
-// service. The CoreAudio output is replaced by SDL3 audio. Effect algorithms follow
-// Ryujinx.Audio (MIT, Copyright (c) Ryujinx Team and Contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) Ryujinx Team and Contributors (MIT; see
+// THIRD_PARTY_NOTICES.md).
+// The mixing stage (voice decode and resampling, splitters, mixes, effects, sinks) and the IAudioDevice service, with
+// SDL3 audio output.
 //
 // Per 5 ms frame the render thread (audren.c, renderer lock held) decodes every started voice (PCM8/16/24/32, float,
 // DSP-ADPCM) along the sample path the voice clock consumes, resamples it linearly, runs the voice biquads, scales it

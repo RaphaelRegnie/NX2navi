@@ -1,5 +1,5 @@
-// ASTC LDR 2D decode to RGBA8 on the GPU, one invocation per texel. Ported from runtime/tex_astc.c (itself from LAS
-// Recomp runtime/nvn/astc.c @ da35b83a, MIT, Copyright (c) 2026 Peiikai), so the output is the same bytes as
+// ASTC LDR 2D decode to RGBA8 on the GPU, one invocation per texel. Contains code Copyright (c) 2026 Peiikai (MIT; see
+// THIRD_PARTY_NOTICES.md). Ported from runtime/tex_astc.c, so the output is the same bytes as
 // astc_decode_ldr and astcenc's 8-bit decode: endpoints expand to 16 bits (linear v * 257, sRGB v << 8 | 0x80),
 // texel = (e0 * (64 - w) + e1 * w + 32) >> 6, top 8 bits. Error blocks are magenta; HDR endpoint modes give magenta
 // endpoints for their partition.

@@ -1,6 +1,5 @@
-﻿// Adapted from MacNativeGames games/<game>/runtime/loader.c (lines 456-477) and services.c (lines 219-235) @ b75be8cf
-// (MIT, Copyright (c) 2026 MacNativeGames contributors) and LAS Recomp runtime/main.c (lines 16-35, 141-159) @
-// da35b83 (MIT, Copyright (c) 2026 Peiikai).
+﻿// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 Peiikai (MIT; see
+// THIRD_PARTY_NOTICES.md).
 // The boot driver: the guest main thread runs the game's own nn::init::Start
 // with three host callbacks, the second of which runs DT_INIT of main, subsdk0 and sdk; Start then calls nnMain.
 // --boot checks two checkpoints on the way and ends at the first nvnBootstrapLoader call, at the return address of

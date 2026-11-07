@@ -1,4 +1,4 @@
-// Adapted from LAS Recomp runtime/simd_fp.h @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+// Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 // FP helpers for one precision; included twice by simd.h (F = s/float, d/double). No include guard.
 // Scalar entry points take/return T, vector ones VT (all lanes; callers zero the unused half for Q=0).
 

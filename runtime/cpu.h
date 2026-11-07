@@ -1,4 +1,4 @@
-// Adapted from LAS Recomp runtime/cpu.h @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+// Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 // Guest CPU state and helpers used by recompiled code.
 #pragma once
 #include <stddef.h>

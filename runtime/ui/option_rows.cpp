@@ -1,10 +1,9 @@
 // Two-pane settings pages (option_rows.h): rows on the left, the selected or hovered row's description on the right.
 //
-// Adapted from SavageWindRecomp's runtime/ui/option_rows.mm (https://github.com/Revivedx/SavageWindRecomp @
-// 575ad88e02f9a89a9a885d90039d48af33c982f4, MIT, Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors,
-// Copyright (c) 2026 Peiikai): the row look, the two panes, the left / right stepping and the hold speed-up. The rows
-// read and write cfg keys instead of a settings struct, take their text from the menu catalog (menu_text), and show
-// the default, "after restart" and environment notes; the text field, radio and on-screen keyboard rows are not ported.
+// Contains code Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors, Copyright (c) 2026 Peiikai (MIT; see
+// THIRD_PARTY_NOTICES.md).
+// The rows read and write cfg keys, take their text from the menu catalog (menu_text), and show the default, "after
+// restart" and environment notes.
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

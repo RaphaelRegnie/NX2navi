@@ -1,6 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/audio_renderer.c @ b75be8c (MIT, Copyright (c) 2026
-// MacNativeGames contributors). Its voice lifetime (play state, wave buffer release, flush) is ported from
-// Ryujinx.Audio VoiceInfo / DataSourceHelper (MIT, Copyright (c) Ryujinx Team and Contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) Ryujinx Team and Contributors (MIT; see
+// THIRD_PARTY_NOTICES.md).
 // audren:u. The SDK's nn::audio client builds RequestUpdate input unchanged; this
 // service validates every section against the header, keeps server-side voice state, advances it in real time (one
 // frame of sample_count / sample_rate seconds per render tick, signalling the renderer's event) and writes the output

@@ -1,5 +1,5 @@
-/* Additional DSP effects. Wire layouts and algorithms follow Ryujinx.Audio
-   (MIT, third_party/licenses/Ryujinx-Audio.txt). No device or guest-memory access. */
+/* Additional DSP effects. Contains code Copyright (c) Ryujinx Team and Contributors (MIT; see
+   third_party/licenses/Ryujinx-Audio.txt). No device or guest-memory access. */
 #pragma once
 #include <stdint.h>
 #include <stddef.h>

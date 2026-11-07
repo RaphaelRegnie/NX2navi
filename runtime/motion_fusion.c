@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/motion_fusion.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // Six-axis sensor states (nn::hid::SixAxisSensorState) from gyro and accelerometer samples. Input per sample, in the
 // Switch controller frame (x to the right, y toward the top edge, z out of the face): acceleration in G including
 // gravity, as gravity reads (lying face up z = -1 G), and rotation rate in rad/s. Output per sample, as the Switch

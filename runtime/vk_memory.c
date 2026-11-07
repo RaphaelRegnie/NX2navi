@@ -2,12 +2,10 @@
 // buffers, the virtual-pool page table, GPU address resolution, page write generations for re-uploads, and the
 // upload batch (command buffer, staging buffers, deferred destruction) that vk_texture.c records into.
 //
-// Behaviour ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nx2navi_vpool.c (request checks, unmap
-// semantics, 64 KiB pages) and nvn_dirty.c (generation stamps: a texture is stale when a covered page carries a
-// generation newer than its upload), @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile); and from LAS
-// Recomp runtime/nvn/vulkan/exec.c:2094-2131 (vk_pages_changed: every write-watch query resets the OS bits, so each
-// query stamps the pages it saw with a new generation shared by all users) and textures.c:240-270 (deferred
-// destruction) @ da35b83a (MIT, Copyright (c) 2026 Peiikai). Virtual pools are a GPU-side page table
+// Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
+// Virtual pools have 64 KiB pages. A texture is stale when a covered page carries a generation newer than its upload;
+// every write-watch query resets the OS bits, so each query stamps the pages it saw with a new generation shared by all
+// users. Virtual pools are a GPU-side page table
 // over device-local memory and dirty pages come from GetWriteWatch (mem_written_pages), so neither host VM aliasing
 // nor page protection (a fault handler) is needed.
 #include <stdio.h>

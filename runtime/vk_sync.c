@@ -5,12 +5,9 @@
 // effects queued for each value (event writes, counter reports, sync state), then frees the memory and texture objects whose users
 // completed. A value counts as done only after its side effects ran, so a guest woken by fence_wait sees them.
 //
-// The submission shape (one timeline value per submission, signalled at ALL_COMMANDS, vkWaitSemaphores for waits, a
-// failed wait treated as a lost device) follows LAS Recomp runtime/nvn/vulkan/exec.c:39-110, 355-397
-// (https://github.com/peiikai/LASRecomp @ da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai).
-// Side effects written after GPU completion, as MacNativeGames does: games/<game>/third_party/d2r_gfx/gfx/nvn/hle_nvn.c:7-9
-// (https://github.com/ly05010419/MacNativeGames @ b75be8cfa704df3701e86130c8ced268e79d6b11, MIT, Copyright (c) 2026
-// jhaizhou; origin d2r-mobile).
+// One timeline value per submission, signalled at ALL_COMMANDS; waits use vkWaitSemaphores, and a failed wait is
+// treated as a lost device.
+// Contains code Copyright (c) 2026 Peiikai, Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 #include <stdlib.h>
 #include <string.h>
 

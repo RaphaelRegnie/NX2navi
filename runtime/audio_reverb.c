@@ -1,7 +1,6 @@
-// Adapted from MacNativeGames games/<game>/runtime/audio_reverb.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames contributors).
-/* Compatible 3D reverb network, based on Ryujinx.Audio's Reverb3dState/Command,
-   DelayLine3d and DecayDelay. Copyright (c) Ryujinx Team and Contributors.
-   MIT license: third_party/licenses/Ryujinx-Audio.txt. Samples are normalized floats. */
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+/* Compatible 3D reverb network. Contains code Copyright (c) Ryujinx Team and Contributors (MIT; see
+   third_party/licenses/Ryujinx-Audio.txt). Samples are normalized floats. */
 #include "audio_reverb.h"
 #include "host.h"
 #include <math.h>

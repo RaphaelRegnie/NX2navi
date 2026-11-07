@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/fs_host.h @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // The nn::fs host layer: the read-only RomFS (romfs.c) and writable save, temporary and
 // cache storage under the profile directory (fs_host.c). Both register their nn::fs overrides with HOST_OVERRIDE;
 // this header is what the two files and the probe share.

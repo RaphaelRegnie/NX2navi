@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/opus_codec.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // The hardware Opus decoder (nn::codec), decoded with libopus on the host. The software keyboard (nn::swkbd) is
 // in swkbd_win.c.
 #include <stdint.h>

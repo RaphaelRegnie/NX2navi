@@ -1,8 +1,7 @@
 ﻿// NVN front end, first slice: device, queue, memory pool, buffer, sync and
-// event objects. Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/hle_nvn.c @ b75be8cf (MIT,
-// Copyright (c) 2026 jhaizhou; origin d2r-mobile), lines 137-253, 534-645 and 1975-2001; Metal, mach, the translation
-// thread and Apple diagnostics dropped. Calls that reached Metal go to gfx_backend() (gfx.h). nvnQueuePresentTexture
-// belongs to the window slice; nvnDeviceGetProcAddress lives in nvn_procs.c.
+// event objects. Back-end calls go to gfx_backend() (gfx.h). nvnQueuePresentTexture belongs to the window slice;
+// nvnDeviceGetProcAddress lives in nvn_procs.c.
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 //
 // Objects are stored in place in the NVN object memory the game provides (nvn_obj.h); every argument is read from the
 // AAPCS64 registers (host.h arg_x / arg_p) and every result returned with ret_x.

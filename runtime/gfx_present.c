@@ -1,9 +1,7 @@
 // Vulkan surface and swapchain, present blit, 60 Hz vsync thread, focus: the window-system-free half of the window
 // (the other half: gfx_window_win.c with Win32, gfx_window_sdl.c with SDL, through gfx_wsys.h).
-// Swapchain set-up ported from LAS Recomp, runtime/nvn/vulkan/device.c:254-330 (https://github.com/peiikai/LASRecomp @
-// da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai). Focus and vsync behaviour from
-// MacNativeGames, games/<game>/runtime/frontend.m:88-97, 175-176, 350-352 (https://github.com/ly05010419/MacNativeGames @
-// b75be8cfa704df3701e86130c8ced268e79d6b11, MIT, Copyright (c) 2026 MacNativeGames contributors).
+// Contains code Copyright (c) 2026 Peiikai, Copyright (c) 2026 MacNativeGames contributors (MIT; see
+// THIRD_PARTY_NOTICES.md).
 //
 // Threads: the window thread (the back end's) owns the window and never runs guest code. The vsync thread signals the
 // bound system events. Presents come from any host thread (the back end's present worker) and take g_pl; every queue

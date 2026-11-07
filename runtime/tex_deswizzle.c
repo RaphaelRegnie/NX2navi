@@ -1,5 +1,5 @@
 // Tegra X1 block-linear <-> linear copies.
-// Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.c @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); comments translated, the copy loop split out as tex_bl_copy.
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 //
 // Layout (from public descriptions):
 //   GOB = 64 bytes x 8 rows = 512 bytes; offset of (x byte, y row) within a GOB =

@@ -1,7 +1,6 @@
 // Vulkan instance, physical device choice, logical device, VMA, timeline semaphore and the validation messenger.
-// Ported from LAS Recomp, runtime/nvn/vulkan/device.c:33-330
-// (https://github.com/peiikai/LASRecomp @ da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai),
-// without SDL. The VMA implementation is runtime/vk_vma.cpp (VMA is C++ only).
+// Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
+// The VMA implementation is runtime/vk_vma.cpp (VMA is C++ only).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

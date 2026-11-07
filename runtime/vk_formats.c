@@ -1,6 +1,6 @@
 // NVN format -> VkFormat for the textures of the graphics layer.
-// Ported from the format table of LAS Recomp runtime/nvn/vulkan/textures.c @ da35b83a (MIT, Copyright (c) 2026 Peiikai).
-// Differences from the original table: the table is indexed by the NVNformat values of nvn.h and covers all of them, ASTC decodes to
+// Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
+// The table is indexed by the NVNformat values of nvn.h and covers all of them, ASTC decodes to
 // RGBA8 unless the device samples it (vk_astc.c, NX2NAVI_ASTC), D24S8 is always D32S8 (no probing: the RX 9070 lacks
 // it), 3-component formats expand to 4 components, and formats with no Vulkan equivalent are reported with a reason.
 #include <string.h>

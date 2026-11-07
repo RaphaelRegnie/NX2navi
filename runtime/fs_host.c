@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/fs_host.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // nn::fs host implementation of the functions main imports. RomFS paths and
 // handles go to the read-only backend (romfs.c); save, temporary and cache storage are host directories under the
 // profile directory (rt_config()->profile, default build/profile):

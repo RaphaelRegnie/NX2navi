@@ -1,9 +1,8 @@
 // Game resolution: the size the game composes its frame in (its output: canvas, UI and swapchain) and the size of its
 // 3D scene, above the shipped 1920x1080 and 1600x900. The game does the rendering itself, as with the community
-// resolution mods: the patch sets output and scene (recomp/patches-v121.txt,
-// patches-v143.txt; MacNativeGames games/<game>/runtime/game_patches.c and game_patches_v143.c, MIT, Copyright (c) 2026
-// MacNativeGames contributors) make the game read both sizes from the patch page, and the texture heap that holds the
-// output- and scene-sized render targets grows with them.
+// resolution mods: the patch sets output and scene (recomp/patches-v121.txt, patches-v143.txt) make the game read both
+// sizes from the patch page, and the texture heap that holds the output- and scene-sized render targets grows with them.
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 //
 // Settings, read at start: NX2NAVI_OUTPUT_RES = <w>x<h> (default 1920x1080, the game's own), NX2NAVI_RENDER_SCALE = the
 // scene's size relative to the output: "game" (default, 5/6, the game's 1600x900 at 1080p) or a percentage; above 100

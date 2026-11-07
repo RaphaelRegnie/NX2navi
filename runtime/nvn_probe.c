@@ -10,8 +10,7 @@
 //   - the proc table: every name of nvn_procs.inc resolves to its own synthetic address, an unknown name to NULL;
 //   - named fatal stubs stop with their name, each in a child process (this executable again, NX2NAVI_PROBE_NVN_CHILD).
 // The 40 layout goldens themselves are run by --probe-nvn-tex against nvn_tex.c; here four of them go through the procs.
-// Ported in part from MacNativeGames games/<game>/tests/texture_auto_layout/probe.c @ b75be8cf (MIT, Copyright (c) 2026
-// jhaizhou; origin d2r-mobile): the golden metadata, which holds no game bytes.
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md). The golden metadata holds no game bytes.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -157,7 +156,7 @@ static void probe_buffers(void) {
     CALL(nvnBufferBuilderSetStorage, U(&bufb), U(&pool), 0x100, 0x200);
     CHECK((uint8_t)CALL(nvnBufferInitialize, U(&buf), U(&bufb)) == 1, "BufferInitialize");
     CHECK(CALL(nvnBufferGetAddress, U(&buf)) == U(pmem) + 0x100 && CALL(nvnBufferMap, U(&buf)) == U(pmem) + 0x100,
-          "buffer address and map are pool storage + offset (MNG hle_nvn.c:237, 248)");
+          "buffer address and map are pool storage + offset");
     CHECK(CALL(nvnBufferGetSize, U(&buf)) == 0x200 && CALL(nvnBufferGetMemoryOffset, U(&buf)) == 0x100 &&
               CALL(nvnBufferGetMemoryPool, U(&buf)) == U(&pool), "buffer size, offset and pool");
     CALL(nvnBufferFlushMappedRange, U(&buf), 0, 0x200);

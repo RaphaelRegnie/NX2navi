@@ -1,4 +1,4 @@
-// Adapted from LAS Recomp runtime/hle.h and runtime/dispatch.c @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+// Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 // Host functions at synthetic guest addresses: the HOST_OVERRIDE / HOST_OBSERVER
 // linker tables, the registry behind them, and the calls between host and guest (rt_call, rt_original).
 //

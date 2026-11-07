@@ -1,5 +1,4 @@
-// Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_hmap.h @ b75be8cf (MIT, Copyright (c) 2026
-// jhaizhou; origin d2r-mobile); Chinese duplicate comments dropped, code unchanged.
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 //
 // Open-addressing hash table from fixed-length byte keys -> pointers (linear probing + backward shift on deletion, no
 // tombstones). The replay hot path uses it instead of a boxed dictionary: keys are not boxed, no allocation, a lookup

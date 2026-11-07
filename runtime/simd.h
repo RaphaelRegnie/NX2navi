@@ -1,4 +1,4 @@
-// Adapted from LAS Recomp runtime/simd.h @ da35b83 (MIT, Copyright (c) 2026 Peiikai).
+// Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 // Portable C lowering of AArch64 FP / AdvSIMD / crypto / CRC32 (tools/simd_c.py emits calls with constant
 // fields; everything is always_inline so the size/lane/op switches fold at -O1).
 // Semantics follow the ARM pseudocode, not the host: NaN propagation (first signalling NaN quietened, then

@@ -1,10 +1,10 @@
-// Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_obj.h and the two types of nvn_tex.h @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile); Metal entry points dropped, layouts unchanged.
-// NVN host-side object layout and command record format: shared by hle_nvn.c (interface layer, writes) and nvn_mtl.m (Metal replay layer, reads).
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
+// NVN host-side object layout and command record format: shared by the interface layer (writes) and the replay layers (reads).
 // Objects are stored in place in the NVN object memory allocated by the game, with size not exceeding the reserved size in nvn.h (FITS static assertion).
 // State objects (Blend / Color / ... 4–0x18 bytes) are small structs the game copies by value; their layout is packed in place with bit-fields.
 //
-// In this port the interface layer is runtime/nvn_api_*.c and nvn_ext.c, and the replay layers are the back ends of
-// gfx.h (GfxBackend).
+// The interface layer is runtime/nvn_api_*.c and nvn_ext.c, and the replay layers are the back ends of gfx.h
+// (GfxBackend).
 #pragma once
 #include <stddef.h>
 #include <stdint.h>

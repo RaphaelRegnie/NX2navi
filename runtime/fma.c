@@ -5,7 +5,7 @@
 // without FMA3 the UCRT's software fallback is documented as rounding incorrectly by up to half an ulp, while the FP
 // lowering needs the single rounding the ARM instruction gives. This file supplies it.
 //
-// Adapted from musl src/math/fma.c and src/math/fmaf.c (MIT, Copyright (c) 2005-2020 Rich Felker and contributors).
+// Contains code Copyright (c) 2005-2020 Rich Felker and contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // The result is rounded in the MXCSR rounding mode the caller set (simd.h simd_rm_enter), and MXCSR FTZ and DAZ are
 // honoured as the hardware FMA would, so runtime/simd.h's fast paths keep their assumptions: denormal inputs read as
 // zero and denormal results as zero under FPCR.FZ, without a trip through the slow path.
@@ -95,7 +95,7 @@ static void fma_mul(uint64_t *hi, uint64_t *lo, uint64_t x, uint64_t y) {
     *hi = t3 + (t2 >> 32) + (t1 > *lo);
 }
 
-// scalbn from musl src/math/scalbn.c (MIT): the fma's final scaling, kept here so the result does not depend on the
+// scalbn: the fma's final scaling, kept here so the result does not depend on the
 // C runtime's version. Its multiplications honour MXCSR like any other host FP operation.
 static double fma_scalbn(double x, int n) {
     union { double f; uint64_t i; } u;

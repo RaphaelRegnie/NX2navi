@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/services.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors), lines 304-382.
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // The SVC entry of the lifted code: preemption checkpoint, trace, then the thread and
 // synchronization SVCs (kernel.c), IPC (ipc.c), memory (memory.c), Break, OutputDebugString, GetInfo and ExitProcess. The 21 SVCs
 // NX2navi has but never reaches on its boot path stop with a named fatal, the caller and the guest backtrace.

@@ -1,8 +1,6 @@
-// Adapted from MacNativeGames games/<game>/runtime/audio_effects.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames contributors).
-// Algorithms from Ryujinx.Audio (MIT, Copyright (c) Ryujinx Team and Contributors).
-/* Delay, standard reverb and compressor DSP, ported from Ryujinx.Audio.
-   Copyright (c) Ryujinx Team and Contributors. MIT license:
-   third_party/licenses/Ryujinx-Audio.txt. Runtime samples are normalized floats. */
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+/* Delay, standard reverb and compressor DSP. Contains code Copyright (c) Ryujinx Team and Contributors (MIT; see
+   third_party/licenses/Ryujinx-Audio.txt). Runtime samples are normalized floats. */
 #include "audio_effects.h"
 #include "host.h"
 #include <math.h>

@@ -35,12 +35,9 @@
 // class, depth clip mode, logic op and what is not dynamic on the GPU. The VkPipelineCache persists to
 // pipeline-cache.bin next to nx2navi.exe (NX2NAVI_PIPELINE_CACHE overrides the path).
 //
-// Provenance: the NVN -> Vulkan enum mappings (blend factors and equations, compare functions, stencil ops), the vertex
-// format table with its 3-component fallback and the pipeline cache file handling follow LAS Recomp
-// runtime/nvn/vulkan/exec.c and device.c @ da35b83a (MIT, Copyright (c) 2026 Peiikai); the pipeline state the key holds
-// (program, target formats, blend and write masks, vertex layout, sample count) and the varying fix-up follow
-// MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m pso_key_fill / pso_desc / msl_varyings and its vfmt
-// table @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); the binding conventions are those of the shader translator.
+// The vertex format table has a 3-component fallback. The pipeline key holds the program, target formats, blend and
+// write masks, vertex layout and sample count. The binding conventions are those of the shader translator.
+// Contains code Copyright (c) 2026 Peiikai, Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/romfs.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // Read-only game RomFS backed by the player's extracted image.
 //
 // Input: <romfs>/romfs.bin (rt_config()->romfs), whose six IVFC levels and SHA-256 tools/extract.py verified, and

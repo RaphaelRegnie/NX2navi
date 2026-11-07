@@ -5,14 +5,10 @@
 // stay in VK_IMAGE_LAYOUT_GENERAL (vk_texture.c); full memory barriers order passes, clears and whatever those two
 // record between them.
 //
-// The op loop (END / BEGIN / JUMP / CALL, which ops are pure state, the state defaults, render targets kept until they
-// change, clears skipped while rendering is disabled) follows MacNativeGames
-// games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m:10588-10700, 7409-7460, 5449-5457
-// (https://github.com/ly05010419/MacNativeGames @ b75be8cfa704df3701e86130c8ced268e79d6b11, MIT, Copyright (c) 2026
-// jhaizhou). Pass begin and end (GENERAL-layout attachments, LOAD/STORE, render area from the smallest attachment, a
-// full barrier before each pass), the scissor clip and attachment clears follow LAS Recomp
-// runtime/nvn/vulkan/exec.c:855-1149, 3553-3778 (https://github.com/peiikai/LASRecomp @
-// da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai).
+// The op loop handles END / BEGIN / JUMP / CALL and the pure-state ops, applies the state defaults, keeps render targets
+// until they change and skips clears while rendering is disabled. A pass has GENERAL-layout attachments, LOAD/STORE and
+// a render area from the smallest attachment, with a full barrier before it.
+// Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>

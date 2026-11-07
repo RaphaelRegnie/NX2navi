@@ -1,7 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/swkbd_host.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors): the ShowKeyboardArg offsets, the UTF-8/UTF-16 conversions, the disabled-key filter and the result codes.
-// The macOS text bar is replaced by a window of the host (swkbd.h text_entry_run: swkbd_win.c with Win32, swkbd_sdl.c
-// with SDL).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+// The text entry is a window of the host (swkbd.h text_entry_run: swkbd_win.c with Win32, swkbd_sdl.c with SDL).
 //
 // nn::swkbd::ShowKeyboard: text entry for the game. On the Switch the call starts the keyboard library applet, which
 // takes the screen until the player confirms or cancels. NX2navi calls it in one place, naming a horse at a stable

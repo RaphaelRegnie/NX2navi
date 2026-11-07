@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/input.c and hid_feedback.c @ b75be8cf (MIT, Copyright (c) 2026
-// MacNativeGames contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // nn::hid overrides: one connected controller fed by input_poll (gamepad and keyboard,
 // runtime/input_win.c; nothing pressed with NX2NAVI_INPUT=none). Docked (default) it is a full-key controller as player 1 (id 0, style bit 0); with
 // NX2NAVI_OPERATION_MODE=handheld it is the handheld controller (id 0x20, style bit 1) and player 1 is not connected,

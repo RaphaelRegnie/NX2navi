@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/movie_host.h @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // What ov_movie.c (the host movie::Decoder) and movie_probe.c share. The game reaches the decoder through the
 // HOST_OVERRIDE entries named in movie_symbols; the probe calls the same entries with a Cpu of its own and stand-ins for
 // the guest functions the decoder calls.

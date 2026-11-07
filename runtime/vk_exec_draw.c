@@ -10,11 +10,8 @@
 // reported with vk_gpu_written, from one completion callback once the submission's fence is done (the write watch
 // does not see GPU writes). Nothing here locks: it runs on the submitting thread under vk_sync_submit's lock.
 //
-// Provenance: the op semantics (bind ops, program and slot conventions, draw and dispatch flow, vertex streams with a
-// zeroed buffer for unbound ones) follow MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m:7409-7460,
-// 9365-9488, 9489-9921, 10013-10079 @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou); the uniform-buffer spans, texture and
-// sampler descriptor lookups and the dispatch flow follow LAS Recomp runtime/nvn/vulkan/exec.c:1851-1908, 2300-2516
-// @ da35b83a (MIT, Copyright (c) 2026 Peiikai). The support buffer layout is the translator's SupportBuffer.
+// Unbound vertex streams read a zeroed buffer. The support buffer layout is the translator's SupportBuffer.
+// Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -1113,7 +1110,7 @@ static VkDescriptorBufferInfo ubo_info(VkExec *ex, int st, int slot) {
 // (cbuf_slot 0, handle = word offset): 16-byte entries at byte 0x110 (vertex), 0x510 (fragment) and 0x310 (compute).
 // A compute address at c0 0x210..0x30f is uniform block (offset - 0x210) / 16 read as storage: *ubo is set. -1: the
 // address is not in c0 (the shader loads it from a user uniform block: ubo_ptr) or the stage has no known table.
-// Mapping: MacNativeGames games/<game>/tools/nx2navi_xlate/Service.cs:206-222 @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou).
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 static int ssbo_slot(const GfxShaderRes *r, int st, int *ubo) {
     *ubo = 0;
     if (r->cbuf_slot != 0) return -1;

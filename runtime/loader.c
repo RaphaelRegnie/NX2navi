@@ -1,6 +1,5 @@
-// Adapted from LAS Recomp runtime/loader.c @ da35b83 (MIT, Copyright (c) 2026 Peiikai) and MacNativeGames
-// games/<game>/runtime/loader.c and scripts/prepare_runtime.py @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 Peiikai, Copyright (c) 2026 MacNativeGames contributors (MIT; see
+// THIRD_PARTY_NOTICES.md).
 // NSO loading at the fixed layout bases, dynamic linking with host overrides, the nnMain identity check, sealing,
 // and --probe-loader.
 //

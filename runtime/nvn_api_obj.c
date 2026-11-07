@@ -1,8 +1,6 @@
 // NVN front end, second slice: descriptor pools, textures, samplers, programs,
-// windows with present pacing, and the state objects. Ported from MacNativeGames
-// games/<game>/third_party/d2r_gfx/gfx/nvn/hle_nvn.c @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile),
-// lines 254-535, 1775-1829, 2070-2215 and 2579-2727, and nvn_pace.h; Metal, mach, the translation thread, frame
-// interpolation and Apple diagnostics dropped. Calls that reached Metal go to gfx_backend() (gfx.h).
+// windows with present pacing, and the state objects. Back-end calls go to gfx_backend() (gfx.h).
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 //
 // Objects are stored in place in the NVN object memory the game provides (nvn_obj.h); every argument is read from the
 // AAPCS64 registers (host.h arg_x / arg_s / arg_p) and every result returned with ret_x. Command-buffer procs are in

@@ -28,11 +28,7 @@
 // renders.
 // Copies and CLEAR_TEX are not conditional.
 //
-// The copy semantics (region and layer arithmetic, row and image strides, whole-level clears, copy / blit / resolve
-// choice) follow MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m:10080-10368, 10618-10642, 1700-1725
-// (https://github.com/ly05010419/MacNativeGames @ b75be8cfa704df3701e86130c8ced268e79d6b11, MIT, Copyright (c) 2026
-// jhaizhou) and LAS Recomp runtime/nvn/vulkan/exec.c:3045-3235 (https://github.com/peiikai/LASRecomp @
-// da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai).
+// Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>

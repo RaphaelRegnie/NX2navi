@@ -1,6 +1,5 @@
-﻿// Adapted from MacNativeGames games/<game>/runtime/services.c and loader.c @ b75be8c (MIT, Copyright (c) 2026
-// MacNativeGames contributors), and LAS Recomp runtime/main.c and platform/windows.c @ da35b83 (MIT, Copyright (c)
-// 2026 Peiikai).
+﻿// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 Peiikai (MIT; see
+// THIRD_PARTY_NOTICES.md).
 // Guest address space and the memory SVCs: heap, module data permissions, stack moves,
 // QueryMemory, physical memory in the alias region, GetInfo memory ids, and the kernel-region allocator.
 //

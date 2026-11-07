@@ -1,8 +1,7 @@
 // NVN entry points beyond the core implementation that only report stored object state, attach debugging metadata,
 // convert timestamps or take hardware hints. None of them changes rendering
-// results. Ported from MacNativeGames games/<game>/third_party/d2r_gfx/gfx/nvn/nx2navi_nvn_ext.c @ b75be8cf (MIT,
-// Copyright (c) 2026 jhaizhou; origin d2r-mobile); mach timing and Metal wording dropped. Its *Deferred binds and
-// memory-callback switches live with the command buffer in nvn_api_cmd.c.
+// results. The *Deferred binds and memory-callback switches live with the command buffer in nvn_api_cmd.c.
+// Contains code Copyright (c) 2026 jhaizhou (MIT; see THIRD_PARTY_NOTICES.md).
 #include <stdint.h>
 #include <string.h>
 

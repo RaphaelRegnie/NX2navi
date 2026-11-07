@@ -1,5 +1,5 @@
 // NVN texture storage size / alignment / per-level offsets (Tegra X1 block-linear layout).
-// Based on deko3d source/dk_image.cpp (zlib license, Copyright (C) 2018-2020 fincs), reproduced below as in MNG's LICENSE.deko3d.
+// Contains altered code Copyright (C) 2018-2020 fincs (zlib, license text below; see THIRD_PARTY_NOTICES.md).
 //
 // Copyright (C) 2018-2020 fincs
 //
@@ -21,7 +21,7 @@
 //    distribution.
 //
 // Storage size / alignment / per-level offsets of NVN textures (Tegra X1 block-linear layout).
-// Based on deko3d source/dk_image.cpp (zlib license, Copyright (C) 2018-2020 fincs), with NVN SDK integer rounding for automatic tile height:
+// Automatic tile height uses NVN SDK integer rounding:
 //   one GOB = 64 bytes × 8 rows = 512 bytes; the block height (tileH, in GOBs) is picked by 'height×1.5'; levels are accumulated with block alignment.
 // The game's packaged textures (SetPackagedTextureLayout) carry 8 bytes of layout parameters: byte 0 = log2 of the block height (derived by comparing 16 cases from the real game,
 // 4 of which differ from the automatic algorithm); when present it takes precedence.

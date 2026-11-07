@@ -1,5 +1,4 @@
-// From MacNativeGames games/<game>/runtime/romfs_path.h @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // RomFS path validation shared by the runtime (romfs.c) and its probe (fs_host.c probe_fs).
 #pragma once
 #include <stddef.h>

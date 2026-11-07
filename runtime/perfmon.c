@@ -5,16 +5,12 @@
 // from the GPU vendor's driver library, loaded at run time: NVML on NVIDIA, ADL's PM log on AMD; on a machine without
 // either their numbers stay -1.
 //
-// Adapted from SavageWindRecomp's runtime/perfmon.c (https://github.com/Revivedx/SavageWindRecomp @
-// 575ad88e02f9a89a9a885d90039d48af33c982f4, MIT, Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors,
-// Copyright (c) 2026 Peiikai): the frame ring and its one-second summary, the NVML calls, the sampler loop. The
-// Windows, Linux and macOS sampling moved behind platform.h, GPU load and video memory come from the system's counters
-// for every vendor, and the sampler stops when the overlay leaves full.
+// Contains code Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors, Copyright (c) 2026 Peiikai (MIT; see
+// THIRD_PARTY_NOTICES.md). GPU load and video memory come from the system's counters for every vendor; the sampler
+// stops when the overlay leaves full.
 //
 // The ADL declarations (AdapterInfo, ADLSingleSensorData, ADLPMLogDataOutput, the ADL_PMLOG_* sensor numbers and the
-// ADL2_* signatures) are copied from AMD's display-library include/adl_structures.h, adl_defines.h and adl_sdk.h
-// (https://github.com/GPUOpen-LibrariesAndSDKs/display-library @ 84c881cb2136f04287eb3af12de00a9e2867aa9e, MIT,
-// Copyright (c) 2016 - 2022 Advanced Micro Devices, Inc.).
+// ADL2_* signatures) contain code Copyright (c) 2016 - 2022 Advanced Micro Devices, Inc. (MIT; see THIRD_PARTY_NOTICES.md).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

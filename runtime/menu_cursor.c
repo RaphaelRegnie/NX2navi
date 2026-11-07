@@ -6,10 +6,9 @@
 // screens are read and the focus is moved with the three writes eui::BoxCursorMgr::moveBoxCursor makes, so the game's
 // own BoxCursorControl moves the box at its next update.
 //
-// Adapted from Weeping of the Empire's engine/runtime/nx2navi_menu_cursor.cpp @ df0586cdc5702ca19bbebfa59697e0b6980f6237
-// (https://github.com/daniel-madrid-07/weeping-of-the-empire), Copyright (c) 2026 daniel-madrid-07, MIT License: the
-// focus read, the hit test, the stale-hit-pane fallback and the focus writes, which it does for 1.0.0.
-// Placed in 1.4.3 by hand:
+// Contains code Copyright (c) 2026 daniel-madrid-07 (MIT; see THIRD_PARTY_NOTICES.md).
+// The focus read, the hit test, the stale-hit-pane fallback and the focus writes were written for 1.0.0. Placed in
+// 1.4.3 by hand:
 //  - eui::ScreenMgr::sInstance: 1.0.0 main+0x4640010, 1.4.3 main+0x3acf960 (its createInstance main+0xc613d4 and
 //    constructor main+0xc61450 match 1.0.0's main+0x119c5cc / +0x119c648 instruction for instruction, the object
 //    0x450 bytes with the same field stores, so its layout is 1.0.0's);

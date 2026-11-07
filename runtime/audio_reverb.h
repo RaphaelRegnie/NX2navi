@@ -1,5 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/audio_reverb.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors), based on Ryujinx.Audio (MIT, Copyright (c) Ryujinx Team and Contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) Ryujinx Team and Contributors (MIT; see
+// THIRD_PARTY_NOTICES.md).
 #ifndef NX2NAVI_AUDIO_REVERB_H
 #define NX2NAVI_AUDIO_REVERB_H
 #include <stdint.h>

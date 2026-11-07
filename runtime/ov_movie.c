@@ -1,5 +1,4 @@
-// Adapted from MacNativeGames games/<game>/runtime/movie_host.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
-// contributors).
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
 // movie::Decoder for VP9 on the host with libvpx (BSD-3-Clause, linked statically).
 // NX2navi's pre-rendered movies (Event/Movie/*.webm, 28 files: VP9 profile 0, 1920x1080, 30 fps, video only) play through
 // the SDK movie library in subsdk0, Android's MediaCodec over NVIDIA NvMM. Its decoder opens NVDEC through NvRm, whose

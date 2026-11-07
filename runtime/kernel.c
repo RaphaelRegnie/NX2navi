@@ -1,7 +1,5 @@
-// Adapted from MacNativeGames games/<game>/runtime/threads.c @ b75be8c (MIT, Copyright (c) 2026 MacNativeGames
-// contributors; itself from d2r-mobile dm/host/hle_thread.c), d2r-mobile dm/host/thread.c @ 53e7c5b (MIT, Copyright
-// (c) 2026 jhaizhou) and LAS Recomp runtime/kernel.c @ da35b83 (MIT, Copyright (c) 2026 Peiikai); the preemption of
-// virtual cores from MacNativeGames threads.c @ 33e8fa8 (MIT, as above).
+// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT;
+// see THIRD_PARTY_NOTICES.md).
 // Threads, synchronization, virtual cores and fibers of the Horizon kernel.
 //
 // One guest thread = one Windows thread with a 256 MiB reserved host stack (every guest BL is a host call) and its own
@@ -350,8 +348,8 @@ static int core_allowed(const RtThread *t, int c) {
 }
 
 // ---- asynchronous preemption (NX2NAVI_ASYNC_PREEMPT, on unless 0)
-// Adapted from MacNativeGames games/<game>/runtime/threads.c @ 33e8fa8 (8bf0893, PR #488; MIT, Copyright (c) 2026
-// MacNativeGames contributors): Horizon gives a core to a strictly better thread the moment that thread is ready.
+// Contains code Copyright (c) 2026 MacNativeGames contributors (MIT; see THIRD_PARTY_NOTICES.md).
+// Horizon gives a core to a strictly better thread the moment that thread is ready.
 // Here a better waiter only marks the owner, which gives the core up at its next SVC or indirect call; an owner in a
 // stretch of game code with neither keeps it (NX2NAVI_CORE_DIAG: 0.5-1.1 ms of thread-time per frame, waits to 16 ms and
 // more). With it on, three parts, all of them necessary:
@@ -1073,8 +1071,8 @@ void kern_core_back(int *away) {
 }
 
 // ---- spin waits (recomp/patches.py `spin` lines, found by tools/spin_waits.py)
-// Adapted from MacNativeGames games/<game>/runtime/threads.c runtime_spin_wait @ a038e6b and nxnative dm/host/hle_thread.c
-// dm_spin_wait @ 6d34984 (MIT, Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 seedds).
+// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 seedds (MIT; see
+// THIRD_PARTY_NOTICES.md).
 // A pass of a guest loop that polls memory until another thread changes it. On the Switch it fills only its own core,
 // where a better thread pinned there preempts it; here it holds a virtual core and a host core, and pollers that take a
 // lock on every pass hand its cache line between their host cores so the thread whose item it is rarely gets it
