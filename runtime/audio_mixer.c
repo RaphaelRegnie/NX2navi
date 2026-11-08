@@ -156,7 +156,9 @@ static void ring_pull(Mixer *m, float *out, uint32_t frames) {
     }
     uint64_t prefill = (uint64_t)m->frame * (uint64_t)m->prefill;
     if (prefill < frames) prefill = frames;
-    if (prefill > RING_FRAMES) prefill = RING_FRAMES;
+    // no more than the target the renderer fills the ring to (output_open caps it at half the ring): a longer
+    // prefill (audio_prefill_ms of 180 and up) was never reached, and the output stayed silent for good
+    if (prefill > RING_FRAMES / 2) prefill = RING_FRAMES / 2;
     if (!m->ready) {
         if (have < prefill) {
             memset(out, 0, (size_t)frames * oc * sizeof(float));
@@ -575,8 +577,12 @@ static void walk_step(Walk *w) {   /* the same transitions as advance_voice in a
     walk_skip_empty(w);
 }
 /* Decodes `frames` output samples per channel into out[c][k]; the renderer advances the voice afterwards by the same amount. */
+// Source samples per output sample. The guest's sample rate and pitch are not checked: an infinite or huge step
+// would keep the per-sample loops below (audio_voice_consumed, voice_render) running for good under the renderer's
+// lock, so it is held to 64 source samples per output sample, far above any pitch the game asks for.
 static double voice_step(const AudioRenderer *r, const ServerVoice *v) {
-    return v->in.sample_rate * (v->in.pitch > 0 ? v->in.pitch : 1.0) / r->param.sample_rate;
+    double step = v->in.sample_rate * (v->in.pitch > 0 ? v->in.pitch : 1.0) / r->param.sample_rate;
+    return step >= 0 && step <= 64 ? step : step > 64 ? 64 : 0;   // NaN: no progress
 }
 /* Source samples the voice consumes over `frames` output samples, counted with the exact accumulation voice_render steps by
    (float rounding makes `fraction + seconds * rate * pitch` differ from it by one sample on some frames, a seam click);
@@ -918,7 +924,8 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
             raw[2 * k] = s[0] * gain; raw[2 * k + 1] = s[1] * gain;   /* NX2NAVI_AUDIO_DUMP: the front pair before clipping */
             for (int c = 0; c < oc; c++) {
                 float x = s[c] * gain;
-                out[oc * k + c] = x > 1 ? 1 : x < -1 ? -1 : x;
+                // NaN (a NaN sample, an effect's state gone NaN) reaches the device as silence, not full scale
+                out[oc * k + c] = x > 1 ? 1 : x < -1 ? -1 : x == x ? x : 0;
             }
         }
         sink_dump(raw, frames);
