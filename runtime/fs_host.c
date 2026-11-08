@@ -626,6 +626,12 @@ static void storage_init(void *param) {
     uint64_t uid[2];
     char p[PATH_CAP];
     make_dirs(profile);
+    // One game per profile: a second one's start would take the first one's commit in progress for an interrupted
+    // one and delete it, and both would write into one working copy (save-tx/work), losing or mixing their saves.
+    snprintf(p, sizeof p, "%s/instance.lock", profile);
+    int held = plat_lock_file(p);
+    if (!held) rt_fatal("fs: another copy of the game is running with the profile %s; close it first", profile);
+    if (held < 0) rt_log("fs: cannot make %s; a second copy of the game would not be stopped", p);
     account_uid(uid);
     snprintf(p, sizeof p, "%s/save", profile);
     make_dirs(p);
@@ -1810,6 +1816,9 @@ static void probe_storage(void) {
     CHECK(RES(S_DELETE_CACHE, 3) == 0, "DeleteCacheStorage");
     CALL(S_UNMOUNT, U("save"));
 
+    char lock[PLAT_PATH_MAX * 3 + 96];
+    snprintf(lock, sizeof lock, "%s/instance.lock", dir);
+    plat_unlock_file(lock);   // storage_init's one-game-per-profile lock, held open until given back
     int removed = !remove_tree(dir) && !exists(dir);
     CHECK(removed, "the temporary profile was not deleted");
     printf("storage: save create/write/commit/reopen, directories, rename/delete, temporary and cache storage in a "

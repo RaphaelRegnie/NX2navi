@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -729,6 +730,49 @@ int plat_file_replace(const char *from, const char *to) {
     if (rename(from, to)) return 0;
     sync_dir_of(to);
     return 1;
+}
+
+static char lock_held[4][1100];
+static int lock_fd[4];
+static int lock_n;
+static PlatMutex lock_lock = PLAT_MUTEX_INIT;
+
+int plat_lock_file(const char *path) {
+    plat_mutex_lock(&lock_lock);
+    int r = 1, nheld = lock_n;
+    for (int i = 0; i < nheld; i++)
+        if (!strcmp(lock_held[i], path)) goto done;
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);   // open until plat_unlock_file or the process ends
+    if (fd < 0) {
+        r = -1;
+        goto done;
+    }
+    if (flock(fd, LOCK_EX | LOCK_NB)) {
+        r = errno == EWOULDBLOCK ? 0 : -1;
+        close(fd);
+        goto done;
+    }
+    if (nheld < 4) {
+        snprintf(lock_held[nheld], sizeof lock_held[0], "%s", path);
+        lock_fd[nheld] = fd;
+        lock_n = nheld + 1;
+    }
+done:
+    plat_mutex_unlock(&lock_lock);
+    return r;
+}
+
+void plat_unlock_file(const char *path) {
+    plat_mutex_lock(&lock_lock);
+    for (int i = 0; i < lock_n; i++)
+        if (!strcmp(lock_held[i], path)) {
+            close(lock_fd[i]);
+            lock_n--;
+            memmove(&lock_held[i], &lock_held[i + 1], sizeof lock_held[0] * (size_t)(lock_n - i));
+            memmove(&lock_fd[i], &lock_fd[i + 1], sizeof lock_fd[0] * (size_t)(lock_n - i));
+            break;
+        }
+    plat_mutex_unlock(&lock_lock);
 }
 
 int plat_file_write_atomic(const char *path, const void *data, size_t n) {

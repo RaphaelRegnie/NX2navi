@@ -288,6 +288,10 @@ int plat_file_replace(const char *from, const char *to);  // rename, replacing t
 // Writes path.<pid>.<tid>.tmp, flushes it to the disk and renames it over path: a crash leaves the old file or the new
 // one, never a torn or zero-filled one. 1 on success.
 int plat_file_write_atomic(const char *path, const void *data, size_t n);
+// Takes the file at path (made when missing) as a lock no other process can take, held until this process ends:
+// 1 held (again, when this process holds it already), 0 another process holds it, -1 the file cannot be made.
+int plat_lock_file(const char *path);
+void plat_unlock_file(const char *path);   // gives a lock plat_lock_file took back (probes, before deleting it)
 int plat_file_flush(const char *path);                   // flushes a written file's data to the disk; 1 on success
 int plat_file_sync(FILE *f);                              // fflush, then the file's data to the disk; 1 on success
 // fseek and ftell with 64-bit offsets (a long is 32 bits on Windows).

@@ -527,6 +527,49 @@ int plat_file_replace(const char *from, const char *to) {
     return MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 }
 
+static char lock_held[4][1100];
+static HANDLE lock_handle[4];
+static int lock_n;
+static PlatMutex lock_lock = PLAT_MUTEX_INIT;
+
+int plat_lock_file(const char *path) {
+    plat_mutex_lock(&lock_lock);
+    int r = 1, nheld = lock_n;
+    for (int i = 0; i < nheld; i++)
+        if (!strcmp(lock_held[i], path)) goto done;
+    wchar_t w[WPATH];
+    // no sharing at all: a second process's open fails with a sharing violation; the handle stays open until
+    // plat_unlock_file or the process ends
+    HANDLE h = widen(path, w, WPATH) ? CreateFileW(w, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
+                                                   FILE_ATTRIBUTE_NORMAL, NULL)
+                                     : INVALID_HANDLE_VALUE;
+    if (h == INVALID_HANDLE_VALUE) {
+        r = GetLastError() == ERROR_SHARING_VIOLATION ? 0 : -1;
+        goto done;
+    }
+    if (nheld < 4) {
+        snprintf(lock_held[nheld], sizeof lock_held[0], "%s", path);
+        lock_handle[nheld] = h;
+        lock_n = nheld + 1;
+    }
+done:
+    plat_mutex_unlock(&lock_lock);
+    return r;
+}
+
+void plat_unlock_file(const char *path) {
+    plat_mutex_lock(&lock_lock);
+    for (int i = 0; i < lock_n; i++)
+        if (!strcmp(lock_held[i], path)) {
+            CloseHandle(lock_handle[i]);
+            lock_n--;
+            memmove(&lock_held[i], &lock_held[i + 1], sizeof lock_held[0] * (size_t)(lock_n - i));
+            memmove(&lock_handle[i], &lock_handle[i + 1], sizeof lock_handle[0] * (size_t)(lock_n - i));
+            break;
+        }
+    plat_mutex_unlock(&lock_lock);
+}
+
 int plat_file_write_atomic(const char *path, const void *data, size_t n) {
     char tmp[WPATH + 48];
     wchar_t a[WPATH], b[WPATH];
