@@ -998,6 +998,8 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
     # lld links several times faster than GNU ld; the stack matches tools/build_game.py's build
     # 16 MiB for the main thread with either linker (GNU ld takes the same flag): the default 2 MiB is too little
     ld = (['-fuse-ld=lld'] if (msys / 'bin' / 'ld.lld.exe').is_file() else []) + ['-Wl,--stack,16777216']
+    # the link map feeds tools/prof_report.py (symbols for an NX2NAVI_PROFILE sampling profile); both linkers write one
+    ld.append('-Wl,--Map=' + (cache_dir / 'ocarina.map').as_posix())
     lib = ['-Wl,--whole-archive', str(prebuilt[0]), '-Wl,--no-whole-archive'] if prebuilt else []
     stamp = [[o.name, o.stat().st_size, o.stat().st_mtime_ns] for o in objs]
     if prebuilt:
