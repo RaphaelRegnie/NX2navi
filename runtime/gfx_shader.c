@@ -2118,7 +2118,10 @@ void gfx_shader_record_flush(int force) {
 // ---- preparation from record files: the answers met in play (NX2NAVI_TEST_PREPARE_SHADERS=1) or the seed that
 // tools/prepare_shaders.py writes from its shader list (nx2navi.exe --prepare-shaders). Both use the record
 // layouts above; a seed record has a zero input id (the use mask, hence the id, is the translator's to find) and its
-// pad byte holds the list priority (0 title, 1 warm-up, 2 rest).
+// pad byte holds the list priority (0 title, 1 warm-up, 2 rest), with SEED_DEFAULT set on a default variant: its
+// answers are read again from its first translation (gfx_shader_guess.c) and the variant it resolves to is the
+// translation with those, when they differ.
+#define SEED_DEFAULT 0x80                                  // tools/prepare_shaders.py DEFAULT_FLAG
 typedef struct { const uint8_t *rec; } PrgIdx;
 typedef struct { PrgIdx *idx; size_t n; } PrgList;
 typedef struct {
@@ -2126,7 +2129,7 @@ typedef struct {
     const uint8_t *ans;
     size_t n_ans;
     uint8_t (*iid)[32];                                    // per answers record: the resolved input id, zero on failure
-    volatile int64_t next, done, missing, failed;
+    volatile int64_t next, done, missing, failed, refined;
 } Prep;
 
 static int prg_cmp(const void *x, const void *y) { return memcmp(((const PrgIdx *)x)->rec + 12, ((const PrgIdx *)y)->rec + 12, 32); }
@@ -2152,9 +2155,12 @@ static void prep_worker(void *arg) {
         uint32_t st, len;
         memcpy(&st, e->rec, 4), memcpy(&len, e->rec + 4, 4);
         const uint8_t *control = e->rec + 44, *code = control + CONTROL_SIZE, *c1 = code + len;
-        GfxShaderAnswers a;
+        GfxShaderAnswers a, b;
         unpack_answers(r + 68, &a);
-        const GfxShader *s = gfx_shader_get((int)st, control, code, len, c1, &a);
+        const GfxShader *s = gfx_shader_get((int)st, control, code, len, c1, &a), *t;
+        if (s && r[ANS_REC - 1] & SEED_DEFAULT && gfx_shader_guess_refine(s, (int)st, &a, &b) &&
+            (t = gfx_shader_get((int)st, control, code, len, c1, &b)))
+            s = t, plat_inc64(&p->refined);
         if (!s) plat_inc64(&p->failed);
         else if (p->iid) memcpy(p->iid[i], s->iid, 32);
         plat_inc64(&p->done);
@@ -2195,8 +2201,9 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
                    (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
     svc_set_limit(svc_runtime_limit());
     rt_log("gfx_shader: prepare: %zu %s of %zu programs: %llu translated, %lld failed, %lld without a program, the rest "
-           "cached; %.0f ms", p.n_ans, what, p.progs.n, (unsigned long long)((uint64_t)n_xlated - xl0), (long long)p.failed,
-           (long long)p.missing, (double)plat_now_ms() - t0);
+           "cached; %lld default variants with refined answers; %.0f ms", p.n_ans, what, p.progs.n,
+           (unsigned long long)((uint64_t)n_xlated - xl0), (long long)p.failed, (long long)p.missing, (long long)p.refined,
+           (double)plat_now_ms() - t0);
     free(p.progs.idx), free(pb);
     if (ans_out) *ans_out = ab;
     else free(ab);
@@ -2236,7 +2243,8 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
         if (!memcmp(iid[i], zero, 32) || !set_add(&seen, hash8(iid[i]))) continue;
         uint8_t *r = recs + u * PRP_REC;
         const uint8_t *a = ab + (size_t)i * ANS_REC;
-        r[0] = a[0] < 6 ? a[0] : 0, r[1] = a[ANS_REC - 1] > 2 ? 2 : a[ANS_REC - 1];
+        uint8_t prio = a[ANS_REC - 1] & ~SEED_DEFAULT;
+        r[0] = a[0] < 6 ? a[0] : 0, r[1] = prio > 2 ? 2 : prio;
         memcpy(r + 4, iid[i], 32);
         by[r[1]]++, stages[r[0]]++, u++;
     }
