@@ -105,9 +105,14 @@ int fs_save_busy(void) {
 }
 
 // ---- host directories
+// A junction or symbolic link to a folder counts as the folder: a player who moved the profile to another drive links
+// it back, and the start stopped at "cannot create directory" for it.
 static int make_dir(const char *p) {
     int e = plat_fs_mkdir(p);
-    return !e || (e == PLAT_FS_EXISTS && plat_fs_kind(p) == PLAT_FS_DIR);
+    if (!e) return 1;
+    if (e != PLAT_FS_EXISTS) return 0;
+    int k = plat_fs_kind(p);
+    return k == PLAT_FS_DIR || (k == PLAT_FS_LINK && plat_dir_exists(p));
 }
 
 // p and every missing parent.
@@ -227,7 +232,13 @@ static int move_dir(const char *from, const char *to, int tries) {
     for (int i = 0; i < tries; i++) {
         int e = plat_fs_rename(from, to, 1);
         if (!e) return 0;
-        if (e != PLAT_FS_BUSY) return -1;
+        if (e != PLAT_FS_BUSY) {
+            // a folder rename cannot cross drives: save/ linked to another drive than save-tx/ (link the whole
+            // profile folder instead) fails every commit here
+            rt_log("fs: cannot move %s to %s (error %d)%s", from, to, plat_fs_os_error(),
+                   plat_fs_os_error() == 17 ? ": they are on different drives; keep save and save-tx on one drive" : "");
+            return -1;
+        }
         plat_sleep_ms(50);
     }
     return -1;
@@ -490,7 +501,8 @@ static void save_recover(void) {
 static void work_create(void) {
     int n = 0, linked = 0;
     uint64_t bytes = 0;
-    if (remove_tree(work_root) || copy_tree(newest_save(), work_root, NULL, 0, &n, &linked, &bytes))
+    // remove_tree_retry: the last unmount's delete may have been held up by a scanner, as at the start
+    if (remove_tree_retry(work_root) || copy_tree(newest_save(), work_root, NULL, 0, &n, &linked, &bytes))
         rt_fatal("fs: cannot make the save working copy");
     rt_log("host save working copy: %d files, %.1f MiB", n, bytes / 1048576.0);
 }
@@ -953,7 +965,8 @@ static uint32_t write_file(uint64_t h, int64_t offset, const void *buffer, uint6
     if (!(mode & FS_OPEN_WRITE)) return FS_R_OPEN_MODE;
     PlatFileId id;
     if (!plat_file_id(f, &id)) rt_fatal("fs: host save size");
-    if ((uint64_t)offset + size > id.size && !(mode & FS_OPEN_APPEND)) return FS_R_APPEND_REQUIRED;
+    // offset + size without the sum: a size near 2^64 would wrap it below the file's size
+    if ((size > id.size || (uint64_t)offset > id.size - size) && !(mode & FS_OPEN_APPEND)) return FS_R_APPEND_REQUIRED;
     if (file->save) save_touched();
     for (uint64_t done = 0; done < size;) {
         uint32_t chunk = size - done > 0x40000000 ? 0x40000000 : (uint32_t)(size - done);
