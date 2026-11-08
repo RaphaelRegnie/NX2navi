@@ -54,6 +54,7 @@ typedef struct {
     PlatMutex codec;         // dav1d: the decoder thread while it decodes, Flush / Finalize
     PlatCond work;           // a sample arrived, or quit
     PlatThread *thread;
+    int run_index;           // which movie of the run this is, counted from 1 as decoders come up (for the log)
     Dav1dContext *dav1d;
     uint8_t in_ev[0x40], out_ev[0x40];   // nn::os::SystemEventType each
     int in_bound, out_bound;
@@ -426,6 +427,8 @@ static void ov_dtor(Cpu *c) {
     *slot = NULL;
     gfx_movie_stop();
 }
+void vk_dump_movie_frame(int k, uint64_t shown);   // vk_dump.c (NX2NAVI_DUMP_MOVIE)
+static int movies_started;                          // decoders that came up this run (Video.run_index)
 // Result Initialize(void *memory, size_t size, MediaMimeType mime, VideoDecoderOutputFormat format, VideoCodecMode)
 static void ov_initialize(Cpu *c) {
     Video **slot = arg_p(c, 0);
@@ -450,8 +453,9 @@ static void ov_initialize(Cpu *c) {
     if (r < 0) rt_fatal("movie: dav1d_open failed (%d)", r);
     v->thread = plat_thread_new(decoder_thread, v, "movie decoder");
     if (!v->thread) rt_fatal("movie: cannot start the decoder thread");
-    rt_log("movie: video decoder up (AV1 via dav1d %s on its own thread; mime %u, output format %u, mode %u)",
-           dav1d_version(), (unsigned)arg_x(c, 3), (unsigned)arg_x(c, 4), (unsigned)arg_x(c, 5));
+    v->run_index = __atomic_add_fetch(&movies_started, 1, __ATOMIC_RELAXED);
+    rt_log("movie: video decoder %d up (AV1 via dav1d %s on its own thread; mime %u, output format %u, mode %u)",
+           v->run_index, dav1d_version(), (unsigned)arg_x(c, 3), (unsigned)arg_x(c, 4), (unsigned)arg_x(c, 5));
     ret_x(c, 0);
 }
 // Result Configure(const MediaProperty *, const void *configuration, size_t): the AV1 sequence header also comes
@@ -629,6 +633,7 @@ static void ov_acquire(Cpu *c) {
     v->busy[f] = 1;
     v->shown += !p.eos;
     if (p.nv12 && v->shown == 1) rt_log("movie: first frame %dx%d shown", p.w, p.h);
+    if (p.nv12) vk_dump_movie_frame(v->run_index, v->shown);
     if (p.nv12) {   // pacing report every 600 frames (10 s): the gaps between acquisitions and their time stamps
         static uint64_t last_ns, sum_gap, max_gap, n;
         uint64_t now = plat_now_ns(), gap = last_ns ? now - last_ns : 0;

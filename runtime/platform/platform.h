@@ -215,6 +215,9 @@ int plat_mem_protect(uint64_t addr, uint64_t n, int prot); // committed pages on
 // The page at addr: PLAT_PROT_* when committed, else PLAT_MEM_RESERVED or PLAT_MEM_FREE (not reserved by us). *end
 // gets the end of the run of pages in the same state, at most limit.
 int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end);
+// The process's committed private memory and the part of it mapped write-combined (Windows PAGE_WRITECOMBINE: memory
+// the GPU driver maps uncached for the CPU), with the number of allocations that part spans. 0 where unsupported.
+int plat_mem_census(uint64_t *priv, uint64_t *wc, uint64_t *wc_allocs);
 // The pages of a watched reservation written since the last reset, up to max page addresses into pages, in address
 // order; reset: those reported start over as unwritten. UINT64_MAX when writes to the range are not tracked.
 uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t max, int reset);

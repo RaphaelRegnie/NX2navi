@@ -684,6 +684,26 @@ int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end) {
     return p == PAGE_READWRITE ? PLAT_PROT_RW : p == PAGE_READONLY ? PLAT_PROT_READ : PLAT_PROT_NONE;
 }
 
+int plat_mem_census(uint64_t *priv, uint64_t *wc, uint64_t *wc_allocs) {
+    *priv = *wc = *wc_allocs = 0;
+    MEMORY_BASIC_INFORMATION mbi;
+    uintptr_t a = 0;
+    void *last = NULL;
+    while (VirtualQuery((void *)a, &mbi, sizeof mbi) == sizeof mbi) {
+        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE) {
+            *priv += mbi.RegionSize;
+            if (mbi.Protect & PAGE_WRITECOMBINE) {
+                *wc += mbi.RegionSize;
+                if (mbi.AllocationBase != last) (*wc_allocs)++, last = mbi.AllocationBase;
+            }
+        }
+        uintptr_t next = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= a) break;
+        a = next;
+    }
+    return 1;
+}
+
 // Contains code Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
 // GetWriteWatch with the reset flag.
 uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t max, int reset) {

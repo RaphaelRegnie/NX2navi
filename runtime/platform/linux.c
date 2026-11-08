@@ -935,6 +935,11 @@ int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end) {
     return v == PS_FREE ? PLAT_MEM_FREE : v == PS_RESERVED ? PLAT_MEM_RESERVED : v - PS_NONE;
 }
 
+int plat_mem_census(uint64_t *priv, uint64_t *wc, uint64_t *wc_allocs) {
+    *priv = *wc = *wc_allocs = 0;
+    return 0;
+}
+
 uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t max, int reset) {
     if (!max || !n) return 0;
     if (ww_fd < 0) return UINT64_MAX;
