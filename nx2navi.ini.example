@@ -499,3 +499,7 @@
 # memory and only the words that changed written over PCIe. Larger ones are copied back whole at the end of every
 # submission. Raising it from 4 to 16 took a 5.5 MiB range off the plain copies (about 46 MiB a frame in the field).
 # wb_merge_max = 16
+# 1: pages of a VRAM-mirrored pool that the GPU wrote and copied back to game memory are not copied up to the mirror
+# again for that write, which already holds them (a write by the game still is). Outdoors this removed about 57 MiB of
+# copies a frame. Default: 0.
+# wb_no_reup = 0

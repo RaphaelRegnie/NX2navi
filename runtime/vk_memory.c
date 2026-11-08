@@ -1079,6 +1079,72 @@ void vk_mem_gpu_pending(uint64_t addr, uint64_t size) {
     plat_mutex_unlock(&shadow_lock);
 }
 
+// NX2NAVI_WB_NO_REUP=1: a mirrored pool's pages the GPU wrote are not copied up to the mirror again for that write.
+// vk_gpu_written stamps the pages the GPU wrote, at the fence, so the texture cache re-reads them. The same stamps made
+// mirror_sync copy those pages back up into the mirror the write-back had read them from: outdoors about 57 of the 60 MiB
+// copied up a frame were pages unchanged since the GPU wrote them back, and the copies took about 5 ms of GPU time a
+// frame (RTX 4080 SUPER, 2026-11-08). Each stamp of such a write is noted with the page's generation before it;
+// mirror_sync skips a page whose newest stamp is that one while the stamp before it was already in the mirror. A CPU
+// write stamps the page anew (a later generation), so it is still copied.
+typedef struct { uint64_t page; uint32_t g, old; } GwEnt;
+#define GW_BITS 20
+static GwEnt *gw_tab;                        // gen_lock (written exclusively; mirror_sync reads it on the replay thread)
+static volatile int64_t gw_skipped;          // pages mirror_sync left out since the last summary
+static int gw_on = -1;
+static int wb_no_reup(void) {
+    if (gw_on < 0) {
+        int on = rt_knob("WB_NO_REUP", "0") == 1;
+        if (on && !(gw_tab = calloc((size_t)1 << GW_BITS, sizeof *gw_tab))) on = 0;
+        rt_log("mem: pages the GPU wrote back %s (NX2NAVI_WB_NO_REUP)",
+               on ? "are not copied up to their mirror again" : "are copied up to their mirror again");
+        __atomic_store_n(&gw_on, on, __ATOMIC_RELEASE);
+    }
+    return gw_on;
+}
+static GwEnt *gw_find(uint64_t page) {   // gen_lock held: the entry of page or NULL
+    uint64_t m = ((uint64_t)1 << GW_BITS) - 1, i = (page >> GEN_PAGE_SHIFT) * 0x9e3779b97f4a7c15ull >> (64 - GW_BITS);
+    for (int n = 0; n < 32; n++, i = (i + 1) & m) {
+        if (gw_tab[i].page == page) return &gw_tab[i];
+        if (!gw_tab[i].page) return NULL;
+    }
+    return NULL;
+}
+static void gw_put(uint64_t page, uint32_t g, uint32_t old) {   // gen_lock held exclusively
+    uint64_t m = ((uint64_t)1 << GW_BITS) - 1, i0 = (page >> GEN_PAGE_SHIFT) * 0x9e3779b97f4a7c15ull >> (64 - GW_BITS);
+    uint64_t i = i0;
+    for (int n = 0; n < 32; n++, i = (i + 1) & m)
+        if (!gw_tab[i].page || gw_tab[i].page == page) { gw_tab[i] = (GwEnt){page, g, old}; return; }
+    gw_tab[i0] = (GwEnt){page, g, old};   // a full run: the evicted page is copied up as before
+}
+// mirror_sync, gen_lock held: the page's newest stamp g is a GPU write the mirror already holds.
+static int gw_skip(uint64_t page, uint32_t g, uint32_t since) {
+    if (gw_on != 1) return 0;
+    const GwEnt *e = gw_find(page);
+    return e && e->g == g && e->old <= since;
+}
+// vk_gpu_written: stamps [addr, addr+size) as vk_guest_written does, noting the stamps when the range lies in a mirrored
+// pool's imported range. 0: not such a range (the caller stamps it plainly).
+static int gw_note(uint64_t addr, uint64_t size) {
+    if (!wb_no_reup() || nvn_gpu_only(addr)) return 0;
+    plat_mutex_lock_shared(&pool_lock);
+    const pidx_ent *e = pidx_find(&pool_index, addr, size);
+    const PoolRec *r = e ? e->buf : NULL;
+    int ok = r && r->mstate == MS_ON && addr >= r->import_lo && addr + size <= r->import_hi;
+    plat_mutex_unlock_shared(&pool_lock);
+    if (!ok) return 0;
+    uint64_t lo = addr & ~0xfffull, hi = (addr + size + 0xfff) & ~0xfffull;
+    plat_mutex_lock(&gen_lock);
+    uint32_t g = ++gen_now;
+    for (uint64_t a = lo; a < hi; a += 1ull << GEN_PAGE_SHIFT) {
+        uint32_t *sl = gen_slot(a, 1);
+        if (!sl) continue;
+        gw_put(a, g, *sl);
+        stamp_page(a, g);
+    }
+    plat_mutex_unlock(&gen_lock);
+    return 1;
+}
+
 void vk_gpu_written(uint64_t addr, uint64_t size) {
     if (shadow_on && size) {
         plat_mutex_lock_shared(&pool_lock);
@@ -1095,6 +1161,7 @@ void vk_gpu_written(uint64_t addr, uint64_t size) {
         plat_mutex_unlock(&shadow_lock);
         plat_mutex_unlock_shared(&pool_lock);
     }
+    if (size && gw_note(addr, size)) return;
     vk_guest_written(addr, size);
 }
 
@@ -1627,8 +1694,10 @@ static void mirror_sync(PoolRec *r) {
         const uint32_t *ch = gen_chunk[a >> GEN_CHUNK_SHIFT];   // a 2 MiB region lies in one chunk
         if (!ch) continue;
         for (uint64_t x = a; x < b; x += 1ull << GEN_PAGE_SHIFT)
-            if (ch[(x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)] > since)
+            if (ch[(x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)] > since) {
+                if (gw_skip(x, ch[(x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)], since)) { plat_inc64(&gw_skipped); continue; }
                 range_add(&pend, &npend, &cpend, r, x - lo, 1ull << GEN_PAGE_SHIFT), mrep.page_bytes += 1ull << GEN_PAGE_SHIFT;
+            }
     }
     r->mgen = gen_now;
     if (excl) plat_mutex_unlock(&gen_lock);
@@ -2251,6 +2320,13 @@ int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
 
 // One summary line: with NX2NAVI_TRACE=perf every 60 frames, else at frames 600 and 1800.
 static void mirror_log(uint64_t frame) {
+    if (gw_on == 1) {
+        static uint64_t gw_last;
+        double f = frame > gw_last ? (double)(frame - gw_last) : 1.0;
+        gw_last = frame;
+        rt_log("mem: write-back frame %llu: %.2f MiB a frame of GPU-written pages not copied up again (NX2NAVI_WB_NO_REUP)",
+               (unsigned long long)frame, plat_xchg64(&gw_skipped, 0) * (double)(1ull << GEN_PAGE_SHIFT) / 1048576.0 / f);
+    }
     static uint64_t last, ww_last;
     plat_mutex_lock(&gen_lock);
     uint64_t wc = ww_calls, wb = ww_bytes, wt = ww_ticks, dc = ww_dirty_calls, dt = ww_dirty_ticks, wp = ww_pages;
