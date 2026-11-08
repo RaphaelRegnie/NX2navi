@@ -794,12 +794,13 @@ static int put_picture(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat 
     return fsr;
 }
 
-// The display's frame rate with frame generation: the swapchain's present count (generated frames included, vk_fg.cpp)
-// over half a second, sampled at each of the game's presents (gfx_output_fps).
+// The display's frame rate with frame generation: the frames the display got (generated ones included: vk_fg.cpp
+// vk_fg_presents, vk_dlssg.c vk_dlssg_shown) over half a second, sampled at each of the game's presents
+// (gfx_output_fps).
 static volatile double g_out_fps;
 static void output_rate(void) {
     static uint64_t t0, n0;
-    uint64_t n = vk_fg_presents(g_sc), t = plat_now_ns();
+    uint64_t n = vk_dlssg_active() ? vk_dlssg_shown() : vk_fg_presents(g_sc), t = plat_now_ns();
     if (!n) { g_out_fps = 0, t0 = 0; return; }
     if (!t0 || n < n0) { t0 = t, n0 = n; return; }
     if (t - t0 >= 500000000ull) g_out_fps = (double)(n - n0) * 1e9 / (double)(t - t0), t0 = t, n0 = n;
