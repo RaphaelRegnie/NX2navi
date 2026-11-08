@@ -77,6 +77,10 @@ typedef struct PoolRec {
     uint8_t *smap;                     // its mapping; offsets as in buf (from import_lo)
     uint32_t sgen;                     // gen_lock: every page write stamped up to this generation is in the shadow
     volatile uint8_t stouched;         // on the touched list: the GPU may use it in the submission being recorded
+    // NX2NAVI_TRACE=perf per-pool mirror traffic since the last mirror_pool_log, replay thread (the log reads and clears
+    // them without a lock: a count lost to the race only blurs a diagnostic)
+    uint64_t st_pages, st_flush, st_wb, st_merge;   // bytes: written pages and flush ranges copied up, GPU writes back
+    uint32_t st_syncs;                              // syncs
 } PoolRec;
 
 static void mirror_forget(PoolRec *r);   // pool_lock exclusive: off the mirrored list
@@ -566,6 +570,7 @@ static void flag_names(uint32_t f, char *buf, size_t n) {
 static void dirty_frame(uint64_t frame);
 
 static void mirror_log(uint64_t frame);
+static void mirror_pool_log(uint64_t frame);
 static void shadow_log(uint64_t frame);
 static int dead_pending(void);
 
@@ -576,7 +581,7 @@ static volatile uint64_t mirror_frame;   // the frame vk_mem_census last saw, fo
 void vk_mem_census(uint64_t frame) {
     mirror_frame = frame;
     static uint64_t window_start;
-    if ((rt_trace & RT_TRACE_PERF) && frame % 600 == 0) vram_log(frame);
+    if ((rt_trace & RT_TRACE_PERF) && frame % 600 == 0) vram_log(frame), mirror_pool_log(frame);
     if ((rt_trace & RT_TRACE_PERF) && !vk_mirror_on) dirty_frame(frame);
     if ((rt_trace & RT_TRACE_PERF) ? frame % 60 == 0 : frame == 600 || frame == 1800)
         mirror_log(frame), shadow_log(frame);   // mirror_log also logs the write-watch line
@@ -1697,6 +1702,7 @@ static void mirror_sync(PoolRec *r) {
             if (ch[(x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)] > since) {
                 if (gw_skip(x, ch[(x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)], since)) { plat_inc64(&gw_skipped); continue; }
                 range_add(&pend, &npend, &cpend, r, x - lo, 1ull << GEN_PAGE_SHIFT), mrep.page_bytes += 1ull << GEN_PAGE_SHIFT;
+                r->st_pages += 1ull << GEN_PAGE_SHIFT;
             }
     }
     r->mgen = gen_now;
@@ -1715,14 +1721,14 @@ static void mirror_sync(PoolRec *r) {
             uint64_t a = fl[i].lo > lo ? fl[i].lo : lo, b = fl[i].hi < hi ? fl[i].hi : hi;
             if (a >= b) continue;
             range_add(&pend, &npend, &cpend, r, a - lo, b - a);
-            mrep.flush_n++, mrep.flush_bytes += b - a;
+            mrep.flush_n++, mrep.flush_bytes += b - a, r->st_flush += b - a;
             if ((rt_trace & RT_TRACE_PERF) && b - a >= 16u << 20)
                 rt_log("mem: mirror frame %llu: flush range %.1f MiB at +%.1f MiB of a %.1f MiB pool (%d ranges from %llu "
                        "flushes of %.3f MiB)", (unsigned long long)mirror_frame, (b - a) / 1048576.0, (a - lo) / 1048576.0,
                        (hi - lo) / 1048576.0, n, (unsigned long long)calls, sum / 1048576.0);
         }
     }
-    mrep.syncs++;
+    mrep.syncs++, r->st_syncs++;
     mrep.sync_t += qpc() - t0;
 }
 
@@ -2029,8 +2035,11 @@ static void gpu_wrote(const VkMemSpan *sp, uint64_t size, int shader) {
     if (!r || r->mstate != MS_ON || sp->buffer != r->mbuf || !size) return;
     r->vd_wrote_sub = msub, r->vd_wrote_n++;
     // A binding to the end of its pool (no size) can span hundreds of MiB: those stay copies.
-    if (shader && !(sp->offset & 3) && !(size & 3) && size <= merge_max() && merging() && snap_add(r, sp->offset, size))
+    if (shader && !(sp->offset & 3) && !(size & 3) && size <= merge_max() && merging() && snap_add(r, sp->offset, size)) {
+        r->st_merge += size;
         return;
+    }
+    r->st_wb += size;
     range_add(&wbl, &nwbl, &cwbl, r, sp->offset, size);
 }
 void vk_mem_gpu_wrote(const VkMemSpan *sp, uint64_t size) { gpu_wrote(sp, size, 0); }
@@ -2319,6 +2328,46 @@ int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
 }
 
 // One summary line: with NX2NAVI_TRACE=perf every 60 frames, else at frames 600 and 1800.
+// NX2NAVI_TRACE=perf, every 600 frames: the mirrored pools that moved the most bytes since the last list, per frame: what
+// their CPU writes and flushes copied up, how often a submission synced them, and what the GPU's writes sent back
+// (merged or copied). A pool whose upload is close to its size every frame is rewritten whole each frame.
+#define POOL_LOG_TOP 12
+static uint64_t pool_score(const PoolRec *r) { return r->st_pages + r->st_flush + r->st_wb + r->st_merge; }
+static void mirror_pool_log(uint64_t frame) {
+    static uint64_t last;
+    double fr = frame > last ? (double)(frame - last) : 1.0;
+    last = frame;
+    PoolRec *top[POOL_LOG_TOP];
+    int nt = 0;
+    uint64_t all_up = 0;
+    plat_mutex_lock_shared(&pool_lock);
+    for (int i = 0; i < nm; i++) {
+        PoolRec *r = mlist[i];
+        all_up += r->st_pages + r->st_flush;
+        uint64_t sc = pool_score(r);
+        if (!sc || (nt == POOL_LOG_TOP && sc <= pool_score(top[nt - 1]))) continue;
+        int k = nt < POOL_LOG_TOP ? nt++ : nt - 1;   // insertion into top[], largest first
+        for (; k > 0 && pool_score(top[k - 1]) < sc; k--) top[k] = top[k - 1];
+        top[k] = r;
+    }
+    rt_log("mem: mirror pools frame %llu: %d mirrored, %.1f MiB a frame copied up in all; the top %d (MiB a frame: written pages, "
+           "flush ranges (overlap with the pages counted twice), syncs a frame, GPU writes back merged / copied):",
+           (unsigned long long)frame, nm, all_up / fr / 1048576.0, nt);
+    for (int i = 0; i < nt; i++) {
+        const PoolRec *r = top[i];
+        char f[160];
+        flag_names(r->flags, f, sizeof f);
+        rt_log("mem:   pool %#llx %.1f MiB %s: up %.2f + %.2f, %.1f syncs, back %.2f / %.2f", (unsigned long long)r->lo,
+               r->size / 1048576.0, f, r->st_pages / fr / 1048576.0, r->st_flush / fr / 1048576.0, r->st_syncs / fr,
+               r->st_merge / fr / 1048576.0, r->st_wb / fr / 1048576.0);
+    }
+    for (int i = 0; i < nm; i++) {
+        PoolRec *r = mlist[i];
+        r->st_pages = r->st_flush = r->st_wb = r->st_merge = 0, r->st_syncs = 0;
+    }
+    plat_mutex_unlock_shared(&pool_lock);
+}
+
 static void mirror_log(uint64_t frame) {
     if (gw_on == 1) {
         static uint64_t gw_last;
