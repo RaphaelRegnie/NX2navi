@@ -4,7 +4,7 @@ Static recompilation of *Ocarina of Time* (Switch 2, ARM64, game version 1.1.1) 
 
 ## Game content boundary
 
-This repository is private, and its additions are all rights reserved (`LICENSE-ADDITIONS`). It still never holds game data: game data lives outside it and every derived file stays in ignored folders.
+The repository's additions are all rights reserved (`LICENSE-ADDITIONS`). It never holds game data: game data lives outside it and every derived file stays in ignored folders.
 
 - The user's game and key paths are in `config.local.toml` (ignored). Pass the keys file path to tools; the tools read it themselves. Key values stay out of your output, logs, commands and files.
 - Everything extracted or generated goes under `build/` or `generated/`.
