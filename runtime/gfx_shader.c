@@ -1876,12 +1876,25 @@ const uint32_t *gfx_shader_spirv(const GfxShader *s, uint64_t *words) {
 }
 
 // The guest program a shader was translated from, as its stored inputs hold it (the whole program: NVN2 code from its
-// first byte), written to path for a disassembler (NX2NAVI_DUMP's sh_<hash>.code). 0: no stored inputs for it.
+// first byte), written to path for a disassembler (NX2NAVI_DUMP's sh_<hash>.code), and next to it <path>.job, the
+// translator request that translates it (one line for nx2navi_xlate --serve; its "out" names the shader cache, and
+// "glsl_out" or "lowered_out" added to the job write the GLSL or the lowered Maxwell code). 0: no stored inputs.
 int gfx_shader_write_code(const GfxShader *s, const char *path) {
     Inputs in;
     paths();
     if (!s || !cache_dir[0] || !in_load(s->iid, &in)) return 0;
     int ok = write_file(path, in.code, (size_t)in.length);
+    const char *st = in.stage == GFX_STAGE_VS ? "vs" : in.stage == GFX_STAGE_FS ? "ps" : in.stage == GFX_STAGE_CS ? "cs"
+                   : in.stage == GFX_STAGE_TS ? "ts" : in.stage == GFX_STAGE_MS ? "ms" : NULL;
+    size_t cap = 2 * PATH_CAP * 6 + 2 * (size_t)in.c1_len + 8192;
+    char *req = st ? malloc(cap) : NULL, job[PATH_CAP + 80], hex[65];
+    if (ok && req) {
+        key_hex(s->key, hex);
+        build_request(req, hex, st, path, in.c1, in.c1_len, &in.a, in.control);
+        snprintf(job, sizeof job, "%s.job", path);
+        write_file(job, req, strlen(req));
+    }
+    free(req);
     free(in.buf);
     return ok;
 }
