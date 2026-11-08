@@ -24,7 +24,7 @@
 #include "platform/platform.h"
 #include "romfs_path.h"
 
-#define NX2NAVI_APPLICATION_ID 0x0100f2c0115b6000ull
+#define NX2NAVI_APPLICATION_ID 0x0400486024dec000ull   // the game's title id, as svc.c PROGRAM_ID tells it
 #define FILE_BASE 0x200000000ull
 #define DIR_BASE 0x300000000ull
 #define NFILES 1024
