@@ -363,12 +363,21 @@ static int ev_holds(uint32_t have, uint32_t mode, uint32_t want) {
     return mode == NVN_EVENT_WAIT_MODE_GEQUAL_WRAP ? (int32_t)(have - want) >= 0 : have == want;
 }
 
-void vk_exec_wait_event(const void *payload) {
+int vk_exec_event_met(const void *payload) {
+    const p_wait_event *p = payload;
+    const uint32_t *seen = ev_slot(p->val, 0);
+    return ev_holds(__atomic_load_n(p->val, __ATOMIC_ACQUIRE), p->mode, p->value) ||
+           (seen && ev_holds(*seen, p->mode, p->value));
+}
+
+int vk_exec_signalled;
+
+int vk_exec_wait_event(const void *payload) {
     const p_wait_event *p = payload;
     ev_waits++;
     uint32_t mem = __atomic_load_n(p->val, __ATOMIC_ACQUIRE);
     const uint32_t *seen = ev_slot(p->val, 0);
-    if (ev_holds(mem, p->mode, p->value) || (seen && ev_holds(*seen, p->mode, p->value))) return;
+    if (ev_holds(mem, p->mode, p->value) || (seen && ev_holds(*seen, p->mode, p->value))) return 1;
     ev_unmet++;
     if (ev_open_n == EV_OPEN) memmove(ev_open, ev_open + 1, sizeof ev_open - sizeof *ev_open), ev_open_n--;
     ev_open[ev_open_n].val = p->val, ev_open[ev_open_n].mode = p->mode, ev_open[ev_open_n].value = p->value;
@@ -377,6 +386,7 @@ void vk_exec_wait_event(const void *payload) {
     if (logged++ < 8)
         rt_log("vk: event wait reached before its signal: event %p, mode %u, wants %#x, memory %#x, replayed signals %s%#x",
                (void *)p->val, p->mode, p->value, mem, seen ? "" : "none ", seen ? *seen : 0);
+    return 0;
 }
 
 void vk_exec_event_stats(uint64_t *waits, uint64_t *unmet, uint64_t *late, uint64_t *late_subs) {
@@ -387,6 +397,7 @@ void vk_exec_event_stats(uint64_t *waits, uint64_t *unmet, uint64_t *late, uint6
 static void signal_event(VkExec *ex, const p_signal_event *p) {
     uint32_t *seen = ev_slot(p->val, 1);
     *seen = p->mode == NVN_EVENT_SIGNAL_MODE_ADD ? *seen + p->value : p->value;
+    vk_exec_signalled = 1;
     for (int i = 0; i < ev_open_n;)
         if (ev_open[i].val == p->val && ev_holds(*seen, ev_open[i].mode, ev_open[i].value)) {
             ev_late++, ev_late_subs += vk_exec_submit_seq - ev_open[i].sub;

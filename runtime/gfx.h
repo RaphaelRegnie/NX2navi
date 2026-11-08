@@ -136,6 +136,7 @@ typedef struct {
     void (*texture_release)(const tex_t *t);
     void (*program_release)(const prog_t *p);
     uint64_t (*submit)(const uint64_t *handles, int n);    // replays; returns this submission's fence value
+                                                           // (gfx_submit_queue names the game's queue)
     int  (*fence_wait)(uint64_t value, uint64_t timeout_ns);   // 1 reached; caller has given its core up
     uint64_t (*fence_done)(void);                          // highest value whose side effects are written
     // Queues the present and returns at once; the host present goes out at at_ns (kern_now_ns clock), at once when that
@@ -169,3 +170,7 @@ void rt_frame_presented(const tex_t *t, uint64_t n);       // boot.c: --frames N
 void gfx_movie_frame(const uint8_t *rgba, int w, int h);
 void gfx_movie_frame_own(uint8_t *rgba, int w, int h);   // the same, taking the malloc'd buffer (freed later)
 void gfx_movie_stop(void);
+
+// The game's queue (NVNqueue address) of the submission this thread is handing to GfxBackend.submit, 0 when none
+// (probes). Set by nvnQueueSubmitCommands around the call; vk_exec.c orders queues by their events with it.
+extern _Thread_local uintptr_t gfx_submit_queue;
