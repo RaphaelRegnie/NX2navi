@@ -1001,8 +1001,46 @@ def windres_command(msys, rco):
             *(f'--preprocessor-arg={a}' for a in pp), '-O', 'coff', '-i', 'nx2navi.rc', '-o', str(rco)]
 
 
-def compile_resources(msys, rt, obj, env):
-    """runtime/nx2navi.rc into obj/nx2navi_rc.o: the manifest of the game's exe (per-monitor DPI awareness, so the
+RC_LINE = re.compile(r'(\d+)\s+(24|ICON)\s+"([^"]+)"')
+
+
+def resource_file(rt):
+    """runtime/nx2navi.rc as a .res file (the format Windows' resource compiler writes): the manifest as resource 24,
+    the icon's images as RT_ICON 1..n and their directory as RT_GROUP_ICON, US English as windres gives them. lld
+    takes a .res among its inputs and builds the exe's resource section from it.
+
+    Python writes it, so no tool opens a path by the system's ANSI code page: windres does (binutils), and a build
+    folder or a user folder whose name holds a character outside that code page (C:\\Users\\Víctor on a Cyrillic or a
+    Japanese Windows, D:\\Games\\Zelda：Ocarina) failed with "Invalid argument" or "Cannot create temporary file"."""
+    def resource(typ, name, data, flags):
+        head = struct.pack('<HHHHIHHII', 0xffff, typ, 0xffff, name, 0, flags, 0x0409, 0, 0)
+        return struct.pack('<II', len(data), 8 + len(head)) + head + data + b'\0' * (-len(data) % 4)
+
+    out = bytearray(struct.pack('<II', 0, 32) + struct.pack('<HHHHIHHII', 0xffff, 0, 0xffff, 0, 0, 0, 0, 0, 0))
+    for line in (rt / 'nx2navi.rc').read_text(encoding='utf-8').splitlines():
+        m = RC_LINE.fullmatch(line.strip())
+        if not m:
+            continue
+        name, kind, data = int(m.group(1)), m.group(2), (rt / m.group(3)).read_bytes()
+        if kind == '24':
+            out += resource(24, name, data, 0x1030)
+            continue
+        reserved, ico_type, n = struct.unpack_from('<HHH', data, 0)
+        if reserved or ico_type != 1 or not n:
+            fail(f'runtime/{m.group(3)} is not an icon file')
+        group = struct.pack('<HHH', 0, 1, n)
+        for i in range(n):
+            w, h, colors, res0, planes, bits, size, off = struct.unpack_from('<BBBBHHII', data, 6 + 16 * i)
+            out += resource(3, i + 1, data[off:off + size], 0x1010)
+            group += struct.pack('<BBBBHHIH', w, h, colors, res0, planes, bits, size, i + 1)
+        out += resource(14, name, group, 0x1030)
+    return bytes(out)
+
+
+def compile_resources(msys, rt, obj, env, lld=False):
+    """With lld (lld=True) obj/nx2navi.res written by resource_file, which lld links in itself; else windres below.
+
+    runtime/nx2navi.rc into obj/nx2navi_rc.o: the manifest of the game's exe (per-monitor DPI awareness, so the
     picture keeps the monitor's real size rather than one Windows stretches) and its icon.
 
     windres preprocesses the .rc with gcc through one command line it writes itself, quoting each path that holds a
@@ -1019,6 +1057,12 @@ def compile_resources(msys, rt, obj, env):
 
     The object is written under another name and replaces the old one only when its bytes differ, so an unchanged
     resource keeps its time and does not make the link key change (a rebuild with nothing new does not link again)."""
+    if lld:
+        res = obj / 'nx2navi.res'
+        data = resource_file(rt)
+        if not res.is_file() or res.read_bytes() != data:   # same bytes: keep the time, so the link key holds
+            res.write_bytes(data)
+        return res
     rco, new = obj / 'nx2navi_rc.o', obj / 'nx2navi_rc.o.new'
     tmp = obj / 'windres-tmp'
     shutil.rmtree(tmp, ignore_errors=True)
@@ -1168,7 +1212,8 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None, update=False):
         fail(f'{len(bad)} files did not compile')
     (obj / LIFTED_BUILD).write_text(json.dumps({'level': level}), encoding='utf-8')   # lifted_level reads it next update
 
-    objs = [o for _, o in srcs] + ([compile_resources(msys, rt, obj, env)] if WIN else [])
+    objs = [o for _, o in srcs] + ([compile_resources(msys, rt, obj, env, lld=(msys / 'bin' / 'ld.lld.exe').is_file())]
+                                   if WIN else [])
     exe = out / EXE_NAME
     rsp = cache_dir / 'link.rsp'
     rsp.write_text('\n'.join('"%s"' % o.as_posix() for o in objs), encoding='utf-8')
