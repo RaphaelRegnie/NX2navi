@@ -90,7 +90,7 @@ def parse(text, mod):
     return out
 
 
-TITLE = '0100F2C0115B6000'
+TITLE = '0400486024DEC000'   # the game's title id: a mod's Atmosphere folders are named after it
 
 
 def cheat_files(mods, bid):

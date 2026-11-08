@@ -60,8 +60,8 @@ int probe_mods(void) {
     remove_tree(root);
     plat_file_mkdir_p(root);
     static const char *const files[] = {
-        "A/romfs/x.bin", "B/atmosphere/contents/0100F2C0115B6000/romfs/x.bin",
-        "C/contents/0100F2C0115B6000/romfs/y.bin", "D/exefs/main.pchtxt", "E/exefs/subsdk9", "F/romfs/",
+        "A/romfs/x.bin", "B/atmosphere/contents/0400486024DEC000/romfs/x.bin",
+        "C/contents/0400486024DEC000/romfs/y.bin", "D/exefs/main.pchtxt", "E/exefs/subsdk9", "F/romfs/",
         "G/romfs/z.bin", "G/exefs/1234.ips", "Ultra \xD0\x96/romfs/u.bin",
         "H/romfs/h.bin", "H/exefs/subsdk9", "I/romfs/i.bin", "I/exefs/main", "J/cheats/0123456789ABCDEF.txt",
         "K/romfslite/k.bin", "L/romfs/l.bin", "L/cheats/0123456789ABCDEF.txt", "L/exefs/main.npdm",
@@ -90,8 +90,8 @@ int probe_mods(void) {
                 *lm = mods_at(11), *mm = mods_at(12), *u = mods_at(13);
         CHECK(hm->kind == (MOD_ROMFS | MOD_SUBSDK) && hm->problem == MOD_PLUGIN, "RomFS + subsdk plugin: unusable");
         CHECK(im->kind == (MOD_ROMFS | MOD_SUBSDK) && im->problem == MOD_PLUGIN, "RomFS + replaced exefs/main");
-        CHECK(ends_with(b->romfs, "B/atmosphere/contents/0100F2C0115B6000/romfs"), "Atmosphere RomFS root");
-        CHECK(ends_with(c->romfs, "C/contents/0100F2C0115B6000/romfs"), "contents RomFS root");
+        CHECK(ends_with(b->romfs, "B/atmosphere/contents/0400486024DEC000/romfs"), "Atmosphere RomFS root");
+        CHECK(ends_with(c->romfs, "C/contents/0400486024DEC000/romfs"), "contents RomFS root");
         CHECK(ends_with(a->romfs, "A/romfs") && a->kind == MOD_ROMFS && a->problem == MOD_OK, "plain RomFS mod");
         CHECK(!c->enabled && a->enabled && b->enabled && g->enabled && u->enabled, "mods_disabled switches C off");
         CHECK(d->kind == MOD_EXEFS && d->problem == MOD_EXEFS_OTHER && d->other_version == 1,

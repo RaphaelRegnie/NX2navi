@@ -27,7 +27,7 @@
 #include "mods.h"
 #include "platform/platform.h"
 
-#define TITLE "0100F2C0115B6000"
+#define TITLE "0400486024DEC000"   // the game's title id, which names a mod's Atmosphere folders
 #define MAX_MODS 512
 
 static ModInfo *mods;
