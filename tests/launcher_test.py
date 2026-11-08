@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -1190,6 +1191,43 @@ class SavesTest(unittest.TestCase):
         finally:
             saves.os.replace = real
         self.assertEqual((acct / 'save.dat').read_bytes(), b'old')
+
+    def test_a_failed_swap_keeps_the_finished_commit(self):
+        # the account folder cannot be moved aside (a file in it held open): the newer finished commit stays in
+        # save-tx, where the game loads it first, instead of going into the backup
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'save.dat': b'older'})
+        tx = self.game / 'profile' / 'save-tx'
+        self.files(tx, {'ready-4/save.dat': b'newest'})
+        src = self.files(self.tmp / 'mine', {'save.dat': b'imported'})
+        real = saves.os.replace
+
+        def replace(a, b):
+            if Path(a) == acct:
+                raise PermissionError(32, 'The process cannot access the file')
+            return real(a, b)
+        saves.os.replace = replace
+        try:
+            with self.assertRaises(PermissionError):
+                saves.import_save(self.game, src, log=lambda m: None)
+        finally:
+            saves.os.replace = real
+        self.assertEqual((tx / 'ready-4' / 'save.dat').read_bytes(), b'newest')
+        self.assertEqual((acct / 'save.dat').read_bytes(), b'older')
+        self.assertFalse((tx / 'import').exists())
+
+    def test_read_only_files_import_writable(self):
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'save.dat': b'old'})
+        src = self.files(self.tmp / 'mine', {'save.dat': b'imported'})
+        os.chmod(src / 'save.dat', stat.S_IREAD)
+        os.chmod(acct / 'save.dat', stat.S_IREAD)   # the save it replaces: deleted after the swap all the same
+        try:
+            saves.import_save(self.game, src, log=lambda m: None)
+            self.assertTrue(os.access(acct / 'save.dat', os.W_OK))
+            self.assertEqual([p.name for p in (self.game / 'profile' / 'save-tx').iterdir()], [])
+        finally:
+            os.chmod(src / 'save.dat', stat.S_IREAD | stat.S_IWRITE)
 
     def test_another_installs_finished_commit_is_its_save(self):
         other = self.files(self.tmp / 'other', {'profile/save/' + 'b' * 32 + '/save.dat': b'older',
