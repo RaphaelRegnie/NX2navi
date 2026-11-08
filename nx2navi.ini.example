@@ -341,10 +341,12 @@
 # bind_Y = pad:north, key:mouse_l
 
 [mods]
-# Folder with the player's mods, one subfolder per mod (<name>/romfs, <name>/exefs, <name>/cheats). Default: mods next
-# to nx2navi.exe.
+# Folder with the player's mods, one subfolder per mod (<name>/romfs, <name>/exefs, <name>/cheats). A relative folder
+# is under the game's folder. Default: mods next to the game's exe. The setup builds the ExeFS patches and code cheats
+# of the mods folder next to the exe only.
 # mods_dir =
-# Load order, top first, names separated by |. The in-game menu (Mods) writes it; a mod not listed goes to the bottom.
+# Load order, top first, names separated by |; a mod not listed goes below the listed ones, by name. The top mod wins a
+# file two mods replace. Set it here: the in-game menu has no Mods tab.
 # mods_order =
 # Mods switched off, names separated by |.
 # mods_disabled =
