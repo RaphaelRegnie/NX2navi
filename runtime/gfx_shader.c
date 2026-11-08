@@ -1502,7 +1502,9 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
         const char *k = cfg_get("NX2NAVI_XLATE_KEEP");
         keep = k && *k ? atoi(k) : 0;
     }
-    int kept = keep >= 2 || (keep && a && a->mvprev);
+    // A failed translation keeps its job and code too (rare; what a translator fix is tested on).
+    int failed = ok && strncmp(reply, "ok ", 3);
+    int kept = keep >= 2 || (keep && a && a->mvprev) || failed;
     if (kept) {
         char job_path[PATH_CAP + 80];
         snprintf(job_path, sizeof job_path, "%s/%s.job", cache_dir, hex);

@@ -58,6 +58,8 @@ void res_sizes(unsigned out[2], unsigned scene[2]);
 int res_adjustable(void);
 int wide_available(void);
 const char *const *vk_color_preset(const char *name);
+int vk_hdr_wanted(void);
+int vk_hdr_active(void);
 double frame_step_limit_hz(void);
 int frame_limit_adjustable(void);
 int frame_free_running(void);
@@ -447,6 +449,21 @@ static int fonts_up(float scale) {
     return ok;
 }
 
+// The font atlas follows the window's scale: rebuilt at once when it is more than 12% off (text would blur or shrink
+// visibly), else once the scale has held for half a second, so dragging a window's edge does not rebuild it, and read the
+// system's fonts again, every frame. Until then io.FontGlobalScale stretches the atlas there is. False: fonts_up failed.
+static bool fonts_follow(float scale) {
+    static float last;
+    static uint64_t since;
+    uint64_t now = plat_now_ns();
+    if (scale != last) last = scale, since = now;
+    ImGuiIO &io = ImGui::GetIO();
+    if (g_font_scale != scale && (!g_font_scale || fabsf(g_font_scale / scale - 1) > 0.12f || now - since > 500000000ull))
+        if (!fonts_up(scale)) return false;
+    io.FontGlobalScale = scale / g_font_scale;
+    return true;
+}
+
 extern "C" void menu_vk_release(void) {
     if (g_ctx_ok) vk_down();
 }
@@ -761,12 +778,22 @@ static void row_upscaling(void) {
     if (nv >= 2) opt_apply("NX2NAVI_TAA", nv >= 7 ? "fsr3" : "dlss");
 }
 
+// "in use: off" under the HDR value when the game started with HDR on but the swapchain is not HDR10 (the display or
+// Windows' HDR switch is off, vk_hdr_surface_format); else the restart note.
+static const char *hdr_note(void) {
+    const char *restart = menu_text(UI_MENU_HDR_NOTE);
+    if (!vk_hdr_wanted() || vk_hdr_active() || !*gfx_window_present_mode() || !cfg_bool("NX2NAVI_HDR")) return restart;
+    static char note[96];
+    snprintf(note, sizeof note, menu_text(UI_MENU_PRESENT_IN_USE), menu_text(UI_MENU_FRAMEGEN_OFF));
+    return note;
+}
+
 // HDR (vk_hdr.c), after a restart: off, the runtime's own (the game's tonemap kept above SDR white) or the game's native
 // HDR. The brightness rows follow while it is on.
 static void row_hdr(void) {
     static const char *const values[] = {"0", "1", "native"};
     const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), menu_text(UI_MENU_HDR_ENHANCED), menu_text(UI_MENU_HDR_NATIVE)};
-    opt_choice_list("NX2NAVI_HDR", UI_MENU_HDR, values, names, 3, UI_MENU_HDR_DESC, -1, menu_text(UI_MENU_HDR_NOTE));
+    opt_choice_list("NX2NAVI_HDR", UI_MENU_HDR, values, names, 3, UI_MENU_HDR_DESC, -1, hdr_note());
     if (!cfg_bool("NX2NAVI_HDR")) return;
     opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 10000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
     opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f nits");
@@ -1438,7 +1465,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     uint64_t t0 = plat_now_ns();
     if (!g_ctx_ok) make_context();
     float scale = menu_scale(t->height);
-    if (!vk_up(t) || (g_font_scale != scale && !fonts_up(scale))) {
+    if (!vk_up(t) || !fonts_follow(scale)) {
         rt_log("menu: Dear ImGui Vulkan back end set-up failed; the menu stays closed");
         g_failed.store(1);
         set_open(0);
@@ -1452,6 +1479,10 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     list_gpus(t->instance);
     ImGuiIO &io = ImGui::GetIO();
     int reset = g_reset.exchange(0);
+    // Read again after taking the reset: the menu may have opened since the read above (F1 on the window thread while
+    // the overlay alone was drawn), and that frame's reset would be spent on an overlay frame, so the first open frame
+    // ran without its focus row and with the opening key still down.
+    open = g_open.load(std::memory_order_acquire);
     if (reset) {
         io.ClearInputKeys();
         io.ClearInputMouse();
@@ -1514,7 +1545,7 @@ extern "C" int menu_boot_frame(const MenuTarget *t) {
     if (g_failed_flag() || g_boot_phase.load(std::memory_order_acquire) < 0) return 0;   // -1: done, a black frame
     if (!g_ctx_ok) make_context();
     float scale = menu_scale(t->height);
-    if (!vk_up(t) || (g_font_scale != scale && !fonts_up(scale))) {
+    if (!vk_up(t) || !fonts_follow(scale)) {
         rt_log("menu: Dear ImGui Vulkan back end set-up failed; no boot screen, and the menu stays closed");
         g_failed.store(1);
         return 0;
@@ -1548,7 +1579,7 @@ extern "C" int menu_boot_frame(const MenuTarget *t) {
     ImFont *body = ImGui::GetFont();
     float body_px = ImGui::GetFontSize();
     ImFont *head = g_title_font ? g_title_font : body;
-    float head_px = g_title_font ? g_title_font->FontSize : body_px * 1.2f;
+    float head_px = g_title_font ? g_title_font->FontSize * ImGui::GetIO().FontGlobalScale : body_px * 1.2f;
     ImVec2 ts = head->CalcTextSizeA(head_px, FLT_MAX, 0, title), ss = body->CalcTextSizeA(body_px, FLT_MAX, 0, step),
            hs = body->CalcTextSizeA(body_px * 0.8f, FLT_MAX, 0, hint);
     float bar_h = 10 * scale;

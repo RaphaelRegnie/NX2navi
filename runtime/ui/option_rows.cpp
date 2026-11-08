@@ -274,8 +274,8 @@ int opt_save_tick(int force) {
 // ---- rows
 
 bool opt_toggle(const char *key, UiTextId label, UiTextId desc, bool inverted) {
-    const CfgMeta *m = cfg_meta(key);
-    bool set = cfg_bool(key) != 0, def = m && strcmp(m->def, "0") != 0;
+    const char *d = cfg_default(key);
+    bool set = cfg_bool(key) != 0, def = d && *d && strcmp(d, "0") != 0;
     bool on = set != inverted;   // what the row shows
     RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), set == def, false, NULL};
     if (!row(key, label, desc, v)) return false;   // any step flips it
@@ -322,19 +322,19 @@ void opt_text(UiTextId text, bool warn) {
 
 bool opt_choice_list(const char *key, UiTextId label, const char *const *values, const char *const *names, int n,
                      UiTextId desc, int cur, const char *note) {
-    const CfgMeta *m = cfg_meta(key);
+    const char *d = cfg_default(key);
     const char *now = cfg_value(key);
     if (cur < 0)
         for (int i = 0; i < n; i++)
             if (!strcmp(values[i], now)) cur = i;
     int def = -1;
-    for (int i = 0; m && i < n; i++)
-        if (!strcmp(values[i], m->def)) def = i;
+    for (int i = 0; d && i < n; i++)
+        if (!strcmp(values[i], d)) def = i;
     RowView v = {cur >= 0 ? names[cur] : now, cur == def, true, note};
     int step = row(key, label, desc, v);
     if (!step || n <= 0) return false;
     int nv;
-    if (cur < 0) nv = 0;
+    if (cur < 0) nv = step < 0 ? n - 1 : 0;   // a value not in the list: left from the end, right / A from the start
     else if (step == 2) nv = (cur + 1) % n;               // A / click: the next value, round to the first
     else nv = cur + step < 0 ? 0 : cur + step >= n ? n - 1 : cur + step;   // left / right stop at the ends
     if (nv == cur) return false;
@@ -347,7 +347,7 @@ int opt_choice_index(const char *key, UiTextId label, const char *const *names, 
     RowView v = {cur >= 0 && cur < n ? names[cur] : "", cur == def, true, note};
     int step = row(key, label, desc, v);
     if (!step || n <= 0) return -1;
-    int nv = cur < 0 ? 0 : step == 2 ? (cur + 1) % n : cur + step < 0 ? 0 : cur + step >= n ? n - 1 : cur + step;
+    int nv = cur < 0 ? (step < 0 ? n - 1 : 0) : step == 2 ? (cur + 1) % n : cur + step < 0 ? 0 : cur + step >= n ? n - 1 : cur + step;
     if (nv == cur) return -1;
     menu_sound_play(MENU_SOUND_CURSOR);
     return nv;
@@ -386,11 +386,11 @@ bool opt_slider(const char *key, UiTextId label, float lo, float hi, UiTextId de
                 const char *note, const char *fallback) {
     const char *set = cfg_get(key);
     const char *src = fallback && !(set && *set) ? fallback : key;   // unset: show the value in effect, the fallback's
-    const CfgMeta *m = cfg_meta(src);
-    // A key without a table default of its own (the per-stick dead zones) defaults to its fallback: the "default" mark
+    const char *d = cfg_default(src);
+    // A key without a default of its own (the per-stick dead zones) defaults to its fallback: the "default" mark
     // follows the fallback's default, not 0, even once the key is set.
-    if (fallback && m && !m->def[0]) m = cfg_meta(fallback);
-    double v = cfg_double(src), def = m && m->def[0] ? strtod(m->def, NULL) : lo;
+    if (fallback && !(d && *d)) d = cfg_default(fallback);
+    double v = cfg_double(src), def = d && *d ? strtod(d, NULL) : lo;
     char shown[48];
     snprintf(shown, sizeof shown, fmt, v);
     RowView rv = {shown, fabs(v - def) < step * 0.01, true, note};
