@@ -1103,7 +1103,8 @@ def main():
         except ImportError:
             fail(f'the Python package {mod} is missing: pip install numpy lz4 zstandard zbic')
     cache.mkdir(parents=True, exist_ok=True)
-    if state.get('version') != STATE_VERSION or state.get('input') != src.identity:
+    reset = state.get('version') != STATE_VERSION or state.get('input') != src.identity
+    if reset:
         state = {'version': STATE_VERSION, 'input': src.identity, 'steps': {}}
     state['kit'] = kit_version()
     keep_awake()
@@ -1121,6 +1122,11 @@ def main():
             tmp = state_path.with_name(state_path.name + '.tmp')
             tmp.write_text(json.dumps(state, indent=1), encoding='utf-8')
             os.replace(tmp, state_path)
+
+    if reset:
+        # on disk at once: the exefs step rewrites <out>/exefs in place, and a run cut short there would leave the
+        # old state.json saying the old game's steps are done, which --rebuild trusts
+        save()
 
     def run(name):
         t = time.time()
