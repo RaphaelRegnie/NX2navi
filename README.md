@@ -79,6 +79,3 @@ of Zelda*, *Ocarina of Time* and *Nintendo Switch* are trademarks of Nintendo.
 
 [docs/building.md](docs/building.md) lists the toolchain and the steps. Everything the build writes stays under
 `build\` and `generated\`, which git ignores; run `tools/check_content.py` before a commit.
-
-Most of the code and documentation is written by AI coding agents (Claude Code) under the maintainer's direction; the
-maintainer plays every build and decides what is merged. [AGENTS.md](AGENTS.md) holds the rules they work under.
