@@ -1480,10 +1480,11 @@ static void probe_restart(const uint64_t *uid) {
     CHECK(RES(S_MOUNT_SAVE, U("save"), U(uid)) == 0, "MountSaveData after a restart");
 }
 
-// Commit through the override, then wait for its background thread, as the checks read the disk next.
+// Commit through the override, then wait for its background thread, as the checks read the disk next. Not with
+// fs_save_flush: that also marks the process as exiting, and every later Commit of the probe would be refused.
 static uint32_t tx_commit(void) {
     uint32_t r = RES(S_COMMIT, U("save"));
-    fs_save_flush();
+    save_wait_commit();
     return r;
 }
 
