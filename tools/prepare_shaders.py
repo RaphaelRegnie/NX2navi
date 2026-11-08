@@ -63,6 +63,17 @@ DEFAULT = {'tex': {str(slot): '2d' for slot in range(32)}}   # answers outside a
 CONTROL = 0x880
 ANS_REC = 4 + 32 + 32 + 147 + 1
 DEFAULT_FLAG = 0x80   # pad byte: a default variant, its answers refined from its first translation (gfx_shader_guess.c)
+# Default variants left out unless --all-shaders: the larger compute programs of two of Ocarina's three NDSR upscaler
+# packages. The translator turns their 20-47 KB of code into 3-12.6 MB of SPIR-V, which the GPU driver took 34 s to
+# 44 min each to build (RTX 5090, driver 621.01): 35 programs, the 24 that translate took 19,400 of the 21,750 s
+# every compute variant together took. Play sessions met none of them that was slow to build (one 20.8 KB program built in 0.2 s), while all five
+# agl_ndsr_vr_light.pck programs play met took 77-153 s each, so that package stays whole. A program play does meet
+# here is translated and built at its first use, as before the NDSR packages were read at all.
+SLOW_UNUSED = (('/agl_ndsr.pck', 16 << 10), ('/agl_ndsr_vr.pck', 16 << 10))   # (source suffix, code bytes above which)
+
+
+def slow_unused(s):
+    return any(s['source'].endswith(suffix) and len(s['code']) > limit for suffix, limit in SLOW_UNUSED)
 JOURNAL = 'shader-prepare-journal.bin'   # vk_pipeline.c skip_init: a 64-byte slot per worker, input id first
 RETRIES = 3
 
@@ -179,6 +190,8 @@ def main():
     ap.add_argument('--list', help='a shader_list.tsv instead of tools/data/shader_list.tsv or refs/MacNativeGames')
     ap.add_argument('--no-run', action='store_true', help='write the seed files only')
     ap.add_argument('--no-list', action='store_true', help='default variants only, without a shared shader list')
+    ap.add_argument('--all-shaders', action='store_true',
+                    help='also the default variants SLOW_UNUSED leaves out (an hour more of GPU driver builds)')
     ap.add_argument('--exe', default='nx2navi.exe' if os.name == 'nt' else 'nx2navi',
                     help='the game executable in the build directory that runs --prepare-shaders')
     a = ap.parse_args()
@@ -196,7 +209,8 @@ def main():
         shaders, _ = inventory(a.romfs or extracted / 'romfs', a.exefs or extracted / 'exefs')
     t1 = time.monotonic()
     progs, recs, seen, skipped = {}, [], set(), {'not in this version': 0, 'stage': 0}
-    variants += [(key, DEFAULT) for key in sorted(shaders)]
+    left_out = 0 if a.all_shaders else sum(1 for s in shaders.values() if slow_unused(s))
+    variants += [(key, DEFAULT) for key in sorted(shaders) if a.all_shaders or not slow_unused(shaders[key])]
     for key, deps in variants:
         s = shaders.get(key)
         if not s:
@@ -233,7 +247,8 @@ def main():
             f.write(rec)
     by = [sum(1 for p, _ in recs if p == i) for i in range(3)]
     print(f'{listed} listed variants and {len(shaders)} default ones: {len(recs)} of {len(progs)} shaders in {a.version} '
-          f'(priority t {by[0]}, warm {by[1]}, rest {by[2]}), skipped {skipped}; inventory {t1 - t0:.1f} s, '
+          f'(priority t {by[0]}, warm {by[1]}, rest {by[2]}), skipped {skipped}, {left_out} slow unused default variants '
+          f'left out (SLOW_UNUSED); inventory {t1 - t0:.1f} s, '
           f'seed written in {time.monotonic() - t0:.1f} s', flush=True)
     if a.no_run:
         return 0
