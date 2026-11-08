@@ -1216,6 +1216,15 @@ class SavesTest(unittest.TestCase):
         self.assertEqual((acct / 'save.dat').read_bytes(), b'older')
         self.assertFalse((tx / 'import').exists())
 
+    @unittest.skipUnless(os.name == 'nt', 'the running check is Windows only')
+    def test_a_read_only_exe_is_not_a_running_game(self):
+        exe = self.game / 'ocarina.exe'
+        exe.write_bytes(b'MZ')
+        os.chmod(exe, stat.S_IREAD)
+        self.assertFalse(build.game_running(self.game))
+        self.assertFalse(saves.game_running(self.game))
+        self.assertTrue(os.access(exe, os.W_OK))
+
     def test_read_only_files_import_writable(self):
         acct = saves.account_dir(self.game)
         self.files(acct, {'save.dat': b'old'})

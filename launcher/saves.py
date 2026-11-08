@@ -181,17 +181,9 @@ def _newest(game, account):
 
 
 def game_running(game):
-    """Windows: ocarina.exe cannot be opened for writing while it runs."""
-    exe = Path(game) / 'ocarina.exe'
-    if os.name != 'nt' or not exe.is_file():
-        return False
-    try:
-        with open(exe, 'r+b'):
-            return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
+    """Windows: ocarina.exe cannot be opened for writing while it runs (launcher/build.py game_running)."""
+    from .build import game_running as running
+    return running(game)
 
 
 def import_save(game, folder=None, log=print):
