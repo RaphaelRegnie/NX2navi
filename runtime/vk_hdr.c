@@ -114,7 +114,11 @@ static int name_is(const uint32_t *a, uint32_t len, const char *s) {   // OpName
 // reciprocal constants (0x7ef07ebb, 0x7ef19fff) and its one texture fp_t_tcb_8. Returns the clamps changed, -1 for
 // that shader with no output clamp found (a translator that stores the colour another way), 0 for any other shader.
 enum { SPV_OP_EXT_INST_IMPORT = 11, SPV_OP_EXT_INST = 12, SPV_OP_VARIABLE = 59, SPV_OP_STORE = 62,
-       SPV_OP_ACCESS_CHAIN = 65, SPV_SC_OUTPUT = 3, GLSL_FMAX = 40, GLSL_FCLAMP = 43 };
+       SPV_OP_ACCESS_CHAIN = 65, SPV_SC_OUTPUT = 3, GLSL_FMAX = 40, GLSL_FCLAMP = 43, GLSL_NMAX = 80,
+       GLSL_NCLAMP = 81 };
+// A 0..1 clamp: translators write FClamp, or NClamp (NaN gives the low bound, as the GPU's saturate does); its
+// replacement keeps the kind (NMax for NClamp).
+static int is_clamp(uint32_t inst) { return inst == GLSL_FCLAMP || inst == GLSL_NCLAMP; }
 
 static int fsr_unclamp(uint32_t *w, uint64_t *words) {
     uint64_t n = *words;
@@ -149,9 +153,10 @@ static int fsr_unclamp(uint32_t *w, uint64_t *words) {
     for (uint64_t i = 5; i < n;) {
         uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
         const uint32_t *a = w + i + 1;   // result type, result, set, instruction, x, min, max
-        if (op == SPV_OP_EXT_INST && len == 8 && a[2] == glsl && a[3] == GLSL_FCLAMP && a[1] < bound && out[a[1]] == 2 &&
+        if (op == SPV_OP_EXT_INST && len == 8 && a[2] == glsl && is_clamp(a[3]) && a[1] < bound && out[a[1]] == 2 &&
             a[5] == zero && a[6] == one) {
-            uint32_t ins[7] = {7u << 16 | SPV_OP_EXT_INST, a[0], a[1], a[2], GLSL_FMAX, a[4], zero};
+            uint32_t ins[7] = {7u << 16 | SPV_OP_EXT_INST, a[0], a[1], a[2], a[3] == GLSL_NCLAMP ? GLSL_NMAX : GLSL_FMAX,
+                               a[4], zero};
             memmove(w + k, ins, sizeof ins);
             k += 7, changed++;
         } else {
@@ -232,7 +237,7 @@ static int aces_extend(uint32_t **spirv, uint64_t *words) {
     if (glsl && ft && bt && it && v4 && c0 && c1 && c251 && c003 && st_len == 13 && last_offset == st)
         for (uint64_t i = 5; i < n && nsite < MAX_SITES; i += w[i] >> 16) {
             const uint32_t *a = w + i + 1;
-            if ((w[i] & 0xffff) != SPV_OP_EXT_INST || (w[i] >> 16) != 8 || a[2] != glsl || a[3] != GLSL_FCLAMP ||
+            if ((w[i] & 0xffff) != SPV_OP_EXT_INST || (w[i] >> 16) != 8 || a[2] != glsl || !is_clamp(a[3]) ||
                 a[5] != c0 || a[6] != c1 || a[4] >= bound || !def[a[4]])
                 continue;
             const uint32_t *m = w + def[a[4]];   // FMul(num, rcp)
@@ -298,7 +303,7 @@ static int aces_extend(uint32_t **spirv, uint64_t *words) {
             EMIT(SPV_OP_COMPOSITE_EXTRACT, ft, p, hv, 1);
             EMIT(SPV_OP_EXT_INST, ft, lin, glsl, GLSL_FMA, x, kslope, koff);   // the tangent
             EMIT(SPV_OP_FORD_GREATER, bt, gt, x, kxp);
-            EMIT(SPV_OP_EXT_INST, ft, r0, glsl, GLSL_FMAX, r, c0);
+            EMIT(SPV_OP_EXT_INST, ft, r0, glsl, GLSL_NMAX, r, c0);                // NaN: 0, as the clamp gave
             EMIT(SPV_OP_SELECT, ft, y, gt, lin, r0);
             EMIT(SPV_OP_EXT_INST, ft, pm, glsl, GLSL_FMAX, p, c1);              // the peak, in picture whites
             EMIT(SPV_OP_FMUL, ft, kn, pm, khalf);                                // the knee: half of it
