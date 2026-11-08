@@ -239,11 +239,12 @@
 # local IPC of a running Discord client. 1 = on; the Menu tab of the settings menu (F1) switches it too, and the
 # change reaches the presence thread at once.
 # discord_rpc = 0
-# The application whose name and artwork the status shows. The default is the project's own application,
-# registered as "NX2navi" with the port's green ring icon as its art. Register your own at
-# discord.com/developers (name and art are yours to choose) and put its id here.
-# discord_app_id = 1567232599846293504
-# The key of the application's uploaded art asset shown as the status's large image.
+# The Discord application whose name ("Playing <name>") and artwork the status shows: its Application ID from
+# discord.com/developers/applications (General Information), digits only. Default: the NX2navi application's id
+# built in from runtime/discord_app.h (NX2NAVI_DISCORD_APP_ID_DEFAULT); while that is empty and this is unset, the
+# presence stays off and the log says so. Register your own application to choose another name and art.
+# discord_app_id =
+# The key of the application's uploaded art asset (Rich Presence > Art Assets) shown as the status's large image.
 # discord_image = nx2navi_512x512
 
 [audio]

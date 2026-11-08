@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "discord_app.h"
 #include "host.h"
 #include "platform/platform.h"
 
@@ -157,10 +158,11 @@ static const CfgMeta metas[] = {
     {"WALK_KEY", "none", NULL, LIVE}, {"WALK_SCALE", "0.51", "0.2..0.9", LIVE},
     {"MENU_LANG", "", "en|ru|pt-BR|zh-Hans", LIVE},
     {"AMIIBO_DIR", "", NULL, LIVE},
-    // Discord Rich Presence (discord_rpc.c): off by default, the Menu tab of the settings menu switches it.
+    // Discord Rich Presence (discord_rpc.c): off by default, the Menu tab of the settings menu switches it. The
+    // application's id and art key default to discord_app.h's NX2NAVI_DISCORD_*_DEFAULT.
     {"DISCORD_RPC", "0", "0|1", LIVE},
-    {"DISCORD_APP_ID", "1567232599846293504", NULL, LIVE},
-    {"DISCORD_IMAGE", "nx2navi_512x512", NULL, LIVE},
+    {"DISCORD_APP_ID", NX2NAVI_DISCORD_APP_ID_DEFAULT, NULL, LIVE},
+    {"DISCORD_IMAGE", NX2NAVI_DISCORD_IMAGE_DEFAULT, NULL, LIVE},
     // Advanced: scheduling
     {"ASYNC_PREEMPT", "1", "0|1|2", RESTART}, {"REPLAY_ASYNC", "0", "0|1", RESTART},
     {"FREE_CORES", "0", "0|1", RESTART}, {"TIMER_1MS", "1", "0|1", RESTART},
