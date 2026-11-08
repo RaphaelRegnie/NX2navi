@@ -1046,8 +1046,8 @@ class SavesTest(unittest.TestCase):
     def test_save_folders_found(self):
         plain = self.files(self.tmp / 'backup', {'save.dat': b'1', 'option.dat': b'2'})
         self.assertEqual(saves.find_save(plain)[0], plain)
-        emu = self.files(self.tmp / 'emu', {'0000000000000000/' + 'a' * 32 + '/0100F2C0115B6000/save.dat': b'1'})
-        self.assertEqual(saves.find_save(emu)[0].name, '0100F2C0115B6000')
+        emu = self.files(self.tmp / 'emu', {'0000000000000000/' + 'a' * 32 + '/0100000000010000/save.dat': b'1'})
+        self.assertEqual(saves.find_save(emu)[0].name, '0100000000010000')
         other = self.files(self.tmp / 'other', {'profile/save/' + 'b' * 32 + '/save.dat': b'1', 'ocarina.exe': b''})
         self.assertEqual(saves.find_save(other)[0].name, 'b' * 32)
         self.assertEqual(saves.find_save(other / 'profile')[0].name, 'b' * 32)
@@ -1072,7 +1072,7 @@ class SavesTest(unittest.TestCase):
     def test_import_from_the_saves_folder(self):
         d = saves.ensure_saves_dir(self.game)
         self.assertIsNone(saves.waiting(self.game)[0])                 # README.txt alone is no save
-        self.files(d, {'emu/0000000000000000/' + 'c' * 32 + '/0100F2C0115B6000/save.dat': b'emu'})
+        self.files(d, {'emu/0000000000000000/' + 'c' * 32 + '/0100000000010000/save.dat': b'emu'})
         self.assertIsNotNone(saves.waiting(self.game)[0])
         r = saves.import_save(self.game, log=lambda m: None)
         self.assertIsNone(r['backup'])                                 # there was no save yet
@@ -1086,6 +1086,58 @@ class SavesTest(unittest.TestCase):
         self.assertEqual((saves.account_dir(self.game) / 'save.dat').read_bytes(), b'loose')
         self.assertEqual((r['backup'] / 'save.dat').read_bytes(), b'emu')
         self.assertIsNone(saves.waiting(self.game)[0])
+
+    def test_picking_the_saves_folder_takes_what_waits_there(self):
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'save.dat': b'mine'})
+        d = saves.ensure_saves_dir(self.game)
+        with self.assertRaises(saves.SaveError):                      # README.txt alone is no save
+            saves.import_save(self.game, d, log=lambda m: None)
+        self.assertEqual((acct / 'save.dat').read_bytes(), b'mine')
+        self.files(d, {'save.dat': b'put there'})
+        r = saves.import_save(self.game, d, log=lambda m: None)
+        self.assertEqual(sorted(p.name for p in acct.iterdir()), ['save.dat'])   # not README.txt or a backup
+        self.assertEqual((acct / 'save.dat').read_bytes(), b'put there')
+        self.assertEqual((r['backup'] / 'save.dat').read_bytes(), b'mine')
+
+    def test_an_interrupted_commit_is_backed_up(self):
+        # runtime/fs_host.c save_recover: with no account folder and no finished commit, save-tx/new is the save, and
+        # without it save-tx/old; the import keeps that only copy
+        for half in ('new', 'old'):
+            with self.subTest(half=half):
+                shutil.rmtree(self.game, ignore_errors=True)
+                self.game.mkdir()
+                acct = saves.account_dir(self.game)
+                tx = self.game / 'profile' / 'save-tx'
+                self.files(tx, {f'{half}/save.dat': b'only copy'})
+                src = self.files(self.tmp / f'mine-{half}', {'save.dat': b'imported'})
+                r = saves.import_save(self.game, src, log=lambda m: None)
+                self.assertEqual((acct / 'save.dat').read_bytes(), b'imported')
+                self.assertEqual((r['backup'] / 'save.dat').read_bytes(), b'only copy')
+                self.assertEqual((r['backup'] / 'save-tx' / half / 'save.dat').read_bytes(), b'only copy')
+
+    def test_a_failed_swap_keeps_the_old_save(self):
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'save.dat': b'old'})
+        src = self.files(self.tmp / 'mine', {'save.dat': b'imported'})
+        real = saves.os.replace
+
+        def replace(a, b):
+            if Path(a).name == 'import':   # the imported save going into place: antivirus holds a file
+                raise PermissionError(5, 'Access is denied')
+            return real(a, b)
+        saves.os.replace = replace
+        try:
+            with self.assertRaises(PermissionError):
+                saves.import_save(self.game, src, log=lambda m: None)
+        finally:
+            saves.os.replace = real
+        self.assertEqual((acct / 'save.dat').read_bytes(), b'old')
+
+    def test_another_installs_finished_commit_is_its_save(self):
+        other = self.files(self.tmp / 'other', {'profile/save/' + 'b' * 32 + '/save.dat': b'older',
+                                                'profile/save-tx/ready-2/save.dat': b'newest'})
+        self.assertEqual(saves.find_save(other)[0].name, 'ready-2')
 
     def test_refusals(self):
         acct = saves.account_dir(self.game)

@@ -32,7 +32,8 @@ version (fast_clang: the same objects, about a fifth faster).
 
     python tools/make_game.py --make-runtime-lib <kit>/lib --msys <ucrt64>   # the release's prebuilt runtime
 
-Nothing is written outside --out. The game folder then holds only what this PC built from the player's files: never
+Nothing is written outside --out (but for --make-runtime-lib DIR, which writes DIR). The game folder then holds
+only what this PC built from the player's files: never
 share it. Needs Python 3.10+ with numpy, lz4, zstandard and zbic (pip), and MSYS2 UCRT64's clang and libraries
 (README-BuildKit.md lists the commands). Delete <out>/build-cache afterwards to free about 5 GB; the next build then
 compiles everything again.
@@ -938,7 +939,8 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
     rsp = cache_dir / 'link.rsp'
     rsp.write_text('\n'.join('"%s"' % o.as_posix() for o in objs), encoding='utf-8')
     # lld links several times faster than GNU ld; the stack matches tools/build_game.py's build
-    ld = ['-fuse-ld=lld', '-Wl,--stack,16777216'] if (msys / 'bin' / 'ld.lld.exe').is_file() else []
+    # 16 MiB for the main thread with either linker (GNU ld takes the same flag): the default 2 MiB is too little
+    ld = (['-fuse-ld=lld'] if (msys / 'bin' / 'ld.lld.exe').is_file() else []) + ['-Wl,--stack,16777216']
     lib = ['-Wl,--whole-archive', str(prebuilt[0]), '-Wl,--no-whole-archive'] if prebuilt else []
     stamp = [[o.name, o.stat().st_size, o.stat().st_mtime_ns] for o in objs]
     if prebuilt:
@@ -1012,15 +1014,31 @@ def load_state(path):
     return state
 
 
+def cpu_tag():
+    """This processor's features the lifted code's level follows (cpu_level), as Windows reports them; part of the
+    compile key, so a game folder moved to a PC without them (or a new processor) is compiled again rather than kept
+    with instructions the processor lacks. 'any' where it cannot be read."""
+    if os.name != 'nt':
+        return 'any'
+    try:
+        import ctypes
+        present = ctypes.windll.kernel32.IsProcessorFeaturePresent
+        # PF_SSE4_2_INSTRUCTIONS_AVAILABLE 38, PF_AVX2_INSTRUCTIONS_AVAILABLE 40, PF_AVX512F_INSTRUCTIONS_AVAILABLE 41
+        return ''.join('1' if present(f) else '0' for f in (38, 40, 41))
+    except (OSError, AttributeError):
+        return 'any'
+
+
 def step_key(step, identity, out=None):
     """What a step's output depends on. exefs and romfs: the game files only; lift: the unpacked ExeFS and the
-    lifter; compile: the lift, the runtime sources and this script."""
+    lifter; compile: the lift, the runtime sources, this script and the processor (cpu_tag)."""
     if step in ('exefs', 'romfs'):
         return f'{step}-1|{identity}'
     lift = f'lift|{exefs_digest(out)}|{lift_digest()}'
     if step == 'lift':
         return lift
-    compile_key = f'compile|{lift}|{tree_digest(KIT / "runtime", ("**/*",))}|{sha256_file(Path(__file__))}|{kit_version()}'
+    compile_key = (f'compile|{lift}|{tree_digest(KIT / "runtime", ("**/*",))}|{sha256_file(Path(__file__))}|{kit_version()}'
+                   f'|cpu {cpu_tag()}')
     if step == 'compile':
         return compile_key
     # shaders: the built game and the translator that prepared them
@@ -1130,8 +1148,9 @@ def main():
                 break
         if romfs_job:
             romfs_job.join()
-    except SystemExit:
-        # a failed lift or compile: the RomFS image still finishes and is kept, so the next run starts after it
+    except (SystemExit, Exception):
+        # a failed lift or compile, or an error of this script: the RomFS image still finishes and is kept, so the
+        # next run starts after it (the thread is a daemon, and the process ending would cut its .part file short)
         if romfs_job and romfs_job.thread.is_alive():
             say('waiting for the RomFS image before stopping')
             romfs_job.thread.join()

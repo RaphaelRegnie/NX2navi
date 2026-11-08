@@ -322,11 +322,13 @@ bool opt_toggle(const char *key, UiTextId label, UiTextId desc, bool inverted) {
 }
 
 bool opt_toggle_value(const char *key, UiTextId label, UiTextId desc, const char *on_value, const char *off_value, const char *note) {
-    const CfgMeta *m = cfg_meta(key);
-    bool on = strcmp(cfg_value(key), off_value) != 0, def = m && strcmp(m->def, off_value) != 0;
+    // the default as the player's profile has it (cfg_default: the Steam Deck's fifo), which is also what "on" writes
+    // when it is an on value, so turning the switch off and on again puts the profile's own value back
+    const char *d = cfg_default(key);
+    bool on = strcmp(cfg_value(key), off_value) != 0, def = d && strcmp(d, off_value) != 0;
     RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), on == def, false, note};
     if (!row(key, label, desc, v)) return false;   // any step flips it
-    apply(key, on ? off_value : on_value);
+    apply(key, on ? off_value : def && *d ? d : on_value);
     return true;
 }
 

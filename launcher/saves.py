@@ -94,6 +94,9 @@ def find_save(folder):
         return None, ()
     for base in (p / 'profile' / 'save', p / 'save'):   # another game folder, or its profile folder
         if base.is_dir():
+            ready = _ready(base.parent / 'save-tx')   # a finished commit there is newer than its account folder
+            if ready is not None and _has_file(ready):
+                return ready, ()
             accounts = [d for d in base.iterdir() if d.is_dir() and HEX32.match(d.name)]
             if accounts:
                 return max(accounts, key=lambda d: d.stat().st_mtime), ()
@@ -143,18 +146,25 @@ def _files(src, skip):
     return out
 
 
-def _newest(game, account):
-    """The folder the game would load now: a finished commit still waiting in save-tx, else the account folder."""
-    tx = Path(game) / 'profile' / 'save-tx'
+def _ready(tx):
+    """The newest finished commit (ready-<n>) in a save-tx folder, or None."""
     ready = []
-    if tx.is_dir():
-        for d in tx.iterdir():
+    if Path(tx).is_dir():
+        for d in Path(tx).iterdir():
             m = re.fullmatch(r'ready-(\d+)', d.name)
             if m and d.is_dir():
                 ready.append((int(m.group(1)), d))
-    if ready:
-        return max(ready)[1]
-    return account if account.is_dir() else None
+    return max(ready)[1] if ready else None
+
+
+def _newest(game, account):
+    """The folder the game would load now, in the order of runtime/fs_host.c save_recover: a finished commit still
+    waiting in save-tx, else the account folder, else an interrupted commit's new save, else the save it replaced."""
+    tx = Path(game) / 'profile' / 'save-tx'
+    for d in (_ready(tx), account, tx / 'new', tx / 'old'):
+        if d is not None and d.is_dir():
+            return d
+    return None
 
 
 def game_running(game):
@@ -175,6 +185,8 @@ def import_save(game, folder=None, log=print):
     """Make the save in folder (None: the one waiting in <game>/saves) the game's save. Returns {'files', 'source',
     'backup'}; backup is the folder the replaced save went to, or None when there was none."""
     game = Path(game)
+    if folder is not None and Path(folder).resolve() == saves_dir(game).resolve():
+        folder = None   # the saves folder itself, picked in the dialog: what waits in it, as the button takes it
     from_saves = folder is None
     src, skip = waiting(game) if from_saves else find_save(folder)
     if src is None:
@@ -198,15 +210,34 @@ def import_save(game, folder=None, log=print):
     for rel in files:
         (stage / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(Path(src) / rel, stage / rel)
-    for d in list(tx.iterdir()):   # the journal of the replaced save: the game would load a finished commit first
-        if d != stage:
+    # The journal of the replaced save goes out of save-tx (the game would load a finished commit first, or complete an
+    # interrupted one): what holds files moves into the backup, beside the save it was copied from, so a copy the
+    # backup's own choice missed (an interrupted commit's other half) is kept too.
+    for d in list(tx.iterdir()):
+        if d == stage:
+            continue
+        if _has_file(d) if d.is_dir() else d.stat().st_size:
+            if backup is None:
+                backup = _fresh(saves, f'backup {stamp}')
+                backup.mkdir()
+            (backup / 'save-tx').mkdir(exist_ok=True)
+            shutil.move(str(d), str(backup / 'save-tx' / d.name))
+        else:
             shutil.rmtree(d, ignore_errors=True) if d.is_dir() else d.unlink(missing_ok=True)
     account.parent.mkdir(parents=True, exist_ok=True)
+    # The imported save goes into place before the old one is deleted; a failed rename puts the old one back.
+    gone = None
     if account.exists():
-        gone = tx / 'replaced'
+        gone = _fresh(tx, 'replaced')
         os.replace(account, gone)
+    try:
+        os.replace(stage, account)
+    except OSError:
+        if gone is not None:
+            os.replace(gone, account)
+        raise
+    if gone is not None:
         shutil.rmtree(gone, ignore_errors=True)
-    os.replace(stage, account)
     if from_saves:   # what was put into saves/ moves out whole, so the next import does not take any of it again
         done = _fresh(saves, f'imported {stamp}')
         done.mkdir()

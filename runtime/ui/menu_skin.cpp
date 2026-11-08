@@ -2,8 +2,8 @@
 // textures tinted and laid over each other in nine slices; until they are decoded, or without them, it is plain shapes
 // whose colours and proportions are sampled from the game: the save menu's Load and Cancel buttons (brown fill, light
 // edge, an inset line about a twentieth of the height in with a diamond and a curl at alternate corners), the options
-// menu's cursor (a 3 px white frame with a soft white-blue glow) and its divider ornament (traced: two pointed lens
-// ends, S-waves into spiral hooks and a diamond knot under the middle, in a 120 x 38 box with its centre at (60, 21)).
+// menu's cursor (a 3 px white frame with a soft white-blue glow); without the textures the divider is a plain line with
+// a diamond in its middle and a dot at each end, a shape of its own, not the game's ornament.
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
@@ -63,34 +63,6 @@ void ornament_line(ImDrawList *dl, ImVec2 a, ImVec2 b, float inset, float s, ImU
     diamond(dl, ImVec2(r, bt), d, col);
 }
 
-// The divider ornament's paths: F_M x y, F_L x y, F_C x1 y1 x2 y2 x y, ending with F_END.
-enum { F_M = -1000, F_L = -1001, F_C = -1002, F_Z = -1003, F_END = -1004 };
-static const float kFiligree0[] = {
-    F_M, 20, 17.4, F_C, 20.4, 17.3, 21.6, 16.8, 22.2, 16.9, F_C, 22.8, 17, 23.5, 17.7, 23.5, 18.2, F_C, 23.5, 18.7,
-    23.1, 19.4, 22.4, 19.8, F_C, 21.6, 20.2, 20.3, 20.4, 19, 20.4, F_C, 17.7, 20.4, 15.9, 20.2, 14.5, 19.9, F_C,
-    13.1, 19.6, 10.6, 19.4, 10.5, 18.6, F_C, 10.4, 17.9, 12.6, 16.3, 14, 15.4, F_C, 15.4, 14.5, 17.2, 13.6, 19, 13.2,
-    F_C, 20.8, 12.8, 23.2, 12.8, 25, 13.1, F_C, 26.8, 13.4, 28.1, 13.9, 29.5, 14.8, F_C, 30.9, 15.7, 32.2, 17.4,
-    33.5, 18.6, F_C, 34.8, 19.8, 36, 21.2, 37.5, 22, F_C, 39, 22.8, 40.8, 23.4, 42.5, 23.6, F_C, 44.2, 23.8, 46,
-    23.5, 47.5, 23.1, F_C, 49, 22.7, 50.4, 21.9, 51.2, 21.2, F_C, 52, 20.5, 52.5, 19.5, 52.4, 18.8, F_C, 52.3, 18.1,
-    51.5, 17.3, 50.6, 16.9, F_C, 49.7, 16.5, 48.2, 16.2, 47, 16.3, F_C, 45.8, 16.4, 44.2, 17.1, 43.6, 17.2, F_END};
-static const float kFiligree1[] = {
-    F_M, 100, 17.4, F_C, 99.6, 17.3, 98.4, 16.8, 97.8, 16.9, F_C, 97.2, 17, 96.5, 17.7, 96.5, 18.2, F_C, 96.5, 18.7,
-    96.8, 19.4, 97.6, 19.8, F_C, 98.3, 20.2, 99.7, 20.4, 101, 20.4, F_C, 102.3, 20.4, 104.1, 20.2, 105.5, 19.9, F_C,
-    106.9, 19.6, 109.4, 19.4, 109.5, 18.6, F_C, 109.6, 17.9, 107.4, 16.3, 106, 15.4, F_C, 104.6, 14.5, 102.8, 13.6,
-    101, 13.2, F_C, 99.2, 12.8, 96.8, 12.8, 95, 13.1, F_C, 93.2, 13.4, 91.9, 13.9, 90.5, 14.8, F_C, 89.1, 15.7, 87.8,
-    17.4, 86.5, 18.6, F_C, 85.2, 19.8, 84, 21.2, 82.5, 22, F_C, 81, 22.8, 79.2, 23.4, 77.5, 23.6, F_C, 75.8, 23.8,
-    74, 23.5, 72.5, 23.1, F_C, 71, 22.7, 69.6, 21.9, 68.8, 21.2, F_C, 68, 20.5, 67.5, 19.5, 67.6, 18.8, F_C, 67.7,
-    18.1, 68.5, 17.3, 69.4, 16.9, F_C, 70.3, 16.5, 71.8, 16.2, 73, 16.3, F_C, 74.2, 16.4, 75.8, 17.1, 76.4, 17.2,
-    F_END};
-static const float kFiligree2[] = {
-    F_M, 40.6, 17.6, F_C, 40.7, 17, 40.7, 14.9, 41.2, 14, F_C, 41.7, 13.1, 42.6, 12.4, 43.8, 12, F_C, 45, 11.6, 46.7,
-    11.4, 48.2, 11.5, F_C, 49.7, 11.6, 51.3, 11.8, 52.6, 12.3, F_C, 53.9, 12.8, 55, 13.6, 56, 14.6, F_C, 57, 15.6,
-    58.2, 17.6, 58.6, 18.2, F_L, 64.6, 26, F_L, 60, 31.6, F_END};
-static const float kFiligree3[] = {
-    F_M, 79.4, 17.6, F_C, 79.3, 17, 79.3, 14.9, 78.8, 14, F_C, 78.3, 13.1, 77.4, 12.4, 76.2, 12, F_C, 75, 11.6, 73.3,
-    11.4, 71.8, 11.5, F_C, 70.3, 11.6, 68.7, 11.8, 67.4, 12.3, F_C, 66.1, 12.8, 65, 13.6, 64, 14.6, F_C, 63, 15.6,
-    61.8, 17.6, 61.4, 18.2, F_L, 55.4, 26, F_L, 60, 31.6, F_END};
-const float *const kFiligree[] = {kFiligree0, kFiligree1, kFiligree2, kFiligree3};
 
 // The settings menu's colours: a dark umber panel, warm browns for frames and what is selected, gold for the ornaments,
 // accents and the cursor, parchment text. kGreen and kOcarina keep their names for the selected and active controls.
@@ -416,31 +388,12 @@ void skin_filigree(ImDrawList *dl, float x0, float x1, float y, float s, float a
     dl->AddCircleFilled(ImVec2(x1 - 4 * s - dot_r, y), dot_r, dot);
     dl->AddLine(ImVec2(x0 + 4 * s + 2 * dot_r + gap, y), ImVec2(cx - orn_w * 0.5f - gap, y), line, 1.0f * s);
     dl->AddLine(ImVec2(cx + orn_w * 0.5f + gap, y), ImVec2(x1 - 4 * s - 2 * dot_r - gap, y), line, 1.0f * s);
-    auto at = [&](float px, float py) { return ImVec2(cx + (px - 60.0f) * k, y + (py - 21.0f) * k); };
-    for (const float *p : kFiligree) {
-        ImVec2 cur(0, 0);
-        bool open = false;
-        for (int i = 0; p[i] != F_END;) {
-            if (p[i] == F_M) {
-                if (open) dl->PathStroke(orn, 0, 2.2f * k);
-                cur = at(p[i + 1], p[i + 2]);
-                dl->PathLineTo(cur);
-                open = true;
-                i += 3;
-            } else if (p[i] == F_L) {
-                cur = at(p[i + 1], p[i + 2]);
-                dl->PathLineTo(cur);
-                i += 3;
-            } else if (p[i] == F_C) {
-                cur = at(p[i + 5], p[i + 6]);
-                dl->PathBezierCubicCurveTo(at(p[i + 1], p[i + 2]), at(p[i + 3], p[i + 4]), cur, 8);
-                i += 7;
-            } else {   // F_Z: back to the path's start (no path here uses it)
-                i += 1;
-            }
-        }
-        if (open) dl->PathStroke(orn, 0, 2.2f * k);
-    }
+    // the middle: a diamond outline with a small filled one inside, and a short stroke on each side of it
+    float d = 9.0f * k * 1.08f, inner = 3.2f * k * 1.08f, t = 1.6f * k;
+    dl->AddQuad(ImVec2(cx, y - d), ImVec2(cx + d, y), ImVec2(cx, y + d), ImVec2(cx - d, y), orn, t);
+    dl->AddQuadFilled(ImVec2(cx, y - inner), ImVec2(cx + inner, y), ImVec2(cx, y + inner), ImVec2(cx - inner, y), orn);
+    dl->AddLine(ImVec2(cx - orn_w * 0.5f, y), ImVec2(cx - d - 3 * k, y), orn, t);
+    dl->AddLine(ImVec2(cx + d + 3 * k, y), ImVec2(cx + orn_w * 0.5f, y), orn, t);
 }
 
 void skin_panel(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, float alpha) {

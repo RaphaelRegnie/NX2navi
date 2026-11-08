@@ -749,13 +749,17 @@ static const char *present_name(const char *mode) {
     return nullptr;
 }
 
-// "in use: VSync" under the VSync row when it is off and the driver cannot present without waiting; NULL otherwise, and
-// before the first swapchain.
+// "in use: ..." under the VSync row when the swapchain does other than the row says: VSync when it is off and the driver
+// cannot present without waiting, Immediate when it is on and the driver has neither mailbox nor relaxed FIFO
+// (gfx_present.c pick_present_mode), so the game tears; NULL otherwise, and before the first swapchain.
 static const char *vsync_note(void) {
     const char *got = gfx_window_present_mode();
-    if (!*got || strcmp(cfg_value("NX2NAVI_VK_PRESENT"), "immediate") || !strcmp(got, "immediate")) return nullptr;
+    if (!*got) return nullptr;
+    bool off = !strcmp(cfg_value("NX2NAVI_VK_PRESENT"), "immediate"), tears = !strcmp(got, "immediate");
+    if (off == tears) return nullptr;
     static char note[96];
-    snprintf(note, sizeof note, menu_text(UI_MENU_PRESENT_IN_USE), menu_text(UI_MENU_PRESENT_VSYNC));
+    snprintf(note, sizeof note, menu_text(UI_MENU_PRESENT_IN_USE),
+             menu_text(tears ? UI_MENU_PRESENT_IMMEDIATE : UI_MENU_PRESENT_VSYNC));
     return note;
 }
 
@@ -1004,8 +1008,9 @@ static const char *prompts_note(bool *restart) {
 // then closes the game as Quit does and starts it again (gfx_window_request_restart). It waits while the game writes a
 // save, and the game stays when nx2navi.ini cannot be written, as the changed settings would not come back. From the
 // Cheats tab (restart_rebuild) Restart also lets the next start rebuild for cheats whose last rebuild failed
-// (cheats_rebuild_allow). The Quit button's confirmation is the same box (g_confirm_quit): closing the window already
-// finishes a save in progress (gfx_window_closed), so it does not wait.
+// (cheats_rebuild_allow). The Quit button's confirmation is the same box (g_confirm_quit), and it waits too: the game
+// runs on while the menu is open, and closing the window finishes only a Commit that has begun (gfx_window_closed,
+// fs_save_flush), so a save between writing its files and committing them would be dropped.
 static bool restart_rebuild, g_confirm_quit;
 static void restart_confirm(float scale) {
     g_modal = false;
@@ -1019,10 +1024,11 @@ static void restart_confirm(float scale) {
     const ImVec2 box = ImGui::GetWindowPos(), box_size = ImGui::GetWindowSize();
     skin_panel(ImGui::GetWindowDrawList(), box, ImVec2(box.x + box_size.x, box.y + box_size.y), scale);
     ImGui::TextUnformatted(menu_text(g_confirm_quit ? UI_MENU_QUIT_CONFIRM : UI_MENU_RESTART_CONFIRM));
-    bool saving = !g_confirm_quit && fs_save_busy() != 0;
+    bool saving = fs_save_busy() != 0;
     if (saving || (!g_confirm_quit && !cfg_last_save_ok()))
         ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1), "%s",
-                           menu_text(saving ? UI_MENU_RESTART_SAVING : UI_MENU_SAVE_FAILED));
+                           menu_text(!saving ? UI_MENU_SAVE_FAILED : g_confirm_quit ? UI_MENU_QUIT_SAVING
+                                                                                    : UI_MENU_RESTART_SAVING));
     ImGui::Spacing();
     const char *yes = menu_text(g_confirm_quit ? UI_MENU_QUIT : UI_MENU_RESTART_YES), *no = menu_text(UI_MENU_RESET_NO);
     const ImGuiStyle &st = ImGui::GetStyle();

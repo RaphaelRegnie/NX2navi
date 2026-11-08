@@ -62,6 +62,10 @@ const char *cfg_value(const char *name) {
     const CfgMeta *m = cfg_meta(name);
     return v ? v : m ? m->def : "";
 }
+const char *cfg_default(const char *key) {   // no device profile here: the row's own default
+    const CfgMeta *m = cfg_meta(key);
+    return m ? m->def : NULL;
+}
 int cfg_int(const char *name) { return atoi(cfg_value(name)); }
 double cfg_double(const char *name) { return atof(cfg_value(name)); }
 int cfg_bool(const char *name) { return strcmp(cfg_value(name), "0") != 0; }

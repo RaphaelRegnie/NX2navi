@@ -141,7 +141,7 @@ def states(app):
 
     def import_saves():
         app.release, app.message = None, ''
-        app.save_message = ('Save imported: 3 files from 0100F2C0115B6000. Your old save is in '
+        app.save_message = ('Save imported: 3 files from 0100000000010000. Your old save is in '
                             'saves\\backup 2026-11-08 17.30.12.')
         app.show('home', next(i for i, r in enumerate(app.rows_home()) if r.label == 'Import Saves'))
 
