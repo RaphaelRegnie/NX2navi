@@ -63,6 +63,8 @@ typedef struct PoolRec {
     VmaAllocation malloc_;
     uint32_t acc_sub;                  // replay: the last submission that synced the mirror (mirror_sync)
     uint32_t wb_sub;                   // replay: the last submission that wrote mirror bytes back to guest memory
+    uint32_t vd_wrote_sub, vd_use_sub; // verify mode: the last submission that bound it written / used its mirror
+    uint64_t vd_wrote_n;               // verify mode: written bindings of it so far
     uint32_t mgen;                     // gen_lock: every page write stamped up to this generation is in the mirror
                                        // (or in a copy queued before its next use)
     FlushRange fl[FLUSH_RANGES + 1];   // flush_lock: nvnMemoryPoolFlushMappedRange pages not copied yet (flush_add)
@@ -1213,7 +1215,7 @@ static void dirty_frame(uint64_t frame) {
 // another pool or the allocation fails.
 #define VERIFY_BYTES (4u << 20)
 #define VERIFY_SAMPLES 64
-#define VERIFY_LOG 16
+#define VERIFY_LOG 200
 enum { MR_BUDGET, MR_UNTRACKED, MR_OVERLAP, MR_ALLOC, MR_N };
 
 int vk_mirror_on;
@@ -1502,6 +1504,7 @@ void vk_mem_use(VkMemSpan *sp) {
     if (r->mstate == MS_NONE) mirror_create(r);
     if (r->mstate != MS_ON) return;
     if (r->acc_sub != msub) mirror_sync(r);
+    r->vd_use_sub = msub;
     sp->buffer = r->mbuf;
 }
 
@@ -1510,6 +1513,11 @@ void vk_mem_pick(VkMemSpan *sp) {
     if (!r || r->mstate != MS_ON) return;
     if (r->acc_sub != msub) mirror_sync(r);
     sp->buffer = r->mbuf;
+}
+
+VkBuffer vk_mem_guest_twin(const VkMemSpan *sp) {
+    const PoolRec *r = sp->pool;
+    return r && r->mstate == MS_ON && sp->buffer == r->mbuf ? r->buf : VK_NULL_HANDLE;
 }
 
 int vk_mem_mirror_probe(uint64_t addr) {
@@ -1755,6 +1763,7 @@ static void snap_free(void *arg) {   // completion thread: the submission is don
 static void gpu_wrote(const VkMemSpan *sp, uint64_t size, int shader) {
     PoolRec *r = sp->pool;
     if (!r || r->mstate != MS_ON || sp->buffer != r->mbuf || !size) return;
+    r->vd_wrote_sub = msub, r->vd_wrote_n++;
     // A binding to the end of its pool (no size) can span hundreds of MiB: those stay copies.
     if (shader && !(sp->offset & 3) && !(size & 3) && size <= MERGE_MAX && merging() && snap_add(r, sp->offset, size))
         return;
@@ -1948,6 +1957,13 @@ static void verify_cb(void *arg) {   // completion thread
                 rt_log("mem: verify mismatch: pool %#llx+%#llx (%s) offset %#llx: bytes %#x..%#x of the page differ, "
                        "mirror %02x guest %02x at the first (submission %u)", (unsigned long long)r->lo,
                        (unsigned long long)r->size, f, (unsigned long long)(a - r->lo), k, e, m[k], g[k], j->sub);
+                const uint32_t *gs = gen_slot(a & ~((1ull << GEN_PAGE_SHIFT) - 1), 0);
+                char mh[100], gh[100];
+                for (int b = 0; b < 16; b++) snprintf(mh + 3 * b, 4, "%02x ", m[b]), snprintf(gh + 3 * b, 4, "%02x ", g[b]);
+                rt_log("mem: verify mismatch detail: written binds %llu, last %u; used %u; written back %u; gpa record %u; "
+                       "page cpu stamp %u (synced to %u, now %u); mirror %s| guest %s",
+                       (unsigned long long)r->vd_wrote_n, r->vd_wrote_sub, r->vd_use_sub, wb, r->gpa_rec, gs ? *gs : 0,
+                       s->mgen, gen_now, mh, gh);
             }
         }
     }

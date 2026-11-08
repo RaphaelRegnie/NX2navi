@@ -700,6 +700,10 @@ static void clear_buf(VkExec *ex, const p_clear_buf *p) {
         if (!started) vk_exec_pass_end(ex), vk_exec_barrier(ex), started = 1;
         VK_MEM_PICK(d);
         vkCmdFillBuffer(ex->cb, d.buffer, d.offset, n, p->value);
+        // A VRAM mirror's guest copy is filled too, at once: atomics through the device address table count in both
+        // copies (translator patch 0036), and a counter reset here must start from the same value in both.
+        VkBuffer twin = vk_mem_guest_twin(&d);
+        if (twin) vkCmdFillBuffer(ex->cb, twin, d.offset, n, p->value), ex->recorded++;
         vk_mem_gpu_wrote(&d, n);
         ex->recorded++;
         vk_mem_count(d.cls, VK_MUSE_GPU_WRITE, n);
