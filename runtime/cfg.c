@@ -547,6 +547,17 @@ static const char *section_of(const char *key) {
     return NULL;
 }
 
+// A value as cfg_load reads it back: quoted when it starts or ends with a blank (cfg_load trims those) or is itself
+// quoted (cfg_load takes one pair of quotes off). A mod's folder name in mods_order can start with a space.
+static void put_value(Out *o, const char *v) {
+    size_t n = strlen(v);
+    int quote = n && (v[0] == ' ' || v[0] == '\t' || v[n - 1] == ' ' || v[n - 1] == '\t' ||
+                      (n >= 2 && v[0] == '"' && v[n - 1] == '"'));
+    if (quote) puts_(o, "\"");
+    puts_(o, v);
+    if (quote) puts_(o, "\"");
+}
+
 // "key = value" + eol for entry e (key lower-case)
 static void put_entry(Out *o, const CfgEntry *e, const char *eol) {
     char k[64];
@@ -554,7 +565,7 @@ static void put_entry(Out *o, const CfgEntry *e, const char *eol) {
     for (char *p = k; *p; p++) *p = (char)tolower((unsigned char)*p);
     puts_(o, k);
     puts_(o, " = ");
-    puts_(o, e->value);
+    put_value(o, e->value);
     puts_(o, eol);
 }
 
@@ -639,7 +650,7 @@ int cfg_save_to(const char *path) {
             while (kn && (s[kn - 1] == ' ' || s[kn - 1] == '\t')) kn--;
             put(&o, s, kn);
             puts_(&o, " = ");
-            puts_(&o, entries[replace[i]].value);
+            put_value(&o, entries[replace[i]].value);
             int had_eol = len && s[len - 1] == '\n';
             if (had_eol) puts_(&o, eol);
         } else {
