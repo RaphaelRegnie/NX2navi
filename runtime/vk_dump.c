@@ -487,7 +487,7 @@ __attribute__((format(printf, 2, 3))) static void sp(Str *b, const char *fmt, ..
     b->n += (size_t)k;
 }
 
-// SPIR-V hash of a shader; the first time, its SPIR-V goes to sh_<hash>.spv.
+// SPIR-V hash of a shader; the first time, its SPIR-V goes to sh_<hash>.spv and its guest program to sh_<hash>.code.
 static uint64_t shader_hash(const GfxShader *s) {
     static struct { const GfxShader *s; uint64_t h; } tab[1024];
     static int n;
@@ -502,6 +502,8 @@ static uint64_t shader_hash(const GfxShader *s) {
     snprintf(path, sizeof path, "%s/sh_%016llx.spv", dir, (unsigned long long)h);
     FILE *f = fopen(path, "wb");
     if (f) fwrite(w, 4, (size_t)words, f), fclose(f);
+    snprintf(path, sizeof path, "%s/sh_%016llx.code", dir, (unsigned long long)h);   // the guest program it came from
+    gfx_shader_write_code(s, path);
     if (n < 1024) tab[n].s = s, tab[n].h = h, n++;
     return h;
 }

@@ -1875,6 +1875,17 @@ const uint32_t *gfx_shader_spirv(const GfxShader *s, uint64_t *words) {
     return s->spirv;
 }
 
+// The guest program a shader was translated from, as its stored inputs hold it (the whole program: NVN2 code from its
+// first byte), written to path for a disassembler (NX2NAVI_DUMP's sh_<hash>.code). 0: no stored inputs for it.
+int gfx_shader_write_code(const GfxShader *s, const char *path) {
+    Inputs in;
+    paths();
+    if (!s || !cache_dir[0] || !in_load(s->iid, &in)) return 0;
+    int ok = write_file(path, in.code, (size_t)in.length);
+    free(in.buf);
+    return ok;
+}
+
 int gfx_shader_stage(const GfxShader *s) { return s->stage; }
 
 int gfx_shader_resources(const GfxShader *s, int kind, const GfxShaderRes **res) {
