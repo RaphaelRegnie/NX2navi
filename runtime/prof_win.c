@@ -394,6 +394,51 @@ int prof_sampler_start(void) {
 
 // perf_present, every present: the frame the sampler's NX2NAVI_PROFILE_FRAMES window counts, and a NX2NAVI_PROFILE_SLOW
 // dump of a present at least slow_ns after the previous one (d 0 on the first present).
+// NX2NAVI_TRACE=perf (perf.c): the process's committed memory by kind, and outside the guest's address range the
+// allocations holding the most private memory, so a log shows what grows: guest memory, a heap, the graphics driver's
+// mappings or loaded images. A walk of the address space with VirtualQuery: tens of milliseconds, so only now and then.
+#define CENSUS_TOP 12
+typedef struct { uint64_t base, bytes; DWORD protect; } CensusRun;
+
+static void census_keep(CensusRun *top, int *nt, const CensusRun *r) {   // top[] stays sorted, largest first
+    if (!r->bytes || (*nt == CENSUS_TOP && r->bytes <= top[*nt - 1].bytes)) return;
+    int k = *nt < CENSUS_TOP ? (*nt)++ : *nt - 1;
+    for (; k > 0 && top[k - 1].bytes < r->bytes; k--) top[k] = top[k - 1];
+    top[k] = *r;
+}
+
+void prof_commit_census(uint64_t frame) {
+    uint64_t t0 = GetTickCount64(), guest = 0, priv = 0, mapped = 0, image = 0, regions = 0;
+    CensusRun top[CENSUS_TOP], cur = {0};
+    int nt = 0;
+    MEMORY_BASIC_INFORMATION mi;
+    for (uint8_t *a = NULL; VirtualQuery(a, &mi, sizeof mi) == sizeof mi; a = (uint8_t *)mi.BaseAddress + mi.RegionSize) {
+        regions++;
+        uint64_t base = (uint64_t)(uintptr_t)mi.AllocationBase, at = (uint64_t)(uintptr_t)mi.BaseAddress;
+        int committed = mi.State == MEM_COMMIT, outside = committed && mi.Type == MEM_PRIVATE && at >= RT_ADDRESS_LIMIT;
+        if (committed) {
+            if (mi.Type == MEM_IMAGE) image += mi.RegionSize;
+            else if (mi.Type == MEM_MAPPED) mapped += mi.RegionSize;
+            else if (at < RT_ADDRESS_LIMIT) guest += mi.RegionSize;
+            else priv += mi.RegionSize;
+        }
+        if (cur.bytes && (!outside || base != cur.base)) census_keep(top, &nt, &cur), cur.bytes = 0;   // its run ended
+        if (outside) {
+            if (!cur.bytes) cur.base = base, cur.protect = mi.AllocationProtect;
+            cur.bytes += mi.RegionSize;
+        }
+        if (at + mi.RegionSize < at) break;   // the top of the address space
+    }
+    census_keep(top, &nt, &cur);
+    rt_log("mem: commit census at frame %llu: guest %.0f MiB, other private %.0f MiB, mapped %.0f MiB, images %.0f MiB "
+           "(%llu regions walked in %llu ms); the largest private allocations outside the guest:",
+           (unsigned long long)frame, guest / 1048576.0, priv / 1048576.0, mapped / 1048576.0, image / 1048576.0,
+           (unsigned long long)regions, (unsigned long long)(GetTickCount64() - t0));
+    for (int i = 0; i < nt; i++)
+        rt_log("mem:   %#llx %.1f MiB committed (protect %#lx)", (unsigned long long)top[i].base, top[i].bytes / 1048576.0,
+               (unsigned long)top[i].protect);
+}
+
 void prof_sampler_frame(uint64_t frame, uint64_t now, uint64_t d) {
     cur_frame = frame;
     // the end of a NX2NAVI_PROFILE_FRAMES window writes the profile then: a test run ended by a timeout never reaches
