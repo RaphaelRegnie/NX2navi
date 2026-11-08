@@ -8,9 +8,17 @@
 // One storage buffer of 32-bit words, bound whole to every shader that declares it (res.json "table", cb_slot 0x40):
 //   words 0-1    the device address of a zeroed 4 KiB buffer, which an address no page maps reads and writes instead
 //   word 2       the word index of the records (REC_WORD)
+//   words 3-4    the device address of a 4 KiB scratch buffer, where a twin write goes when its page has no twin
 //   words 16..   L1: 65536 entries, one per 16 MiB of the 40-bit GPU address space, the index of its L2 block (0: none)
 //   word 65552   L2 blocks of 4096 entries, one per 4 KiB page: the record of the buffer that holds the page (0: none)
-//   REC_WORD     records of two words: the buffer's device address minus the GPU address of its byte 0 (low word first)
+//   REC_WORD     records of four words: the buffer's device address minus the GPU address of its byte 0, then the same
+//                for the page's twin (low words first)
+// The twin: a pool with a VRAM mirror (vk_memory.c mirror_create) has the mirror in its record's first address and its
+// imported buffer, guest memory, in the second; any other record has the same buffer in both. Shaders read through the
+// first and write through both (translator patch 0034): the GPU's writes through the table are not recorded as GPU
+// writes (vk_exec_draw.c ssbo_info), so with the mirror alone the CPU never saw them, and a sync of a page the CPU wrote
+// copied the stale guest page over them. The game's compute passes write tree and foliage records this way, and a
+// record overwritten so drew a tree stretched into a column reaching the sky (Hyrule Field, Kakariko, Death Mountain).
 // A record a page entry names is never written: a new mapping takes a new record, and a record goes back to the free
 // list only once the GPU finished every submission issued while a page could still name it (vk_completion_add). Page
 // and L1 entries are single 32-bit stores, so a shader that reads the table while it changes sees the old mapping or
@@ -36,13 +44,14 @@
 #define BLOCKS 1024u                   // L2 blocks: 16 GiB of mapped GPU address space; block 0 stays zero
 #define REC_WORD (L2_WORD + BLOCKS * L2_N)
 #define RECS 65536u                    // record 0 means none
-#define WORDS (REC_WORD + RECS * 2u)
+#define REC_WORDS 4u                   // words per record
+#define WORDS (REC_WORD + RECS * REC_WORDS)
 #define PAGE_SHIFT 12
 
 static struct {
     int state;                         // 0 untried, 1 on, -1 off
-    VkBuffer buf, dummy;
-    VmaAllocation alloc, dummy_alloc;
+    VkBuffer buf, dummy, scratch;
+    VmaAllocation alloc, dummy_alloc, scratch_alloc;
     volatile uint32_t *gpu;            // the mapped table
     uint32_t *cpu;                     // its shadow
     uint32_t nblocks;                  // L2 blocks handed out (block 0 is the zero block)
@@ -99,8 +108,13 @@ static int create(void) {
         return 0;
     }
     memset(dinfo.pMappedData, 0, 4096);
-    uint64_t z = vk_gpa_device_address(G.dummy);
-    put(0, (uint32_t)z), put(1, (uint32_t)(z >> 32)), put(2, REC_WORD);
+    VmaAllocationCreateInfo si = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    if (vmaCreateBuffer(c->vma, &di, &si, &G.scratch, &G.scratch_alloc, NULL) != VK_SUCCESS) {
+        rt_log("vk_gpa: the scratch buffer could not be allocated");
+        return 0;
+    }
+    uint64_t z = vk_gpa_device_address(G.dummy), sc = vk_gpa_device_address(G.scratch);
+    put(0, (uint32_t)z), put(1, (uint32_t)(z >> 32)), put(2, REC_WORD), put(3, (uint32_t)sc), put(4, (uint32_t)(sc >> 32));
     G.nblocks = 1, G.nrec = 1;
     rt_log("vk_gpa: device address table on (%.1f MiB, %u blocks of 16 MiB, %u records)", WORDS * 4 / 1048576.0, BLOCKS, RECS);
     return 1;
@@ -132,14 +146,16 @@ static uint32_t page_word(uint64_t page, int alloc) {
     return L2_WORD + blk * L2_N + (uint32_t)(page & (L2_N - 1));
 }
 
-static uint32_t rec_alloc(uint64_t delta) {
+static uint32_t rec_alloc(uint64_t delta, uint64_t twin) {
     uint32_t r;
     if (G.nfree) r = G.free_recs[--G.nfree];
     else if (G.nrec < RECS) r = G.nrec++;
     else return 0;
     // The record before any page names it: the page store below is ordered after these by the release fence.
-    put(REC_WORD + r * 2, (uint32_t)delta);
-    put(REC_WORD + r * 2 + 1, (uint32_t)(delta >> 32));
+    put(REC_WORD + r * REC_WORDS, (uint32_t)delta);
+    put(REC_WORD + r * REC_WORDS + 1, (uint32_t)(delta >> 32));
+    put(REC_WORD + r * REC_WORDS + 2, (uint32_t)twin);
+    put(REC_WORD + r * REC_WORDS + 3, (uint32_t)(twin >> 32));
     __atomic_thread_fence(__ATOMIC_RELEASE);
     return r;
 }
@@ -162,7 +178,7 @@ uint32_t vk_gpa_map(uint64_t lo, uint64_t hi, VkBuffer buf, uint64_t buf_lo) {
     uint64_t p0 = (lo + 4095) >> PAGE_SHIFT, p1 = hi >> PAGE_SHIFT;
     if (p1 <= p0) return 0;
     plat_mutex_lock(&gpa_lock);
-    uint32_t r = rec_alloc(dev - buf_lo);
+    uint32_t r = rec_alloc(dev - buf_lo, dev - buf_lo);
     if (!r) {
         G.refused++;
         plat_mutex_unlock(&gpa_lock);
@@ -227,7 +243,11 @@ uint32_t vk_gpa_remap(uint64_t lo, uint64_t hi, uint32_t old_rec, VkBuffer buf, 
     uint64_t dev = vk_gpa_device_address(buf);
     uint64_t p0 = (lo + 4095) >> PAGE_SHIFT, p1 = hi >> PAGE_SHIFT;
     plat_mutex_lock(&gpa_lock);
-    uint32_t r = dev ? rec_alloc(dev - buf_lo) : 0;
+    // the twin: the buffer the pages named before (the pool's imported buffer), so writes reach guest memory too
+    uint64_t twin = old_rec ? (uint64_t)G.cpu[REC_WORD + old_rec * REC_WORDS] |
+                                  (uint64_t)G.cpu[REC_WORD + old_rec * REC_WORDS + 1] << 32
+                            : dev - buf_lo;
+    uint32_t r = dev ? rec_alloc(dev - buf_lo, twin) : 0;
     if (!r) { plat_mutex_unlock(&gpa_lock); return old_rec; }
     for (uint64_t p = p0; p < p1; p++) {
         uint32_t w = page_word(p, 1);
@@ -253,6 +273,7 @@ void vk_gpa_shutdown(void) {
     if (G.state <= 0 || !c) return;
     vmaDestroyBuffer(c->vma, G.buf, G.alloc);
     vmaDestroyBuffer(c->vma, G.dummy, G.dummy_alloc);
+    vmaDestroyBuffer(c->vma, G.scratch, G.scratch_alloc);
     free(G.cpu), free(G.free_recs);
     memset(&G, 0, sizeof G);
     G.state = -1;
