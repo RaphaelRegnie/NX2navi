@@ -1,45 +1,6 @@
 --- a/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
 +++ b/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
-@@ -1802,7 +1802,13 @@
-             SpvInstruction one = context.Constant(context.TypeU32(), 1);
-             SpvInstruction zero = context.Constant(context.TypeU32(), 0);
- 
--            return new OperationResult(varType, emitU(context.GetType(varType), elemPointer, one, zero, value));
-+            SpvInstruction result = emitU(context.GetType(varType), elemPointer, one, zero, value);
-+            if (operation.StorageKind == StorageKind.GlobalMemory)   // NX2NAVI: the twin (GetDeviceAddressTwinPointer)
-+            {
-+                emitU(context.GetType(varType), GlobalTwinPointer(context, operation), one, zero, value);
-+            }
-+
-+            return new OperationResult(varType, result);
-         }
- 
-         private static OperationResult GenerateAtomicMemoryCas(CodeGenContext context, AstOperation operation)
-@@ -1815,7 +1821,22 @@
-             SpvInstruction one = context.Constant(context.TypeU32(), 1);
-             SpvInstruction zero = context.Constant(context.TypeU32(), 0);
- 
--            return new OperationResult(varType, context.AtomicCompareExchange(context.GetType(varType), elemPointer, one, zero, zero, value1, value0));
-+            SpvInstruction result = context.AtomicCompareExchange(context.GetType(varType), elemPointer, one, zero, zero, value1, value0);
-+            if (operation.StorageKind == StorageKind.GlobalMemory)   // NX2NAVI: the twin (GetDeviceAddressTwinPointer)
-+            {
-+                context.AtomicCompareExchange(context.GetType(varType), GlobalTwinPointer(context, operation), one, zero, zero, value1, value0);
-+            }
-+
-+            return new OperationResult(varType, result);
-+        }
-+
-+        private static SpvInstruction GlobalTwinPointer(CodeGenContext context, AstOperation operation)
-+        {
-+            return GetDeviceAddressTwinPointer(
-+                context,
-+                ((AstOperand)operation.GetSource(0)).Value,
-+                context.Get(AggregateType.U32, operation.GetSource(1)),
-+                context.Get(AggregateType.U32, operation.GetSource(2)));
-         }
- 
-         private static OperationResult GenerateLoadOrStore(CodeGenContext context, AstOperation operation, bool isStore)
-@@ -1856,11 +1877,29 @@
+@@ -1856,11 +1856,25 @@
          //               second-level block, 0 for none (block 0 stays zero)
          //   word 65552  second-level blocks of 4096 entries, one per 4 KiB page: the record of the buffer that holds
          //               the page, 0 for none
@@ -51,28 +12,24 @@
 +        //               then the same for the page's twin, the pool's imported buffer in guest memory when the first is
 +        //               its VRAM mirror (low words first); the host never changes a record a page names, so a page entry
 +        //               read at any time gives a whole one
-+        // The pointer addresses the 32-bit word at the address's 4-byte-aligned word. Stores and atomics also go to the
-+        // twin (GetDeviceAddressTwinPointer): what the GPU writes into a mirror through the table is not recorded as a
-+        // GPU write, so without it the CPU never saw it and a sync of a CPU-written page copied the stale guest page
-+        // over it (runtime/vk_gpa.c).
++        // The pointer addresses the 32-bit word at the address's 4-byte-aligned word. Stores also go to the twin
++        // (GetDeviceAddressPointers): what the GPU writes into a mirror through the table is not recorded as a GPU write,
++        // so without it the CPU never saw it and a sync of a CPU-written page copied the stale guest page over it
++        // (runtime/vk_gpa.c). Atomics do not: the twin's word may be stale (a counter the GPU reset with a buffer fill
++        // went on counting from its old value in guest memory), and that page's next sync copied the wrong count into
++        // the mirror, so culled instance lists drew garbage for a frame (flickering foliage).
          private static SpvInstruction GetDeviceAddressPointer(CodeGenContext context, int binding, SpvInstruction low, SpvInstruction high)
          {
 +            return GetDeviceAddressPointers(context, binding, low, high, out _);
 +        }
 +
-+        // The twin of an access's pointer: the guest copy of a mirrored page, else the scratch buffer.
-+        private static SpvInstruction GetDeviceAddressTwinPointer(CodeGenContext context, int binding, SpvInstruction low, SpvInstruction high)
-+        {
-+            GetDeviceAddressPointers(context, binding, low, high, out SpvInstruction twin);
-+            return twin;
-+        }
-+
++        // twinPointer: the guest copy of a mirrored page, else the scratch buffer.
 +        private static SpvInstruction GetDeviceAddressPointers(CodeGenContext context, int binding, SpvInstruction low, SpvInstruction high, out SpvInstruction twinPointer)
 +        {
              SpvInstruction u32 = context.TypeU32();
              SpvInstruction u64 = context.TypeInt(64, 0);
              SpvInstruction tableVar = context.StorageBuffers[binding];
-@@ -1879,16 +1918,26 @@
+@@ -1879,16 +1893,26 @@
              SpvInstruction page = context.BitwiseAnd(u32, context.ShiftRightLogical(u32, low, U(12)), U(0xfff));
              SpvInstruction record = Word(context.IAdd(u32, context.IAdd(u32, context.IMul(u32, block, U(4096)), U(65552)), page));
              SpvInstruction mapped = context.INotEqual(context.TypeBool(), record, U(0));
@@ -101,7 +58,7 @@
          }
  
          private static SpvInstruction LoadAligned(CodeGenContext context, SpvInstruction type, SpvInstruction pointer)
-@@ -1912,7 +1961,7 @@
+@@ -1912,7 +1936,7 @@
              SpvInstruction u32 = context.TypeU32();
              SpvInstruction low = context.Get(AggregateType.U32, operation.GetSource(1));
              SpvInstruction high = context.Get(AggregateType.U32, operation.GetSource(2));
@@ -110,7 +67,7 @@
              StorageKind kind = operation.StorageKind;
              int bits = kind is StorageKind.GlobalMemoryS8 or StorageKind.GlobalMemoryU8 ? 8
                  : kind is StorageKind.GlobalMemoryS16 or StorageKind.GlobalMemoryU16 ? 16 : 32;
-@@ -1921,7 +1970,9 @@
+@@ -1921,7 +1945,9 @@
              {
                  if (isStore)
                  {
@@ -121,7 +78,7 @@
                      return OperationResult.Invalid;
                  }
  
-@@ -1939,6 +1990,8 @@
+@@ -1939,6 +1965,8 @@
                  SpvInstruction semantics = context.Constant(u32, 0);
                  context.AtomicAnd(u32, pointer, scope, semantics, context.Not(u32, mask));
                  context.AtomicOr(u32, pointer, scope, semantics, context.ShiftLeftLogical(u32, value, shift));
