@@ -60,8 +60,6 @@ and `VK_EXT_mesh_shader`. The setup is not signed, so SmartScreen warns on its f
 
 ## Known issues
 
-- Some areas show stretched polygons for a moment (a dark column reaching into the sky on Death Mountain and in
-  Kakariko).
 - The first start after an install or update, and the first visit to an area, can pause briefly while the graphics
   driver builds what it has not seen; later starts are smooth.
 - A rare crash in the game's particle code.
