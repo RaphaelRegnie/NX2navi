@@ -11,5 +11,5 @@
 // an id of some other application would show that application's name instead of NX2navi.
 #pragma once
 
-#define NX2NAVI_DISCORD_APP_ID_DEFAULT ""                  // the NX2navi application's id: digits only, at most 20
-#define NX2NAVI_DISCORD_IMAGE_DEFAULT "nx2navi_512x512"   // its large-image art asset key
+#define NX2NAVI_DISCORD_APP_ID_DEFAULT "1568862362969309275"   // the NX2navi application's id: digits, at most 20
+#define NX2NAVI_DISCORD_IMAGE_DEFAULT "nx2navi_512x512"        // its large-image art asset key

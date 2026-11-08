@@ -240,10 +240,10 @@
 # change reaches the presence thread at once.
 # discord_rpc = 0
 # The Discord application whose name ("Playing <name>") and artwork the status shows: its Application ID from
-# discord.com/developers/applications (General Information), digits only. Default: the NX2navi application's id
-# built in from runtime/discord_app.h (NX2NAVI_DISCORD_APP_ID_DEFAULT); while that is empty and this is unset, the
-# presence stays off and the log says so. Register your own application to choose another name and art.
-# discord_app_id =
+# discord.com/developers/applications (General Information), digits only. Default: the NX2navi application, built
+# in from runtime/discord_app.h (NX2NAVI_DISCORD_APP_ID_DEFAULT). Register your own application to choose another
+# name and art.
+# discord_app_id = 1568862362969309275
 # The key of the application's uploaded art asset (Rich Presence > Art Assets) shown as the status's large image.
 # discord_image = nx2navi_512x512
 
