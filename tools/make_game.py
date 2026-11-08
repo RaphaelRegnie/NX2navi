@@ -1108,8 +1108,12 @@ def main():
     state_lock = threading.Lock()   # the RomFS step records itself from its own thread
 
     def save():
+        # whole or not at all: a cut write (a full disk, Cancel ending the process) would leave a state.json that
+        # loads as {}, and the launcher would take the built game for none and ask for the dump again
         with state_lock:
-            state_path.write_text(json.dumps(state, indent=1), encoding='utf-8')
+            tmp = state_path.with_name(state_path.name + '.tmp')
+            tmp.write_text(json.dumps(state, indent=1), encoding='utf-8')
+            os.replace(tmp, state_path)
 
     def run(name):
         t = time.time()
