@@ -876,11 +876,11 @@ static void row_framegen(void) {
     if (nv >= 0 && nv < n) opt_apply("NX2NAVI_FRAMEGEN", values[nv]);
 }
 
-// The picture's height (widescreen.c picture_height): the game's 1440 or more.
+// The picture's height (widescreen.c picture_height): 1080, the game's 1440 or more.
 static void row_game_res(void) {
-    static const char *const values[] = {"1440", "1800", "2160", "2880", "window"};
-    const char *names[] = {"1440p", "1800p", "2160p (4K)", "2880p (5K)", menu_text(UI_MENU_GAME_RES_NATIVE)};
-    opt_choice_list("NX2NAVI_GAME_RES", UI_MENU_GAME_RES, values, names, 5, UI_MENU_GAME_RES_DESC);
+    static const char *const values[] = {"1080", "1440", "1800", "2160", "2880", "window"};
+    const char *names[] = {"1080p", "1440p", "1800p", "2160p (4K)", "2880p (5K)", menu_text(UI_MENU_GAME_RES_NATIVE)};
+    opt_choice_list("NX2NAVI_GAME_RES", UI_MENU_GAME_RES, values, names, 6, UI_MENU_GAME_RES_DESC);
 }
 
 static void tab_screen(float scale) {

@@ -123,7 +123,7 @@ static const CfgMeta metas[] = {
     {"FRAMEGEN", "off", "off|fsr3|dlss", RESTART},   // vk_fg.cpp, vk_dlssg.c
     {"DLSS_CHAR_MASK", "65", "0|35|65|100", LIVE}, {"FXAA", "1", "0|1", LIVE},
     {"GAME_ASPECT", "16:9", "16:9|window|21:9|32:9", RESTART},   // widescreen.c
-    {"GAME_RES", "1440", "1440|1800|2160|2880|window", RESTART},   // widescreen.c: the picture's height
+    {"GAME_RES", "1440", "1080|1440|1800|2160|2880|window", RESTART},   // widescreen.c: the picture's height
     {"ASPECT", "fit", "fit|stretch", LIVE}, {"FOV", "100", "70..140", LIVE},
     {"ANISO", "game", "game|2|4|8|16", RESTART},   // vk_texture.c sampler_features
     // colour adjustment (vk_color.c); the preset is the menu's, the four values are what the present uses
