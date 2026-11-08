@@ -921,6 +921,8 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     if (cy < 0) cy = 0;
     if (cx + cw > w) cw = w - cx;
     if (cy + ch > h) ch = h - cy;
+    if (cw <= 0 || ch <= 0) cx = cy = 0, cw = w, ch = h;   // a crop outside the image (the game's nvnWindowSetCrop):
+                                                             // the whole image, not an inverted blit rectangle
     window_settings_live();
     // The menu overlay: laid out before recording (its first frame starts the ImGui back end and uploads the font)
     const char *menu_shot = NULL;
@@ -1066,6 +1068,16 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     } else {
         vk_device_fault_report(r);
         rt_log("gfx: present submit failed (%d)", (int)r);
+        // The fence was reset after the acquire and the acquire's semaphore is signalled: left so, this slot's fence
+        // wait would time out (5 s) at every later present and the picture stop for good. An empty batch takes the
+        // semaphore and signals the fence; the acquired image goes back with the swapchain, made again next frame.
+        VkSubmitInfo2 settle = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .waitSemaphoreInfoCount = 1,
+                                .pWaitSemaphoreInfos = &wait};
+        vk_queue_lock();
+        VkResult r2 = vkQueueSubmit2(c->gfx_queue, 1, &settle, g_fence[slot]);
+        vk_queue_unlock();
+        if (r2 != VK_SUCCESS) rt_log("gfx: the present slot could not be settled either (%d)", (int)r2);
+        plat_xchg32(&g_dirty, 1);
     }
     g_frame++;
     if (cap) {
