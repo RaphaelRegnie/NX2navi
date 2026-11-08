@@ -408,6 +408,10 @@ static void census_keep(CensusRun *top, int *nt, const CensusRun *r) {   // top[
 }
 
 void prof_commit_census(uint64_t frame) {
+    // Allocations by committed size: under 256 KiB, under 4 MiB, under 64 MiB, larger. A few large ones growing is a
+    // pool or cache; many small ones is a stream of allocations that are not freed.
+    static const uint64_t edge[3] = {256ull << 10, 4ull << 20, 64ull << 20};
+    uint64_t bcount[4] = {0}, bbytes[4] = {0};
     uint64_t t0 = GetTickCount64(), guest = 0, priv = 0, mapped = 0, image = 0, regions = 0;
     CensusRun top[CENSUS_TOP], cur = {0};
     int nt = 0;
@@ -422,18 +426,31 @@ void prof_commit_census(uint64_t frame) {
             else if (at < RT_ADDRESS_LIMIT) guest += mi.RegionSize;
             else priv += mi.RegionSize;
         }
-        if (cur.bytes && (!outside || base != cur.base)) census_keep(top, &nt, &cur), cur.bytes = 0;   // its run ended
+        // An allocation's regions are contiguous: its run ends where the next allocation begins, reserved gaps inside
+        // it (a heap segment's uncommitted tail) included.
+        if (cur.bytes && base != cur.base) {
+            int k = cur.bytes < edge[0] ? 0 : cur.bytes < edge[1] ? 1 : cur.bytes < edge[2] ? 2 : 3;
+            bcount[k]++, bbytes[k] += cur.bytes;
+            census_keep(top, &nt, &cur), cur.bytes = 0;
+        }
         if (outside) {
             if (!cur.bytes) cur.base = base, cur.protect = mi.AllocationProtect;
             cur.bytes += mi.RegionSize;
         }
         if (at + mi.RegionSize < at) break;   // the top of the address space
     }
-    census_keep(top, &nt, &cur);
+    if (cur.bytes) {
+        int k = cur.bytes < edge[0] ? 0 : cur.bytes < edge[1] ? 1 : cur.bytes < edge[2] ? 2 : 3;
+        bcount[k]++, bbytes[k] += cur.bytes;
+        census_keep(top, &nt, &cur);
+    }
     rt_log("mem: commit census at frame %llu: guest %.0f MiB, other private %.0f MiB, mapped %.0f MiB, images %.0f MiB "
-           "(%llu regions walked in %llu ms); the largest private allocations outside the guest:",
-           (unsigned long long)frame, guest / 1048576.0, priv / 1048576.0, mapped / 1048576.0, image / 1048576.0,
-           (unsigned long long)regions, (unsigned long long)(GetTickCount64() - t0));
+           "(%llu regions walked in %llu ms)", (unsigned long long)frame, guest / 1048576.0, priv / 1048576.0,
+           mapped / 1048576.0, image / 1048576.0, (unsigned long long)regions, (unsigned long long)(GetTickCount64() - t0));
+    rt_log("mem:   other private by allocation size: under 256 KiB %llu allocations %.0f MiB, under 4 MiB %llu %.0f MiB, "
+           "under 64 MiB %llu %.0f MiB, larger %llu %.0f MiB; the largest:",
+           (unsigned long long)bcount[0], bbytes[0] / 1048576.0, (unsigned long long)bcount[1], bbytes[1] / 1048576.0,
+           (unsigned long long)bcount[2], bbytes[2] / 1048576.0, (unsigned long long)bcount[3], bbytes[3] / 1048576.0);
     for (int i = 0; i < nt; i++)
         rt_log("mem:   %#llx %.1f MiB committed (protect %#lx)", (unsigned long long)top[i].base, top[i].bytes / 1048576.0,
                (unsigned long)top[i].protect);

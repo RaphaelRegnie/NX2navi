@@ -37,6 +37,7 @@
 
 #include "cfg.h"
 #include "host.h"
+#include "prof.h"
 #include "platform/platform.h"
 #include "sha256.h"
 
@@ -276,6 +277,7 @@ static void crash_handler(const PlatCrash *x) {
     kern_free_cores_note();
     rtss_limit_restore();   // after the report: RivaTuner Statistics Server's profile as it was
     fflush(stderr);
+    prof_sampler_write();   // NX2NAVI_PROFILE: what was sampled until the crash (it gives up after 2 s if the sampler hangs)
     plat_exit(71);
 }
 
