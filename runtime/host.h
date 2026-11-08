@@ -350,6 +350,7 @@ void rt_boot(void);                                        // boot.c
 int list_audio_devices(void);                              // audio_mixer.c: --list-audio-devices (SDL3 on every window back end)
 int probe_cfg(void);                                       // cfg_probe.c
 int probe_dpi(void);                                       // dpi_probe_win.c (Windows only)
+int list_monitors(void);                                   // --list-monitors: gfx_window_win.c, gfx_window_sdl.c
 int probe_mods(void);                                      // mods_probe.c
 void discord_init(void);                                   // discord_rpc.c: the Rich Presence thread, game runs only
 int probe_discord(void);                                   // discord_rpc.c

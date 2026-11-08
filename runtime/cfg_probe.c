@@ -153,6 +153,8 @@ int probe_cfg(void) {
           "meta: prefix and case are accepted");
     m = cfg_meta("RUMBLE_STRENGTH");
     CHECK(m && EQ(m->def, "130") && EQ(m->values, "0..300"), "meta: rumble strength 130 in 0..300");
+    m = cfg_meta("MONITOR");
+    CHECK(m && EQ(m->def, "auto") && !m->values && !m->live, "meta: monitor is auto by default, free text, read at start");
     m = cfg_meta("PERF_OVERLAY");
     CHECK(m && EQ(m->def, "off") && EQ(m->values, "off|fps|full") && m->live, "meta: perf_overlay is live, off by default");
     m = cfg_meta("AUDIO_DEVICE");
