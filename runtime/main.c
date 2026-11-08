@@ -264,6 +264,7 @@ static void crash_handler(const PlatCrash *x) {
         rt_logf("  not on a guest thread\n");
     }
     kern_free_cores_note();
+    rtss_limit_restore();   // after the report: RivaTuner Statistics Server's profile as it was
     fflush(stderr);
     plat_exit(71);
 }

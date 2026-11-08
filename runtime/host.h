@@ -298,6 +298,12 @@ uint64_t frame_step_cap_ns(void);                          // with the real-time
 int frame_limit_adjustable(void);                         // the frame limit setting changes the rate (always)
 int frame_free_running(void);                             // no fps60/realtime patch set: the game steps by the clock
 double frame_step_limit_hz(void);                         // the frame rate the limit gives (overlay); 0 unknown
+// rtss_limit.c: RivaTuner Statistics Server takes the frame limit where it runs
+void rtss_limit_want(int64_t mhz);                        // the pacer's limit in millihertz: >0, 0 none, -1 keep RTSS out
+int rtss_limit_active(void);                              // RTSS limits this process: the pacer holds no frames
+int rtss_limit_state(void);                               // menu: 1 RTSS limits, 2 its profile is read-only, 3 it let the
+                                                           // game run past its limit
+void rtss_limit_restore(void);                            // before the process ends: the profile's old limit back
 int64_t frame_step_world_us(void);                         // game time since the loaded save's first frame, -1 before
                                                            // (NX2NAVI_FPS_LIMIT, live)
 uint64_t frame_step_ticks(void);                           // game time since the first present in 60 Hz ticks (input scripts)

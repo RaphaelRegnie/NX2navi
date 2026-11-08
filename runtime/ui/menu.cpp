@@ -62,6 +62,7 @@ int vk_hdr_wanted(void);
 int vk_hdr_active(void);
 double frame_step_limit_hz(void);
 int frame_limit_adjustable(void);
+int rtss_limit_state(void);
 int frame_free_running(void);
 extern const int rt_game_version;
 extern const char rt_port_version[];
@@ -700,6 +701,8 @@ static void row_game_lang(void) {
 }
 
 // The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
+// The note says when RivaTuner Statistics Server does the limiting (rtss_limit.c), cannot change its profile, or let the
+// game run past its limit.
 static void row_fps_limit() {
     // 40 and 45: the Steam Deck's screen runs at 40 to 60 Hz (the OLED to 90); 40 divides 40 and 120 Hz evenly
     // 165 and 240: common gaming monitors; unlimited only where the game steps by the clock (frame_rate.c)
@@ -719,7 +722,12 @@ static void row_fps_limit() {
     }
     const char *set = cfg_get("NX2NAVI_FPS_LIMIT"), *old = cfg_get("NX2NAVI_FPS60");
     int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : -1;
-    opt_choice_list("NX2NAVI_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, n, UI_MENU_FPS_LIMIT_DESC, cur);
+    int rtss = rtss_limit_state();
+    const char *note = rtss == 1   ? menu_text(UI_MENU_FPS_RTSS)
+                       : rtss == 2 ? menu_text(UI_MENU_FPS_RTSS_READONLY)
+                       : rtss == 3 ? menu_text(UI_MENU_FPS_RTSS_IGNORED)
+                                   : nullptr;
+    opt_choice_list("NX2NAVI_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, n, UI_MENU_FPS_LIMIT_DESC, cur, note);
 }
 
 // The menu's name of a NX2NAVI_VK_PRESENT mode (gfx_window_present_mode); NULL for another.
