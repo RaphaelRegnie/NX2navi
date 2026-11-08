@@ -76,6 +76,12 @@ void plat_fiber_free(PlatFiber *f);       // a fiber nobody runs
 typedef struct { uint64_t gpr[10]; uint32_t mxcsr, fpcw; uint64_t pad; uint8_t xmm[160]; } PlatJmp;
 int plat_jmp_save(PlatJmp *j) __attribute__((returns_twice, nothrow));
 _Noreturn void plat_jmp_go(PlatJmp *j);
+#elif defined(__linux__) && defined(__x86_64__)
+// SysV: rbx, rbp, r12-r15, the caller's rsp and the return address, then MXCSR and the x87 control word (linux.c).
+// Not glibc's jmp_buf: it mangles rsp, rbp and rip, so plat_frame_capture could not fill one.
+typedef struct { uint64_t gpr[8]; uint32_t mxcsr, fpcw; } PlatJmp;
+int plat_jmp_save(PlatJmp *j) __attribute__((returns_twice, nothrow));
+_Noreturn void plat_jmp_go(PlatJmp *j);
 #else
 #include <setjmp.h>
 typedef struct { jmp_buf b; } PlatJmp;

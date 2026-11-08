@@ -32,6 +32,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <unwind.h>
 
 #include <SDL3/SDL_clipboard.h>
 
@@ -313,6 +314,7 @@ __asm__(".text\n"
         ".type plat_fiber_entry, @function\n"
         ".p2align 4\n"
         "plat_fiber_entry:\n"
+        "    andq $-16, %rsp\n"   // fiber_swap's ret leaves rsp 8 off: the SysV ABI wants it aligned at the call
         "    movq %r13, %rdi\n"
         "    callq *%r12\n"
         "    ud2\n"
@@ -1045,9 +1047,74 @@ void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
 
 void plat_crash_context(const char *s) { (void)s; }   // the Windows crash notes only
 
-int plat_frame_capture(PlatJmp *out, int (*want)(uintptr_t rip, void *arg), void *arg) {   // not on Linux yet
-    (void)out, (void)want, (void)arg;
-    return 0;
+// plat_jmp_save / plat_jmp_go (platform.h): leaf code that does not move rsp before it leaves, as on Windows.
+_Static_assert(sizeof(PlatJmp) == 72 && __builtin_offsetof(PlatJmp, mxcsr) == 64, "plat_jmp_save layout");
+__asm__(".text\n"
+        ".globl plat_jmp_save\n"
+        ".type plat_jmp_save, @function\n"
+        ".p2align 4\n"
+        "plat_jmp_save:\n"
+        "    movq %rbx, 0(%rdi)\n"
+        "    movq %rbp, 8(%rdi)\n"
+        "    movq %r12, 16(%rdi)\n"
+        "    movq %r13, 24(%rdi)\n"
+        "    movq %r14, 32(%rdi)\n"
+        "    movq %r15, 40(%rdi)\n"
+        "    leaq 8(%rsp), %rdx\n"   // the caller's rsp after this call returns
+        "    movq %rdx, 48(%rdi)\n"
+        "    movq (%rsp), %rdx\n"
+        "    movq %rdx, 56(%rdi)\n"
+        "    stmxcsr 64(%rdi)\n"
+        "    fnstcw 68(%rdi)\n"
+        "    xorl %eax, %eax\n"
+        "    ret\n"
+        ".size plat_jmp_save, .-plat_jmp_save\n"
+        ".globl plat_jmp_go\n"
+        ".type plat_jmp_go, @function\n"
+        ".p2align 4\n"
+        "plat_jmp_go:\n"
+        "    movq 0(%rdi), %rbx\n"
+        "    movq 8(%rdi), %rbp\n"
+        "    movq 16(%rdi), %r12\n"
+        "    movq 24(%rdi), %r13\n"
+        "    movq 32(%rdi), %r14\n"
+        "    movq 40(%rdi), %r15\n"
+        "    ldmxcsr 64(%rdi)\n"
+        "    fldcw 68(%rdi)\n"
+        "    movq 48(%rdi), %rsp\n"
+        "    movl $1, %eax\n"
+        "    jmpq *56(%rdi)\n"
+        ".size plat_jmp_go, .-plat_jmp_go\n");
+
+// The DWARF unwinder of libgcc (already linked for C++), frame by frame from plat_frame_capture's caller. In each
+// frame's callback the IP is its return address, the callee-saved registers are as that frame sees them, and
+// _Unwind_GetCFA is its rsp once the call returns (libgcc's context holds the CFA of the frame just unwound).
+typedef struct {
+    PlatJmp *out;
+    int (*want)(uintptr_t rip, void *arg);
+    void *arg;
+    int n, found;
+} FrameWalk;
+
+static _Unwind_Reason_Code frame_step(struct _Unwind_Context *ctx, void *p) {
+    FrameWalk *w = p;
+    uintptr_t ip = _Unwind_GetIP(ctx), sp = _Unwind_GetCFA(ctx);
+    if (w->n++ == 0) return _URC_NO_REASON;   // plat_frame_capture itself
+    if (!ip || w->n > 256) return _URC_END_OF_STACK;
+    if (!w->want(ip, w->arg)) return _URC_NO_REASON;
+    PlatJmp *o = w->out;
+    o->gpr[0] = _Unwind_GetGR(ctx, 3), o->gpr[1] = _Unwind_GetGR(ctx, 6);   // DWARF rbx, rbp
+    for (int r = 12; r <= 15; r++) o->gpr[2 + r - 12] = _Unwind_GetGR(ctx, r);
+    o->gpr[6] = sp, o->gpr[7] = ip;
+    __asm__ volatile("stmxcsr %0\n\tfnstcw %1" : "=m"(o->mxcsr), "=m"(o->fpcw));
+    w->found = 1;
+    return _URC_END_OF_STACK;
+}
+
+__attribute__((noinline)) int plat_frame_capture(PlatJmp *out, int (*want)(uintptr_t rip, void *arg), void *arg) {
+    FrameWalk w = {out, want, arg, 0, 0};
+    _Unwind_Backtrace(frame_step, &w);
+    return w.found;
 }
 
 void plat_crash_hook(void (*fn)(const PlatCrash *c)) {
