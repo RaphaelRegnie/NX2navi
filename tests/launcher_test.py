@@ -268,6 +268,20 @@ class SettingsTest(Tmp):
         self.assertEqual((s['auto_check'], s['channel']), (True, 'preview'))
         self.assertNotIn('junk', s)
 
+    def test_bom_and_typo(self):
+        # a file saved by an editor with a BOM reads as written; one with a typo keeps a copy before a save replaces it
+        self.layout.settings.write_bytes(b'\xef\xbb\xbf' + json.dumps({'game_dir': 'D:/g'}).encode())
+        s = settings.Settings(self.layout.settings)
+        self.assertEqual(s['game_dir'], 'D:/g')
+        self.assertFalse(s.unreadable)
+        typo = '{"game_dir": "D:/g", "github_token": "t",}'
+        self.layout.settings.write_text(typo, encoding='utf-8')
+        s = settings.Settings(self.layout.settings)
+        self.assertTrue(s.unreadable)
+        self.assertEqual(s['game_dir'], '')
+        s.save()
+        self.assertEqual(self.layout.settings.with_name('launcher.json.bad').read_text(encoding='utf-8'), typo)
+
 
 class UninstallTest(Tmp):
     def tree(self, root, rels):
