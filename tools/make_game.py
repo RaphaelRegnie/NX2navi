@@ -76,6 +76,10 @@ LIFT_FIXES = [
 LINK_LIBS = ['-lvulkan-1', '-lSDL3', '-lopus', '-lvpx', '-l:libdav1d.a', '-lzstd', '-l:libatomic.a', '-lbcrypt',
              '-limm32', '-luuid', '-lole32', '-luser32', '-lshell32', '-lgdi32', '-ladvapi32', '-lwinmm']
 SYSTEM_DLLS_SKIP = {'vulkan-1.dll'}   # the graphics driver's loader, never a copy
+# GNU windres's preprocessor, named explicitly: left to find it, windres puts the full path of the gcc beside it on a
+# cmd.exe command line, and once that path and the .rc's both hold a space, cmd.exe drops the outer quotes and splits
+# the command at the first space. gcc is then found on PATH (the toolchain's bin first); the arguments are windres's own.
+WINDRES_PP = ['--preprocessor=gcc', '--preprocessor-arg=-E', '--preprocessor-arg=-xc', '--preprocessor-arg=-DRC_INVOKED']
 EXE_NAME = 'ocarina.exe'
 
 # Runs a script the way `python script.py` does, with the script's folder first on sys.path. The launcher's
@@ -622,10 +626,12 @@ def step_compile(out, cache_dir, msys, jobs):
         fail(f'{len(bad)} files did not compile')
 
     # the manifest (per-monitor DPI awareness: the picture at the monitor's real size, not one Windows stretches) and the
-    # icon, runtime/nx2navi.rc through MSYS2's windres
-    rco = obj / 'nx2navi_rc.o'
-    r = subprocess.run([str(msys / 'bin' / 'windres.exe'), '-I', str(rt), '-O', 'coff', '-i', str(rt / 'nx2navi.rc'),
-                        '-o', str(rco)], capture_output=True, text=True, env=env, errors='replace')
+    # icon, runtime/nx2navi.rc through MSYS2's windres. windres runs its preprocessor through cmd.exe: run from the
+    # runtime folder with relative names and gcc by bare name (WINDRES_PP), that command line holds no path, so a space
+    # in the install folder (a user name) cannot split it.
+    rco = (obj / 'nx2navi_rc.o').resolve()
+    r = subprocess.run([str(msys / 'bin' / 'windres.exe'), *WINDRES_PP, '-I', '.', '-O', 'coff', '-i', 'nx2navi.rc',
+                        '-o', str(rco)], capture_output=True, text=True, env=env, errors='replace', cwd=rt)
     if r.returncode:
         fail(f'windres failed on runtime/nx2navi.rc: {r.stderr.strip()[:400]}')
     objs = [o for _, o in srcs] + [rco]

@@ -201,10 +201,16 @@ def build_native(work, cc, windres):
     work.mkdir(parents=True, exist_ok=True)
     (work / 'nx2navi.ico').write_bytes(art.triforce_ico())
     shutil.copy2(ROOT / 'launcher' / 'native' / 'app.manifest', work / 'app.manifest')
-    res = work / 'res.o'
-    # windres preprocesses with the gcc it finds on PATH: the toolchain's own bin first (no MSYS2 shell sets it)
+    shutil.copy2(ROOT / 'launcher' / 'native' / 'res.rc', work / 'res.rc')
+    res = (work / 'res.o').resolve()
+    # MSYS2's GNU windres runs its preprocessor through cmd.exe and, left to find it, names the gcc beside it by full
+    # path, which cmd.exe splits at a space once the .rc's path holds one too. So gcc by bare name, found on PATH (the
+    # toolchain's own bin first; no MSYS2 shell sets it), and the .rc by its name in the work folder, where windres runs.
+    # llvm-windres (Linux) starts its preprocessor without a shell.
+    pp = [] if 'llvm' in Path(windres[0]).name else [
+        '--preprocessor=gcc', '--preprocessor-arg=-E', '--preprocessor-arg=-xc', '--preprocessor-arg=-DRC_INVOKED']
     env = dict(os.environ, PATH=str(Path(windres[0]).parent) + os.pathsep + os.environ.get('PATH', ''))
-    run([*windres, '-I', work, ROOT / 'launcher' / 'native' / 'res.rc', '-O', 'coff', '-o', res], env=env)
+    run([*windres, *pp, '-I', '.', 'res.rc', '-O', 'coff', '-o', res], env=env, cwd=work)
     flags = ['-municode', '-mwindows', '-O2', '-Wall', '-static', '-s']
     stub = work / 'NX2navi.exe'
     setup = work / 'setup-stub.exe'
