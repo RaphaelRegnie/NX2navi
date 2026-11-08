@@ -222,7 +222,14 @@ class Source:
                     fail(f'{d} is not a folder')
             self.exefs = {name: self.exefs_dir / name for name in EXEFS_FILES if (self.exefs_dir / name).is_file()}
             self.romfs = [(p.relative_to(self.romfs_dir).as_posix(), p) for p in self.romfs_dir.rglob('*') if p.is_file()]
-            self.identity = f'folders {self.exefs_dir.resolve()} {self.romfs_dir.resolve()} {len(self.romfs)}'
+            # every file's size and modification time, not only their count: a RomFS extracted again (or edited)
+            # with the same number of files, or a replaced sdk, kept the old unpacked files ("done before")
+            h = hashlib.sha256()
+            for rel, f in sorted([(n, self.exefs[n]) for n in self.exefs] + self.romfs):
+                st = f.stat()
+                h.update(f'{rel}\0{st.st_size}\0{st.st_mtime_ns}\n'.encode('utf-8', 'surrogateescape'))
+            self.identity = (f'folders {self.exefs_dir.resolve()} {self.romfs_dir.resolve()} {len(self.romfs)} '
+                             f'{h.hexdigest()[:32]}')
         missing = [x for x in EXEFS_FILES if x not in self.exefs]
         if missing:
             fail(f'the ExeFS lacks {", ".join(missing)} (or holds something else under that name)')
