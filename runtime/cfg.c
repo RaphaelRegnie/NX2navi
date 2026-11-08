@@ -706,7 +706,7 @@ static int find_ini(void) {
     if (!plat_exe_path(path, sizeof path)) return 0;
     char *cut = plat_last_sep(path);
     if (!cut) cut = strrchr(path, '/');
-    if (!cut || cut + 10 >= path + sizeof path) return 0;
+    if (!cut || cut + 12 >= path + sizeof path) return 0;   // room for "nx2navi.ini" and its NUL after the separator
     strcpy(cut + 1, "nx2navi.ini");
     snprintf(ini_path, sizeof ini_path, "%s", path);
     return 1;
