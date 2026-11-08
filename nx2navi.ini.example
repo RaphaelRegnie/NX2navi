@@ -72,6 +72,8 @@
 # oneshot_wait_ms = 30000
 # Build shader stage libraries in the background ahead of time, and the threads for it (1 to 16; default: a quarter of
 # the CPU threads).
+# Build shader stage libraries in the background ahead of time, and the threads for it (1 to 16; default 2). More
+# threads mostly wait on the graphics driver's lock: 16 on NVIDIA spent about 8 cores spinning in the driver.
 # lib_prebuild = 1
 # lib_prebuild_threads = 4
 # 1: very large compute shaders that no cache holds are built on one background thread after the start. 0: each is
