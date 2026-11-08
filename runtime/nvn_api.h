@@ -114,9 +114,6 @@ const char *nvn_op_name(uint32_t op);                      // "DRAW_IDX", ...; "
 // MemoryPoolInvalidateMappedRange: the CPU is about to read pool storage the GPU wrote. Weak no-op in nvn_ext.c; a back
 // end that renders into host-side copies defines it and writes them back.
 void nvn_pool_invalidate(const pool_t *p, uint64_t off, uint64_t size);
-// The range nvn_pool_invalidate is about to read back. Weak no-op in nvn_ext.c; a back end that keeps device-side copies
-// of pool memory (vk_memory.c, "read-back ranges") defines it and refreshes the range from guest memory at every use.
-void nvn_pool_invalidated(const pool_t *p, uint64_t off, uint64_t size);
 // MemoryPoolFlushMappedRange: the CPU wrote [mem + off, mem + off + size). Weak no-op in nvn_ext.c; a back end that keeps
 // device-side copies of pool memory (vk_memory.c's VRAM mirror) defines it and copies the range again.
 void nvn_pool_flushed(const pool_t *p, uint64_t off, uint64_t size);
