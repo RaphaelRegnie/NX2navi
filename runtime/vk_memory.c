@@ -36,6 +36,11 @@ typedef struct { struct PoolRec *phys; uint64_t off; } VPage;   // virtual page 
 
 #define FLUSH_RANGES 32                // flush ranges a mirrored pool keeps between two syncs (flush_add)
 typedef struct { uint64_t lo, hi; } FlushRange;
+// Read-back ranges: small results the CPU invalidates, reads and often writes again (the exposure meter: the GPU adds
+// a frame's light into it, the CPU reads the sum and stores 0). mirror_sync copies them from guest memory into the
+// mirror at every submission that uses the pool, whether or not a write was seen: see "read-back ranges" below.
+#define READBACK_RANGES 4
+#define READBACK_MAX (16u << 10)
 
 typedef struct PoolRec {
     const pool_t *key;
@@ -68,6 +73,8 @@ typedef struct PoolRec {
     FlushRange fl[FLUSH_RANGES + 1];   // flush_lock: nvnMemoryPoolFlushMappedRange pages not copied yet (flush_add)
     int fl_n;                          // flush_lock: ranges in fl; read without the lock to skip an empty list
     uint64_t fl_calls, fl_sum;         // flush_lock: the calls and bytes behind fl, for mirror_sync's statistics
+    FlushRange rb[READBACK_RANGES + 1];   // flush_lock: read-back ranges (nvn_pool_invalidated), guest addresses
+    int rb_n;                          // flush_lock: ranges in rb; read without the lock to skip an empty list
     // Shadow storage (POOL_IMPORT in shadow mode, "shadow storage" below): buf is a host-visible copy of the guest pages.
     VmaAllocation salloc;
     uint8_t *smap;                     // its mapping; offsets as in buf (from import_lo)
@@ -1236,6 +1243,7 @@ typedef struct {
     uint64_t presnap_queries, sync_queries, presnap_t, sync_t, prologues, presnap_bytes;
     uint64_t snap_bytes, merge_bytes, merge_dispatches, snap_allocs;   // write-back merge
     uint64_t page_bytes, flush_n, flush_bytes, flush_calls, flush_sum;   // what mirror_sync queues, by source
+    uint64_t rb_n, rb_bytes;           // read-back ranges mirror_sync queued
 } MirrorAcc;
 static MirrorAcc mrep;                 // replay: this submission
 static MirrorAcc macc;                 // mirror_stat_lock: since the last summary
@@ -1491,6 +1499,19 @@ static void mirror_sync(PoolRec *r) {
                 rt_log("mem: mirror frame %llu: flush range %.1f MiB at +%.1f MiB of a %.1f MiB pool (%d ranges from %llu "
                        "flushes of %.3f MiB)", (unsigned long long)mirror_frame, (b - a) / 1048576.0, (a - lo) / 1048576.0,
                        (hi - lo) / 1048576.0, n, (unsigned long long)calls, sum / 1048576.0);
+        }
+    }
+    if (__atomic_load_n(&r->rb_n, __ATOMIC_ACQUIRE)) {
+        FlushRange rb[READBACK_RANGES];
+        plat_mutex_lock(&flush_lock);
+        int n = r->rb_n;
+        memcpy(rb, r->rb, (size_t)n * sizeof *rb);
+        plat_mutex_unlock(&flush_lock);
+        for (int i = 0; i < n; i++) {
+            uint64_t a = rb[i].lo > lo ? rb[i].lo : lo, b = rb[i].hi < hi ? rb[i].hi : hi;
+            if (a >= b) continue;
+            range_add(&pend, &npend, &cpend, r, a - lo, b - a);
+            mrep.rb_n++, mrep.rb_bytes += b - a;
         }
     }
     mrep.syncs++;
@@ -1834,6 +1855,36 @@ void nvn_pool_flushed(const pool_t *p, uint64_t off, uint64_t size) {
     plat_mutex_unlock_shared(&pool_lock);
 }
 
+// ---- read-back ranges
+// mirror_sync decides at record time which guest pages to copy into the mirror; the copy itself runs when the GPU
+// reaches the submission. A CPU write in between (the game's threads overlap the replay) is in guest memory when the
+// copy runs but was not seen at record time, so the GPU works on the mirror's older bytes and the write-back puts
+// them over the CPU's: the exposure meter added a frame onto the sum the CPU had already read, it read twice the
+// light one frame and none the next, and the picture flared or dimmed for a frame. A range the CPU invalidates is a
+// result it reads and may reset, so every submission that uses its pool copies it unconditionally, last of the
+// uploads, and the GPU adds to what the CPU left there. Small ranges only, READBACK_RANGES per pool (the nearest two
+// merge beyond that). NX2NAVI_READBACK_SYNC=0 turns it off.
+static int readback_on = -1;
+static volatile int64_t m_rb_calls;
+void nvn_pool_invalidated(const pool_t *p, uint64_t off, uint64_t size) {
+    if (!vk_mirror_on || !size || size > READBACK_MAX || !p->mem) return;
+    if (readback_on < 0) { const char *v = cfg_get("NX2NAVI_READBACK_SYNC"); readback_on = !(v && !strcmp(v, "0")); }
+    if (!readback_on) return;
+    plat_inc64(&m_rb_calls);
+    plat_mutex_lock_shared(&pool_lock);
+    const pidx_ent *e = pidx_find(&pool_index, (uintptr_t)p->mem, 0);
+    PoolRec *r = e && e->key == p ? e->buf : NULL;
+    if (r && r->kind == POOL_IMPORT) {
+        uint64_t a = ((uintptr_t)p->mem + off) & ~0xfffull, b = ((uintptr_t)p->mem + off + size + 0xfff) & ~0xfffull;
+        plat_mutex_lock(&flush_lock);
+        int known = 0;
+        for (int i = 0; i < r->rb_n && !known; i++) known = r->rb[i].lo <= a && b <= r->rb[i].hi;
+        if (!known) __atomic_store_n(&r->rb_n, flush_add(r->rb, r->rb_n, a, b, READBACK_RANGES), __ATOMIC_RELEASE);
+        plat_mutex_unlock(&flush_lock);
+    }
+    plat_mutex_unlock_shared(&pool_lock);
+}
+
 // gen_lock exclusive: freezes up to FREEZE_PER_SUB candidate regions still idle. The query after the
 // protection collects the writes made before it took effect.
 static void freeze_pass(void) {
@@ -2083,9 +2134,11 @@ static void mirror_log(uint64_t frame) {
            a.merge_dispatches / f, a.snap_bytes / f / M, a.snap_allocs / f, fc / f, fb / f / M,
            a.presnap_queries / f, a.presnap_bytes / f / M, a.sync_queries / f, a.prologues / f, qpc_ms(a.presnap_t + a.sync_t) / f,
            qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, ver);
+    uint64_t rc = (uint64_t)plat_xchg64(&m_rb_calls, 0);
     rt_log("mem: mirror frame %llu: upload sources per frame, overlaps counted twice: written pages %.3f MiB; flush ranges "
-           "%.2f, %.3f MiB, from %.1f flushes of %.3f MiB", (unsigned long long)frame, a.page_bytes / f / M, a.flush_n / f,
-           a.flush_bytes / f / M, a.flush_calls / f, a.flush_sum / f / M);
+           "%.2f, %.3f MiB, from %.1f flushes of %.3f MiB; read-back ranges %.2f, %.4f MiB, from %.2f invalidates",
+           (unsigned long long)frame, a.page_bytes / f / M, a.flush_n / f, a.flush_bytes / f / M, a.flush_calls / f,
+           a.flush_sum / f / M, a.rb_n / f, a.rb_bytes / f / M, rc / f);
 }
 
 // With NX2NAVI_TRACE=perf every 600 frames: what holds device-local memory, to see what grows over a long session.

@@ -2673,6 +2673,8 @@ static void warm_builder(void *arg) {
 }
 
 static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]);
+static int pm_skipped(void);
+static void pm_set(void);
 
 // vk_pipeline_prewarm_progress's numbers: the phase, and the pipelines finished (built or failed) of those queued, copied
 // while prewarm_run waits for its builders.
@@ -2756,6 +2758,16 @@ static void prewarm_run(void) {
         rt_log("vk_pipeline: vertex output unions: %u vertex shaders, %.2f locations each; %llu pairs read %.2f each",
                VO.n, VO.n ? (double)uni / VO.n : 0.0, (unsigned long long)pairs, pairs ? (double)pair / pairs : 0.0);
     }
+    if (pm_skipped()) {   // the boot's pipeline builds killed an earlier start on this GPU and driver
+        plat_mutex_lock(&P.lock);
+        free(K.file);
+        K.file = NULL;
+        plat_mutex_unlock(&P.lock);
+        free(ids), free(sh);
+        lb_start(pr_hist, fs_hist);
+        return;
+    }
+    pm_set();
     uint32_t queued = 0, dropped = 0, known = 0;
     plat_mutex_lock(&P.lock);
     K.t0 = t1;
@@ -2820,7 +2832,69 @@ static void prewarm_run(void) {
     free(K.file);
     K.file = NULL;
     plat_mutex_unlock(&P.lock);
+    vk_pipeline_prewarm_marker_clear();   // the boot's share is done; what the pool builds later runs during play
     lb_start(pr_hist, fs_hist);
+}
+
+// ---- boot prebuild crash marker
+// The boot builds the recorded pipelines (warm_builder) before the game starts. A driver whose compiler crashes on one
+// of them would kill every start at the same point, and the preparation journal above does not cover these builds.
+// So <dir>/pipeline-prewarm-running.txt exists while they run: written before the first one, deleted when the boot's
+// share ends (or when the boot stops waiting and lets the game start). A start that finds it left over records this
+// GPU and driver in <dir>/pipeline-prewarm-skip.txt, and starts on them build no recorded pipelines ahead of play:
+// each one is built at its first draw instead, as with NX2NAVI_PIPE_PREBUILD=0. Another driver version, or deleting
+// the file, brings the prebuild back. Only the boot's own share is covered: a crash during play, where the pool also
+// builds what the boot left, says nothing about these builds.
+static int cache_dir(char *dir, size_t n);
+static void gpu_key(char *out, size_t n);
+static char PM_run[PLAT_PATH_MAX * 2 + 48];
+static volatile int32_t pm_on;
+
+static int pm_skipped(void) {
+    char dir[PLAT_PATH_MAX * 2], sp[sizeof PM_run], key[32];
+    if (!cache_dir(dir, sizeof dir)) return 0;
+    snprintf(PM_run, sizeof PM_run, "%s/pipeline-prewarm-running.txt", dir);
+    snprintf(sp, sizeof sp, "%s/pipeline-prewarm-skip.txt", dir);
+    gpu_key(key, sizeof key);
+    uint64_t n = 0;
+    uint8_t *left = plat_file_read(PM_run, &n);
+    if (left) {
+        char text[256];
+        int len = snprintf(text, sizeof text,
+                           "# The boot's pipeline prebuild did not finish on this GPU and driver (runtime/vk_pipeline.c "
+                           "pm_skipped): starts skip it\n# while this line matches. Delete this file to build ahead of play "
+                           "again.\n%s\n", key);
+        if (plat_file_write_atomic(sp, text, (size_t)len)) plat_file_delete(PM_run);
+        rt_log("vk_pipeline: the last start died while the boot built pipelines (%s was left); %s now skips that "
+               "prebuild on this GPU and driver (%s)", PM_run, sp, key);
+        free(left);
+    }
+    uint8_t *skip = plat_file_read(sp, &n);
+    int on = 0;
+    for (char *line = (char *)skip, *next; line && *line && !on; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\r' || line[l - 1] == ' ')) line[--l] = 0;
+        on = line[0] != '#' && !strcmp(line, key);
+    }
+    free(skip);
+    if (on)
+        rt_log("vk_pipeline: prewarm: %zu recorded pipelines not built ahead of play: an earlier start died while building "
+               "them on this GPU and driver (%s lists %s); each builds at its first draw", K.file_n, sp, key);
+    return on;
+}
+
+static void pm_set(void) {
+    if (!PM_run[0]) return;
+    char key[32];
+    gpu_key(key, sizeof key);
+    // straight to the disk: the file has to be there if the driver takes the process down a moment later
+    if (plat_file_write_atomic(PM_run, key, strlen(key))) plat_xchg32(&pm_on, 1);
+}
+
+void vk_pipeline_prewarm_marker_clear(void) {
+    if (plat_xchg32(&pm_on, 0)) plat_file_delete(PM_run);
 }
 
 // ensure_init's hook: without a prewarm (NX2NAVI_PIPE_PREBUILD=0, or the device came up first elsewhere) the records

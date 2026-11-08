@@ -200,6 +200,12 @@ VkImageView vk_exec_target_view(const VkTexImage *img, VkFormat format, VkImageV
 // vk_exec_xfer.c: OP_COPY_B2B, OP_COPY_B2T, OP_COPY_T2B, OP_COPY_T2T, OP_CLEAR_TEX, OP_SIGNAL_EVENT, OP_REPORT_COUNTER,
 // OP_RESET_COUNTER, OP_RENDER_ENABLE, OP_RENDER_COND, OP_CLEAR_BUF.
 void vk_exec_op_xfer(VkExec *ex, uint32_t op, const void *payload);
+// OP_WAIT_EVENT: records nothing; counts a wait whose signal the replay has not reached yet (vk_exec_xfer.c).
+void vk_exec_wait_event(const void *payload);
+// Since the last call, which resets them: waits, waits reached before their signal, those of them a later replayed
+// signal met, and the sum of how many submissions later it came.
+void vk_exec_event_stats(uint64_t *waits, uint64_t *unmet, uint64_t *late, uint64_t *late_subs);
+extern uint64_t vk_exec_submit_seq;   // replay thread: submissions replayed so far
 // vk_dlaa.c: once DLSS has scaled the scene this frame, passes larger than the scene's light target vk_dlaa_swap_img
 // sample DLSS's output vk_dlaa_swap_view in its place, so the game's scaling draw scales DLSS's picture.
 extern const VkTexImage *vk_dlaa_swap_img;

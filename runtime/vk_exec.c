@@ -58,10 +58,14 @@ void vk_exec_frame_written(const tex_t *t) {
     fw[nfw++].n = 1;
 }
 
+uint64_t vk_exec_submit_seq;
+
 void vk_exec_frame_log(const tex_t *p, uint64_t frame) {
     vk_exec_cond_frame_end(frame);   // a frame boundary in replay order (present_image runs on the replay thread)
     if (!(rt_trace & RT_TRACE_GFX)) return;
     VkExecFrame *f = &vk_exec_frame;
+    uint64_t ew, eu, el, ed;
+    vk_exec_event_stats(&ew, &eu, &el, &ed);
     int hit = 0;
     char list[512] = "";
     size_t o = 0;
@@ -73,14 +77,16 @@ void vk_exec_frame_log(const tex_t *p, uint64_t frame) {
     }
     rt_log("frame %llu: submits %llu passes %llu draws %llu/%llu clears %llu copies %llu dispatches %llu; present %p "
            "%ux%u/%#x written %d; feedback draws %llu barriers %llu restarts %llu layouts %llu read-before-write %llu; "
-           "uniform updates %llu (%llu ended a pass); targets%s",
+           "uniform updates %llu (%llu ended a pass); event waits %llu (%llu before their signal: %llu "
+           "signalled later, %.1f submits later on average); targets%s",
            (unsigned long long)frame, (unsigned long long)f->submits,
            (unsigned long long)f->passes, (unsigned long long)f->draws, (unsigned long long)f->draws_seen,
            (unsigned long long)f->clears, (unsigned long long)f->copies, (unsigned long long)f->dispatches,
            p ? (const void *)p->mem : NULL, p ? p->d.width : 0, p ? p->d.height : 0, p ? (uint32_t)p->d.format : 0,
            hit, (unsigned long long)f->fb_draws, (unsigned long long)f->fb_barriers, (unsigned long long)f->fb_restarts,
            (unsigned long long)f->fb_layouts, (unsigned long long)f->fb_war_barriers, (unsigned long long)f->ub_updates,
-           (unsigned long long)f->ub_pass_breaks, list);
+           (unsigned long long)f->ub_pass_breaks, (unsigned long long)ew, (unsigned long long)eu, (unsigned long long)el,
+           el ? (double)ed / (double)el : 0.0, list);
     memset(f, 0, sizeof *f);
     nfw = 0;
 }
@@ -945,6 +951,7 @@ static void walk(VkExec *ex, const op_hdr *h, int depth) {
         case OP_CLEAR_BUF:
             vk_exec_op_xfer(ex, h->op, a);
             break;
+        case OP_WAIT_EVENT: vk_exec_wait_event(a); break;
         default: rt_fatal("vk: op %s has no replay handler", nvn_op_name(h->op));
         }
         if (split_draws >= split_n) maybe_split(ex);
@@ -971,6 +978,7 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     ex->barrier_at = -1;
     ex->nfbl = 0;   // the previous command buffer ended with a full barrier: every image is in GENERAL
     vk_exec_frame.submits++;
+    vk_exec_submit_seq++;
     split_draws = part_start = 0;
     part_t0 = kern_now_ns();
     x_here = 1;

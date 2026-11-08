@@ -587,6 +587,9 @@ int vk_pipeline_async_on(void);   // 1 after vk_pipeline_async_enable: graphics 
 // cached under the current translator from their stored inputs, and builds every recorded pipeline, on all cores.
 // No-op without vk_pipeline_async_enable, with NX2NAVI_PIPE_PREBUILD=0 or with NX2NAVI_GPU=null.
 void vk_pipeline_prewarm(void);
+// Ends the boot prebuild's crash marker (vk_pipeline.c, "boot prebuild crash marker"): boot_wait calls it when it lets
+// the game start while the prewarm goes on, so a crash in play is not taken for one in the boot's builds.
+void vk_pipeline_prewarm_marker_clear(void);
 typedef struct {
     int phase;                            // 0 starting (device, key file), 1 shaders, 2 pipelines, 3 done
     int64_t sh_done, sh_total, sh_translated;   // gfx_shader_prewarm_progress

@@ -80,6 +80,7 @@ uint64_t nvn_tex_view_offset(const tex_t *t, const view_t *v);
 // (nvn_pins_sweep). Deferred binds (p_bind_handles.src != 0) hold the
 // handles read at submit (nvn_submit_prepare). Payloads of the ops nvn_obj.h does not define:
 typedef struct { volatile uint32_t *val; uint32_t mode, value; } p_signal_event;   // OP_SIGNAL_EVENT; mode: NVNeventSignalMode
+typedef struct { volatile uint32_t *val; uint32_t mode, value; } p_wait_event;     // OP_WAIT_EVENT; mode: NVNeventWaitMode
 typedef struct { uint64_t type, addr; } p_report_counter;  // OP_REPORT_COUNTER: NVNcounterType, NVNcounterData address
 typedef struct { uint64_t type; } p_reset_counter;         // OP_RESET_COUNTER
 typedef struct { uint64_t src, dst, size; } p_copy_b2b;    // OP_COPY_B2B: GPU addresses
@@ -113,6 +114,9 @@ const char *nvn_op_name(uint32_t op);                      // "DRAW_IDX", ...; "
 // MemoryPoolInvalidateMappedRange: the CPU is about to read pool storage the GPU wrote. Weak no-op in nvn_ext.c; a back
 // end that renders into host-side copies defines it and writes them back.
 void nvn_pool_invalidate(const pool_t *p, uint64_t off, uint64_t size);
+// The range nvn_pool_invalidate is about to read back. Weak no-op in nvn_ext.c; a back end that keeps device-side copies
+// of pool memory (vk_memory.c, "read-back ranges") defines it and refreshes the range from guest memory at every use.
+void nvn_pool_invalidated(const pool_t *p, uint64_t off, uint64_t size);
 // MemoryPoolFlushMappedRange: the CPU wrote [mem + off, mem + off + size). Weak no-op in nvn_ext.c; a back end that keeps
 // device-side copies of pool memory (vk_memory.c's VRAM mirror) defines it and copies the range again.
 void nvn_pool_flushed(const pool_t *p, uint64_t off, uint64_t size);
