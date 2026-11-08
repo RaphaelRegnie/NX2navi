@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tools'))
 
-from launcher import build, feed, gamefiles, jobs, net, saves, settings, toolchain, updater, versions  # noqa: E402
+from launcher import build, feed, gamefiles, jobs, net, saves, settings, toolchain, updater, versions, winsys  # noqa: E402
 from launcher.context import Context  # noqa: E402
 from launcher.paths import Layout  # noqa: E402
 
@@ -267,6 +267,49 @@ class SettingsTest(Tmp):
         s = settings.Settings(self.layout.settings)
         self.assertEqual((s['auto_check'], s['channel']), (True, 'preview'))
         self.assertNotIn('junk', s)
+
+
+class UninstallTest(Tmp):
+    def tree(self, root, rels):
+        for rel in rels:
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('x')
+
+    def test_plan_keeps_the_game_and_what_is_not_ours(self):
+        from types import SimpleNamespace
+        root = self.tmp / 'NX2navi'
+        self.tree(root, ('NX2navi.exe', 'app/current.txt', 'python.old-3/x', 'game/profile/save/1/a.sav', 'mine.txt'))
+        layout = SimpleNamespace(root=root, toolchain=root / 'toolchain')
+        gone, empty = winsys.uninstall_plan(layout)
+        self.assertNotIn(root / 'game', gone)
+        self.assertNotIn(root, gone)
+        self.assertIn(root / 'python.old-3', gone)
+        self.assertEqual(empty, [root])
+        gone, _ = winsys.uninstall_plan(layout, str(root / 'game'))
+        self.assertEqual(gone[0], root / 'game')
+        # the toolchain moved to C:\NX2navi: that folder goes only when nothing else is left in it
+        other = self.tmp / 'C NX2navi' / 'toolchain'
+        gone, empty = winsys.uninstall_plan(SimpleNamespace(root=root, toolchain=other))
+        self.assertIn(other, gone)
+        self.assertNotIn(other.parent, gone)
+        self.assertEqual(empty, [root, other.parent])
+
+    @unittest.skipUnless(os.name == 'nt', 'runs the cmd.exe script')
+    def test_script_on_windows(self):
+        from types import SimpleNamespace
+        root = self.tmp / 'NX2navi ÿ x'   # spaces and a character outside ASCII
+        self.tree(root, ('NX2navi.exe', 'app/1/VERSION', 'python/pythonw.exe', 'python.old-12/x', 'pydeps/z',
+                         'data/launcher.json', 'toolchain/msys64/a', 'game/profile/save/1/a.sav', 'mine.txt'))
+        layout = SimpleNamespace(root=root, toolchain=root / 'toolchain')
+        script = winsys.uninstall_script(*winsys.uninstall_plan(layout)).replace('ping -n 3 127.0.0.1 >nul', 'echo')
+        subprocess.run(f'cmd.exe /c "{script}"', capture_output=True)
+        self.assertEqual(sorted(p.name for p in root.iterdir()), ['game', 'mine.txt'])
+        self.assertTrue((root / 'game/profile/save/1/a.sav').is_file())
+        (root / 'mine.txt').unlink()
+        script = winsys.uninstall_script(*winsys.uninstall_plan(layout, str(root / 'game')))
+        subprocess.run(f'cmd.exe /c "{script.replace("ping -n 3 127.0.0.1 >nul", "echo")}"', capture_output=True)
+        self.assertFalse(root.exists())
 
 
 # ---------------------------------------------------------------- toolchain
