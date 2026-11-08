@@ -66,9 +66,19 @@ typedef struct {
     int quit, eos_queued;
     uint64_t generation;     // bumped by Flush: pictures of an older one are dropped
     uint64_t decoded, shown;
+    int live;                // counted in movies_live: from Initialize, or a sample after a Flush, to the end-of-stream
+                             // picture, Finalize or the destructor
 } Video;
 
 static Video *video_of(void *obj) { return obj ? *(Video **)obj : NULL; }
+static int movies_live;   // decoders playing (Video.live); frame_rate.c movie_cap_hz holds the frame rate meanwhile
+
+int ov_movie_live(void) { return __atomic_load_n(&movies_live, __ATOMIC_RELAXED) > 0; }
+
+static void set_live(Video *v, int live) {   // the guest's decode and acquire threads may race here
+    if (__atomic_exchange_n(&v->live, live, __ATOMIC_RELAXED) != live)
+        __atomic_add_fetch(&movies_live, live ? 1 : -1, __ATOMIC_RELAXED);
+}
 
 // under v->lock
 static void update_events(Video *v) {
@@ -411,6 +421,7 @@ static void ov_dtor(Cpu *c) {
     Video **slot = arg_p(c, 0);
     if (!slot || !*slot) return;
     finalize(*slot);
+    set_live(*slot, 0);
     free(*slot);   // the bound events' kernel handles stay, as for any guest event never destroyed
     *slot = NULL;
     gfx_movie_stop();
@@ -427,6 +438,7 @@ static void ov_initialize(Cpu *c) {
     }
     Video *v = *slot;
     finalize(v);
+    set_live(v, 1);
     Dav1dSettings s;
     dav1d_default_settings(&s);
     // Frame threading on (dav1d picks the delay): heavy stretches of the title movie took longer than a frame to
@@ -452,6 +464,7 @@ static void ov_finalize(Cpu *c) {
         rt_log("movie: video decoder finalised (%llu frames decoded, %llu shown)", (unsigned long long)v->decoded,
                (unsigned long long)v->shown);
         finalize(v);
+        set_live(v, 0);
     }
     gfx_movie_stop();
     ret_x(c, 0);
@@ -561,6 +574,7 @@ static void ov_decode(Cpu *c) {
     }
     v->in[(v->ih + v->in_n) % INMAX] = s;
     v->in_n++;
+    if (!eos && !v->eos_queued) set_live(v, 1);   // playing again after its end (a Flush clears eos_queued)
     if (eos) v->eos_queued = 1;
     update_events(v);
     plat_cond_signal(&v->work);
@@ -630,7 +644,7 @@ static void ov_acquire(Cpu *c) {
     update_events(v);
     plat_mutex_unlock(&v->lock);
     if (p.rgba) gfx_movie_frame_own(p.rgba, p.w, p.h), p.rgba = NULL;   // the overlay takes the buffer
-    if (p.eos) gfx_movie_stop();
+    if (p.eos) gfx_movie_stop(), set_live(v, 0);
     picture_free(&p);
     *out = v->frame[f];
     ret_x(c, 0);
