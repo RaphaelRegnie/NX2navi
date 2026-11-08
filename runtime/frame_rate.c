@@ -198,6 +198,9 @@ uint64_t frame_step_cap_ns(void) {
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     double max = frame_free_running() ? LIMIT_FREE_MAX_HZ : LIMIT_MAX_HZ;
     if (hz > max) hz = max;
+    // Frame generation presents a generated frame between each two of the game's (vk_fg.cpp): the game is paced at
+    // half the limit then, so the screen shows the limit
+    if (vk_fg_generating()) hz /= 2;
     rtss_limit_want(rtss ? (int64_t)(hz * 1000 + 0.5) : -1);
     if (rtss_limit_active()) return 0;
     return (uint64_t)(1e9 / hz + 0.5);

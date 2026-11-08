@@ -43,6 +43,7 @@ struct {
     uint64_t frame = 0;
     int failed = 0;
     uint64_t generated = 0, paused = 0, no_inputs = 0, hudless = 0;
+    int on = 0;   // the last configured frame had generation on (vk_fg_generating)
 } F;
 
 VkResult submit_game(uint32_t n, const VkSubmitInfo *si, VkFence fence) {
@@ -92,6 +93,8 @@ extern "C" uint32_t vk_fg_queue_count(void) { return vk_fg_wanted() ? 3 : 1; }
 extern "C" void vk_fg_queues(VkQueue present, VkQueue acquire) { F.present = present, F.acquire = acquire; }
 
 extern "C" int vk_fg_active(void) { return F.sc != nullptr && !F.failed; }
+
+extern "C" int vk_fg_generating(void) { return vk_fg_active() && __atomic_load_n(&F.on, __ATOMIC_RELAXED); }
 
 extern "C" VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR *sc) {
     if (F.sc) return F.fn.pOutCreateSwapchainFFXAPI(vk_ctx()->device, ci, nullptr, sc, F.sc);
@@ -195,6 +198,7 @@ extern "C" void vk_fg_frame(VkCommandBuffer cb, VkSwapchainKHR sc, VkFormat fmt,
     int reset = 0;
     int have = vk_dlaa_fg_inputs(&depth, &mv, &jx, &jy, &reset);
     int on = have && !menu_is_open();
+    __atomic_store_n(&F.on, on, __ATOMIC_RELAXED);
     if (!have) F.no_inputs++;
     else if (!on) F.paused++;
     F.frame++;
