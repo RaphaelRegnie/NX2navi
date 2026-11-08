@@ -60,6 +60,9 @@
 # lib_prebuild_threads = 4
 # Build known pipelines ahead of time.
 # pipe_prebuild = 1
+# 1: the start waits until every known pipeline is built. Default 0: with the graphics pipeline library the start
+# builds them for at most 20 seconds and the rest in the background while you play.
+# prewarm_full = 0
 # Threads that translate known shaders at start (1 to 64; default: half the CPU threads, at most 16).
 # prewarm_xlate = 8
 # Vulkan graphics pipeline library, 0 or 1. Default: on.
@@ -126,7 +129,8 @@
 # set default to fullscreen = 1, window_size = 1280x800, output_res = 1280x800, render_scale = game, vk_present = fifo
 # and fps_limit = 40 (starting points, not measured yet). Read at start.
 # device_profile = auto
-# Presentation mode: mailbox (default when the driver offers it, vsync otherwise), fifo (vsync) or immediate.
+# Presentation mode: mailbox (default when the driver offers it, vsync otherwise), fifo (vsync) or immediate. The menu's
+# VSync switch sets mailbox when on and immediate when off.
 # vk_present = mailbox
 # Window client area in screen pixels (640x360 to 7680x4320), and borderless fullscreen. Windows display scaling does
 # not apply: at 150% scale, 1920x1080 covers the area 1280x720 covers at 100%. F11 switches fullscreen and saves it
