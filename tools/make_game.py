@@ -42,7 +42,7 @@ version (fast_clang: the same objects, about a fifth faster).
     python tools/make_game.py --make-runtime-lib <kit>/lib --msys <ucrt64>   # the release's prebuilt runtime
 
 On Linux the same steps make <out>/ocarina with the clang, clang++ and lld on PATH and the system's libraries
-(Vulkan, SDL3, Opus, libvpx, dav1d, zstd, libunwind; libstdc++ static, rpath $ORIGIN), as tools/build_game.py's Linux
+(Vulkan, SDL3, Opus, libvpx, dav1d, zstd; libstdc++ static, rpath $ORIGIN), as tools/build_game.py's Linux
 build does: the runtime's *_sdl.* and platform/linux.c take the place of its *_win.*, platform/win32.c and
 nx2navi.rc, and --msys is not used. README-BuildKit.md, "Linux", lists the packages.
 
@@ -110,9 +110,8 @@ WIN = os.name == 'nt'
 if WIN:
     LINK_LIBS = ['-lvulkan-1', '-lSDL3', '-lopus', '-lvpx', '-l:libdav1d.a', '-lzstd', '-l:libatomic.a', '-lbcrypt',
                  '-limm32', '-luuid', '-lole32', '-luser32', '-lshell32', '-lgdi32', '-ladvapi32', '-lwinmm']
-else:   # tools/build_game.py's Linux libraries, plus dav1d (the AV1 movies), libatomic and libunwind (platform/linux.c's
-        # plat_frame_capture walks the host stack with it, issue #72)
-    LINK_LIBS = ['-lvulkan', '-lSDL3', '-lopus', '-lvpx', '-ldav1d', '-lzstd', '-l:libstdc++.a', '-latomic', '-lunwind',
+else:   # tools/build_game.py's Linux libraries, plus dav1d (the AV1 movies) and libatomic
+    LINK_LIBS = ['-lvulkan', '-lSDL3', '-lopus', '-lvpx', '-ldav1d', '-lzstd', '-l:libstdc++.a', '-latomic',
                  '-lm', '-lpthread', '-ldl']
 SYSTEM_DLLS_SKIP = {'vulkan-1.dll'}   # the graphics driver's loader, never a copy
 EXE_NAME = 'ocarina.exe' if WIN else 'ocarina'

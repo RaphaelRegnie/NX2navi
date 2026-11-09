@@ -69,7 +69,7 @@ RADV). It takes clang, clang++ and lld from `PATH` and links against the system'
 1. Packages, on Arch and its derivatives (other distributions: the same libraries and their `-dev` headers):
 
    ```sh
-   sudo pacman -S --needed clang lld sdl3 opus libvpx dav1d zstd libunwind vulkan-headers vulkan-icd-loader \
+   sudo pacman -S --needed clang lld sdl3 opus libvpx dav1d zstd vulkan-headers vulkan-icd-loader \
        python fonttools python-numpy python-lz4 python-zstandard dotnet-sdk
    ```
 
