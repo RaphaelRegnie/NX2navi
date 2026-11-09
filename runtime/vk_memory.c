@@ -2327,7 +2327,6 @@ int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
     return rec;
 }
 
-// One summary line: with NX2NAVI_TRACE=perf every 60 frames, else at frames 600 and 1800.
 // NX2NAVI_TRACE=perf, every 600 frames: the mirrored pools that moved the most bytes since the last list, per frame: what
 // their CPU writes and flushes copied up, how often a submission synced them, and what the GPU's writes sent back
 // (merged or copied). A pool whose upload is close to its size every frame is rewritten whole each frame.
@@ -2368,6 +2367,7 @@ static void mirror_pool_log(uint64_t frame) {
     plat_mutex_unlock_shared(&pool_lock);
 }
 
+// One summary line: with NX2NAVI_TRACE=perf every 60 frames, else at frames 600 and 1800.
 static void mirror_log(uint64_t frame) {
     if (gw_on == 1) {
         static uint64_t gw_last;

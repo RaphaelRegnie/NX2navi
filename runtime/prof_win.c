@@ -392,8 +392,6 @@ int prof_sampler_start(void) {
     return 1;
 }
 
-// perf_present, every present: the frame the sampler's NX2NAVI_PROFILE_FRAMES window counts, and a NX2NAVI_PROFILE_SLOW
-// dump of a present at least slow_ns after the previous one (d 0 on the first present).
 // NX2NAVI_TRACE=perf (perf.c): the process's committed memory by kind, and outside the guest's address range the
 // allocations holding the most private memory, so a log shows what grows: guest memory, a heap, the graphics driver's
 // mappings or loaded images. A walk of the address space with VirtualQuery: tens of milliseconds, so only now and then.
@@ -456,6 +454,8 @@ void prof_commit_census(uint64_t frame) {
                (unsigned long)top[i].protect);
 }
 
+// perf_present, every present: the frame the sampler's NX2NAVI_PROFILE_FRAMES window counts, and a NX2NAVI_PROFILE_SLOW
+// dump of a present at least slow_ns after the previous one (d 0 on the first present).
 void prof_sampler_frame(uint64_t frame, uint64_t now, uint64_t d) {
     cur_frame = frame;
     // the end of a NX2NAVI_PROFILE_FRAMES window writes the profile then: a test run ended by a timeout never reaches
