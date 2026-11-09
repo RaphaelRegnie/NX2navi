@@ -62,6 +62,8 @@ static const char *const known[] = {
     "VK_PRESENT", "VK_RECONVERGE", "VK_RECORDER", "VK_SSBO_ALIGN", "VK_SUBGROUP", "VK_SUBGROUP_PIN", "VK_VALIDATION", "VOLUME", "VRAM_HEADROOM", "VS_OUTS",
     "WALK_KEY", "WALK_SCALE", "WB_EXACT", "WB_FENCE_LIMIT", "WB_MERGE", "WINDOW_SIZE", "XLATE", "XLATE_ID", "XLATE_KEEP", "XLATE_PROCS",
     "ZSTD_CHECK", "ZSTD_NATIVE",
+    "BIND_REUSE", "DYN_DELTA", "STG_ARENA", "SUBMIT_BATCH", "ASTC_GPU_DESWIZZLE", "DYN_RES", "DYN_RES_TARGET", "DYN_RES_STEP",
+    "RECORDER_CORE", "RECORDER_PRIO",
 };
 
 // The nx2navi.ini section a key cfg_set may write goes to when the file lacks it (nx2navi.ini.example's sections).
@@ -94,6 +96,10 @@ static const struct { const char *key, *section; } sections[] = {
     {"BIND_LSTICK_RIGHT", "input"}, {"BIND_LSTICK_DOWN", "input"}, {"BIND_RSTICK_LEFT", "input"},
     {"BIND_RSTICK_UP", "input"}, {"BIND_RSTICK_RIGHT", "input"}, {"BIND_RSTICK_DOWN", "input"}, {"BIND_SHAKE", "input"},
     {"ASYNC_PREEMPT", "performance"}, {"REPLAY_ASYNC", "performance"}, {"FREE_CORES", "performance"},
+    {"DYN_RES", "performance"}, {"DYN_RES_TARGET", "performance"}, {"DYN_RES_STEP", "performance"},
+    {"RECORDER_CORE", "performance"}, {"RECORDER_PRIO", "performance"}, {"BIND_REUSE", "performance"},
+    {"DYN_DELTA", "performance"}, {"STG_ARENA", "performance"}, {"SUBMIT_BATCH", "performance"},
+    {"ASTC_GPU_DESWIZZLE", "performance"},
     {"TIMER_1MS", "performance"}, {"PIPE_WAIT", "performance"}, {"PIPE_SKIP", "performance"},
     {"LIB_PREBUILD", "performance"}, {"LIB_PREBUILD_THREADS", "performance"}, {"PIPE_PREBUILD", "performance"},
     {"PREWARM_XLATE", "performance"}, {"GPL", "performance"}, {"ASTC", "performance"}, {"MEMORY", "performance"},
@@ -167,6 +173,13 @@ static const CfgMeta metas[] = {
     // Advanced: scheduling
     {"ASYNC_PREEMPT", "1", "0|1|2", RESTART}, {"REPLAY_ASYNC", "0", "0|1", RESTART},
     {"FREE_CORES", "0", "0|1", RESTART}, {"TIMER_1MS", "1", "0|1", RESTART},
+    // dynamic resolution (dynres.c): the scene follows the GPU time toward DYN_RES_TARGET milliseconds
+    {"DYN_RES", "0", "0|1", LIVE}, {"DYN_RES_TARGET", "16.7", "1..100", LIVE}, {"DYN_RES_STEP", "45", "8..600", LIVE},
+    // the recording thread: a core of its own (auto: with 12 or more logical processors) and the highest priority
+    // (vk_exec.c vk_exec_record)
+    {"RECORDER_CORE", "auto", "auto|0|1", RESTART}, {"RECORDER_PRIO", "1", "0|1", RESTART},
+    // held submissions handed to the queue together (vk_sync.c, submit batching)
+    {"SUBMIT_BATCH", "4", "1..16", RESTART},
     // shaders and pipelines
     {"PIPE_WAIT", "default", "default|draw", RESTART}, {"PIPE_SKIP", "fullscreen", "strict|any|fullscreen", RESTART},
     {"LIB_PREBUILD", "1", "0|1", RESTART}, {"LIB_PREBUILD_THREADS", "", "1..64", RESTART},
@@ -174,9 +187,11 @@ static const CfgMeta metas[] = {
     // textures and memory
     {"ASTC", "auto", "auto|gpu|native|cpu", RESTART}, {"MEMORY", "auto", "auto|import|mirror|verify", RESTART},
     {"TEX_ALIAS", "1", "0|1", RESTART}, {"TEX_VRAM_PRESSURE", "90", "0..100", RESTART}, {"ASTC_BC", "", "0|1", RESTART}, {"ZSTD_NATIVE", "1", "0|1", RESTART}, {"ZSTD_CHECK", "0", "0|1", RESTART},
+    {"STG_ARENA", "1", "0|1", RESTART}, {"ASTC_GPU_DESWIZZLE", "1", "0|1", RESTART},
     // render fixes
     {"LOD_GUARD", "1", "0|1", RESTART}, {"FIX_C0", "1", "0|1", RESTART}, {"FIX_ZERO", "1", "0|1", RESTART},
     {"BIND_SKIP", "1", "0|1", RESTART}, {"SHADER_MEMO", "1", "0|1", RESTART}, {"PIPE_MEMO", "1", "0|1", RESTART}, {"TEX_MEMO", "1", "0|1", RESTART},
+    {"BIND_REUSE", "1", "0|1", RESTART}, {"DYN_DELTA", "1", "0|1", RESTART},
     {"DESC_TEMPLATE", "1", "0|1", RESTART},
     {"PUSH_SKIP", "1", "0|1", RESTART}, {"SPLIT_DRAWS", "64", "0..1000", RESTART},
     {"SPLIT_US", "1000", "0..20000", RESTART},

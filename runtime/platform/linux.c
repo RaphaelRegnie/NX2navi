@@ -390,6 +390,29 @@ int plat_thread_join_ns(PlatThread *t, uint64_t ns) {
 // The thread keeps using t->fn and t->arg, so the struct stays allocated (a few bytes per detached thread).
 void plat_thread_detach(PlatThread *t) { pthread_detach(t->t); }
 
+// The calling thread gets the last processor of its affinity mask to itself: every other thread of the process now
+// running loses that processor (threads they start later inherit their masks), and the caller keeps only it. Returns
+// 1, or 0 when the mask has fewer than three processors or the caller's mask cannot be set.
+int plat_cpu_reserve(void) {
+    cpu_set_t all, mine, rest;
+    if (sched_getaffinity(0, sizeof all, &all) || CPU_COUNT(&all) < 3) return 0;
+    int last = -1;
+    for (int i = CPU_SETSIZE - 1; i >= 0 && last < 0; i--)
+        if (CPU_ISSET(i, &all)) last = i;
+    rest = all;
+    CPU_CLR(last, &rest);
+    CPU_ZERO(&mine);
+    CPU_SET(last, &mine);
+    pid_t me = (pid_t)syscall(SYS_gettid);
+    DIR *d = opendir("/proc/self/task");
+    for (struct dirent *e; d && (e = readdir(d));) {
+        pid_t tid = (pid_t)atoi(e->d_name);
+        if (tid > 0 && tid != me) sched_setaffinity(tid, sizeof rest, &rest);
+    }
+    if (d) closedir(d);
+    return sched_setaffinity(0, sizeof mine, &mine) == 0;
+}
+
 uint64_t plat_thread_affinity(PlatThread *t, uint64_t mask) {
     pthread_t th = t ? t->t : pthread_self();
     cpu_set_t old, set;

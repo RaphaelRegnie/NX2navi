@@ -28,6 +28,7 @@
 
 static struct {
     int wanted, loaded, active;
+    int mode, pending;   // generation as the driver has it, and the frames since the host asked for the other state
     PFN_nx2sl_init init;
     PFN_nx2sl_instance_proc gipa;
     PFN_nx2sl_device_proc gdpa;
@@ -154,6 +155,10 @@ void vk_dlssg_device_ready(VkDevice dev) {
 
 int vk_dlssg_active(void) { return S.active; }
 
+// vk_device.c: while Streamline is loaded, every device entry point the runtime fetches goes through its interposer, so
+// its plugins see the calls they hook (Reflex's frame timing and DLSS-G's presents). NULL keeps the loader's.
+PFN_vkGetDeviceProcAddr vk_dlssg_dpa(void) { return S.loaded > 0 && S.gdpa ? S.gdpa() : NULL; }
+
 VkResult vk_dlssg_create_swapchain(VkDevice d, const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR *sc) {
     VkResult r = S.create_sc(d, ci, NULL, sc);
     if (r == VK_SUCCESS) S.reflex(reflex_mode());
@@ -179,6 +184,13 @@ VkResult vk_dlssg_present(VkQueue q, const VkPresentInfoKHR *pi) {
 // gfx_present.c skips the host presents while the game runs on): the driver then has no present to time the frame by,
 // and the sleep would wait out Streamline's half-second timeout each frame.
 #define HOLD_IDLE_NS 200000000ull
+
+// Turning generation on or off is an slDLSSGSetOptions call and Streamline's own rebuild, and it can be seen: around a
+// menu, a fade or a swapchain change the depth and motion-vector views come and go for a frame or two. Following them
+// frame by frame switched generation off and on dozens of times a second (a run logged 32 changes, in pairs, a frame
+// apart), so a change waits until the new state has held for FG_SETTLE_FRAMES frames.
+#define FG_SETTLE_FRAMES 12
+
 void vk_dlssg_frame_start(void) {
     if (!S.active) return;
     uint32_t f = __atomic_load_n(&S.game, __ATOMIC_RELAXED) + 1;
@@ -206,7 +218,11 @@ void vk_dlssg_frame(VkCommandBuffer cb, VkExtent2D ext) {
     float jx = 0, jy = 0;
     int reset = 0;
     int have = vk_dlaa_fg_inputs(&d, &m, &jx, &jy, &reset) && vk_dlaa_fg_views(&dv, &mvv) && vk_dlaa_fg_camera(&c);
-    int on = have && !menu_is_open();
+    int want = have && !menu_is_open();
+    if (want == S.mode) S.pending = 0;
+    else if (++S.pending >= FG_SETTLE_FRAMES) { S.mode = want; S.pending = 0; }
+    else want = S.mode;   // hold the state it has until the new one stays
+    int on = want;
     Nx2SlImage zd = {d.image, dv, d.format, d.width, d.height, VK_IMAGE_LAYOUT_GENERAL,
                      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT};
     Nx2SlImage zm = {m.image, mvv, m.format, m.width, m.height, VK_IMAGE_LAYOUT_GENERAL,

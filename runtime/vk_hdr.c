@@ -534,7 +534,7 @@ void vk_hdr_metadata(VkSwapchainKHR sc, int new_sc) {
     sent = cfg_version();
     // AMD's frame generation swapchain takes it through its own call
     PFN_vkSetHdrMetadataEXT set = vk_fg_hdr_metadata_fn();
-    if (!set) set = (PFN_vkSetHdrMetadataEXT)vkGetDeviceProcAddr(c->device, "vkSetHdrMetadataEXT");
+    if (!set) set = (PFN_vkSetHdrMetadataEXT)vk_dpa(c->device, "vkSetHdrMetadataEXT");
     if (!set) return;
     Nits n = nits();
     VkHdrMetadataEXT m = {.sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT,
@@ -633,7 +633,7 @@ static VkPipelineLayout pipe_layout(VkCtx *c, VkDescriptorSetLayout *dsl, VkShad
 
 static int init(VkCtx *c) {
     H.tried = 1;
-    H.push = (PFN_vkCmdPushDescriptorSetKHR)vkGetDeviceProcAddr(c->device, "vkCmdPushDescriptorSetKHR");
+    H.push = (PFN_vkCmdPushDescriptorSetKHR)vk_dpa(c->device, "vkCmdPushDescriptorSetKHR");
     VkDescriptorSetLayoutBinding enc[2] = {
         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},

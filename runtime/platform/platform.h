@@ -31,6 +31,10 @@ void plat_thread_detach(PlatThread *t);   // frees t; the thread runs on
 // Restricts t (NULL: the calling thread) to the logical processors in mask (bit n = processor n of the first group).
 // Returns the previous mask, 0 on failure.
 uint64_t plat_thread_affinity(PlatThread *t, uint64_t mask);
+// The calling thread gets a core to itself: the process's other threads are kept off it and the caller on it (Windows:
+// CPU sets, a performance core; Linux: the last processor of the affinity mask). Returns the logical processors
+// reserved, 0 when it could not.
+int plat_cpu_reserve(void);
 uint32_t plat_cpu_count(void);            // logical processors of the machine (system info)
 uint32_t plat_cpu_usable(void);           // the ones this process may run on (its affinity mask): size thread pools by it
 uint64_t plat_thread_cpu_ns(uint32_t tid);  // CPU time of the thread with id tid (plat_thread_id) so far; 0 unknown
@@ -154,6 +158,7 @@ void plat_cond_broadcast(PlatCond *c);
 typedef struct { PlatMutex m; uint32_t owner, depth; } PlatRMutex;
 #define PLAT_RMUTEX_INIT {PLAT_MUTEX_INIT, 0, 0}
 void plat_rmutex_lock(PlatRMutex *m);
+int plat_rmutex_trylock(PlatRMutex *m);   // 1 when acquired (or already held by this thread)
 void plat_rmutex_unlock(PlatRMutex *m);
 
 // One-time initialisation: the first caller runs fn(arg), every other caller waits until it returned. Zero-initialised

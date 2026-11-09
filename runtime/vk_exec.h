@@ -166,6 +166,13 @@ typedef struct {
                                                                // transitions
     uint64_t fb_war_barriers;            // in-pass barriers before a write to a target an earlier draw sampled
     uint64_t ub_updates, ub_pass_breaks; // inline uniform updates, and those that ended an open pass
+    uint64_t bind_calls, bind_ns;        // bind_resources: calls and the time spent resolving and pushing their sets
+    uint64_t bind_tex_ns;                // of bind_ns, the texture descriptors' lookups
+    uint64_t bind_buf_ns;                // of bind_ns, the uniform and storage buffer descriptors' resolution
+    uint64_t bind_sig_ns;                // of bind_ns, the per-draw binding signature
+    uint64_t bind_push_ns;               // of bind_ns, the set packing, pushes and binds after the binding loop
+    uint64_t bind_reused, bind_resolved; // descriptors taken from the per-binding reuse (PB) and resolved again
+    uint64_t dyn_calls, dyn_left;        // dynamic state calls recorded, and left out as unchanged (B.dyn)
 } VkExecFrame;
 extern VkExecFrame vk_exec_frame;
 void vk_exec_frame_written(const tex_t *t);                    // vk_texture_gpu_written: t rendered or copied into
@@ -178,7 +185,12 @@ void vk_exec_frame_log(const tex_t *presented, uint64_t frame);
 extern int vk_dump_armed;
 void vk_dump_init(void);                 // reads the environment; vk_exec_record's first call
 void vk_dump_pass_end(VkExec *ex);       // after vkCmdEndRendering
-void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeInfo *info);   // after a draw's binds
+// after a draw's binds; mesh: a mesh draw (s->vs is its mesh stage, s->ts its task stage or NULL)
+void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeInfo *info, int mesh);
+// Around a mesh draw of the dumped frame (after vk_dump_draw): a primitives-generated query, listed in mesh_prims.txt.
+// begin returns the query, or -1 when none was begun; end takes that value.
+int vk_dump_mesh_begin(VkExec *ex);
+void vk_dump_mesh_end(VkExec *ex, int q);
 void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPipeInfo *info, const p_dispatch *d);
 void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload);   // before a copy or texture clear is replayed
 void vk_dump_present(uint64_t frame);    // vk_be_present: waits for the dump frame's copies and closes the logs

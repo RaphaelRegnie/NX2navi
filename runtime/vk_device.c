@@ -13,6 +13,9 @@
 #include "vk_fg.h"
 #include "vk_dlssg.h"
 
+// The loader's vkGetDeviceProcAddr until Streamline is on the device (see vk.h).
+PFN_vkGetDeviceProcAddr vk_dpa = vkGetDeviceProcAddr;
+
 static uint32_t g_gfx_queues = 1;   // queues the graphics family offers (pick_device)
 
 static VkCtx g_vk;
@@ -364,8 +367,11 @@ static int create_device(void) {
     if (g_vk.has_mesh_shader) {
         // these two need features that are not enabled (multiview, primitive fragment shading rate)
         c->mesh.multiviewMeshShader = c->mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-        const char *gp = cfg_get("NX2NAVI_GPU_PASSES");
-        g_vk.has_mesh_queries = c->mesh.meshShaderQueries && gp && *gp && strcmp(gp, "0");   // vk_crumbs.c, diagnosis
+        // Mesh queries for two diagnoses: NX2NAVI_GPU_PASSES (vk_crumbs.c) and the dump's primitive counts
+        // (vk_dump.c vk_dump_mesh_begin), which also need pipeline statistics and host query reset.
+        const char *gp = cfg_get("NX2NAVI_GPU_PASSES"), *dmp = cfg_get("NX2NAVI_DUMP");
+        int want = (gp && *gp && strcmp(gp, "0")) || (dmp && *dmp);
+        g_vk.has_mesh_queries = want && c->mesh.meshShaderQueries && h->pipelineStatisticsQuery && c->f12.hostQueryReset;
         c->mesh.meshShaderQueries = g_vk.has_mesh_queries ? VK_TRUE : VK_FALSE;
         if (!c->mesh.meshShader || !c->mesh.taskShader) g_vk.has_mesh_shader = 0;
         rt_log("vk: mesh shaders: %s", g_vk.has_mesh_shader ? "VK_EXT_mesh_shader" : "not supported (task/mesh draws are skipped)");
@@ -402,6 +408,10 @@ static int create_device(void) {
     free(c);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateDevice failed (%d)", (int)r); return 0; }
     vk_dlssg_device_ready(g_vk.device);
+    if (vk_dlssg_dpa()) {   // Streamline's, so its plugins hook every entry point the replay fetches
+        vk_dpa = vk_dlssg_dpa();
+        rt_log("vk: device entry points come through Streamline's interposer (DLSS Frame Generation)");
+    }
     vkGetDeviceQueue(g_vk.device, g_vk.gfx_family, 0, &g_vk.gfx_queue);
     if (nq_gfx >= 2) {
         VkQueue present, acquire;
@@ -505,7 +515,7 @@ void vk_device_fault_report(VkResult r) {
     vk_pass_marks_report();
     VkCtx *c = vk_ctx();
     PFN_vkGetDeviceFaultInfoEXT get =
-        c && c->has_device_fault ? (PFN_vkGetDeviceFaultInfoEXT)vkGetDeviceProcAddr(c->device, "vkGetDeviceFaultInfoEXT")
+        c && c->has_device_fault ? (PFN_vkGetDeviceFaultInfoEXT)vk_dpa(c->device, "vkGetDeviceFaultInfoEXT")
                                  : NULL;
     if (!get) {
         rt_log("vk: device lost; no fault report (VK_EXT_device_fault %s)", c && c->has_device_fault ? "has no entry point"

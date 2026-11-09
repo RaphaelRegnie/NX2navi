@@ -66,7 +66,9 @@ extern void (*perf_gpu_stats)(PerfGpu *out);
 // The performance overlay (perfmon.c): mode 0 off, 1 fps, 2 full. While it is on, perf_present hands every frame to
 // perfmon_frame; full also takes the event counts (perf_count) and the GPU timestamps as NX2NAVI_TRACE=perf does.
 void perf_set_overlay(int mode);
-int perf_gpu_timing(void);                      // GPU timestamps wanted: NX2NAVI_TRACE=perf or the full overlay
+int perf_gpu_timing(void);                      // GPU timestamps wanted: NX2NAVI_TRACE=perf, the full overlay, or a
+                                                // feature that asked (perf_gpu_timing_want)
+void perf_gpu_timing_want(int on);              // dynres.c: GPU timestamps while dynamic resolution runs
 void perf_gpu_busy(uint64_t ns);                // GPU busy time of a timed submission part (vk_sync.c, any thread)
 uint64_t perf_gpu_busy_total(void);             // its running total (the overlay's GPU time per frame)
 #define RT_RESULT(module, desc) ((uint32_t)(module) | ((uint32_t)(desc) << 9))
@@ -276,6 +278,8 @@ uint64_t wide_heap_extra_kib(void);                        // the texture heap's
 void res_init(void);                                       // after rt_patches_init: the patch page and the sets
 float res_dlss_lod_bias(void);                             // NX2NAVI_DLSS upscaling: texture LOD bias (<= 0)
 int res_dlss_mode(const char *mode);                       // NX2NAVI_DLSS changed while running: new scene size
+void dynres_frame(void);                                   // dynamic resolution: one presented frame (vk_backend.c)
+const char *dynres_override(void);                         // the DLSS mode dynamic resolution uses now, NULL: the setting's
 void res_fn_hit(uint64_t addr, uint64_t x0);               // main.c fnprof_hit: catches the renderer at start
 void res_present(Cpu *c);                                  // nvnQueuePresentTexture: applies a pending scene size
 void res_sizes(unsigned out[2], unsigned scene[2]);      // the output and scene sizes in effect (the game's own

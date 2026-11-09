@@ -11,6 +11,7 @@ VkResult vk_dlssg_enumerate(VkInstance inst, uint32_t *n, VkPhysicalDevice *pd);
 PFN_vkVoidFunction vk_dlssg_instance_proc(VkInstance inst, const char *name);   // the interposer's, or NULL
 VkResult vk_dlssg_create_device(VkInstance inst, VkPhysicalDevice pd, const VkDeviceCreateInfo *ci, VkDevice *out);
 void vk_dlssg_device_ready(VkDevice dev);   // after the device: checks DLSS-G and takes the swapchain hooks
+PFN_vkGetDeviceProcAddr vk_dlssg_dpa(void);   // Streamline's device entry points, or NULL when it is not in use
 int vk_dlssg_active(void);
 // gfx_present.c's swapchain calls while active
 VkResult vk_dlssg_create_swapchain(VkDevice d, const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR *sc);

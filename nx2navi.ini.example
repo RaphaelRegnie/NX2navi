@@ -47,6 +47,18 @@
 # free_cores = 0
 # Windows timer resolution of 1 ms for steadier frame pacing (0 = the Windows default).
 # timer_1ms = 1
+# The thread that records the GPU work keeps the highest scheduling priority (recorder_prio), and a core of its own that
+# the process's other threads stay off (recorder_core: auto = with 12 or more logical processors, 1 always, 0 never).
+# recorder_prio = 1
+# recorder_core = auto
+# Submissions handed to the GPU queue together in one call, 1 to 16 (1 = each one at once).
+# submit_batch = 4
+# Dynamic resolution, 0 or 1, applied at once: with a DLSS upscaling mode, the scene resolution follows the GPU time
+# per frame toward dyn_res_target milliseconds (1 to 100), one DLSS step at a time, each held for dyn_res_step frames
+# (8 to 600), from the DLSS mode set down to performance. Default: off.
+# dyn_res = 0
+# dyn_res_target = 16.7
+# dyn_res_step = 45
 
 # Shaders and pipelines.
 # Draws whose pipeline is still building: default waits on a reserved worker; draw is the previous scheduling.
@@ -84,6 +96,11 @@
 # memory = auto
 # A new texture created over a live texture's memory starts with that content instead of empty.
 # tex_alias = 1
+# Small texture uploads stage in ranges of a few kept buffers instead of a new buffer each (0 = a buffer each).
+# stg_arena = 1
+# With astc = gpu: the compute shader reads the blocks in the game's tiled layout, so the CPU only copies the
+# texture (0 = the CPU untiles the blocks first).
+# astc_gpu_deswizzle = 1
 # Host zstd decoder in place of the game's (0 = the game's), and a check that decodes every call both ways and logs
 # the differences (1 = on; slow).
 # zstd_native = 1
@@ -106,6 +123,10 @@
 # tex_memo = 1
 # desc_template = 1
 # push_skip = 1
+# More optimisations, 0 turns each off: a draw resolves again only the descriptors whose bindings changed, and records
+# only the dynamic states whose values changed since the last pipeline.
+# bind_reuse = 1
+# dyn_delta = 1
 # Submit GPU work in parts every N draws between passes so the GPU starts earlier (0 to 1000; 0 = off), each part at
 # least split_us microseconds long (0 to 20000).
 # split_draws = 64

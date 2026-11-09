@@ -1605,7 +1605,8 @@ void vk_dlaa_pass(VkExec *ex) {
 static void dlss_mode(void) {
     static char mode[32];
     static int bias_on = -1;
-    const char *m = cfg_value("NX2NAVI_DLSS");
+    const char *m = dynres_override();   // dynamic resolution's step (dynres.c) while it differs from the setting
+    if (!m) m = cfg_value("NX2NAVI_DLSS");
     if (strcmp(m, mode)) {
         snprintf(mode, sizeof mode, "%s", m);
         res_dlss_mode(m);

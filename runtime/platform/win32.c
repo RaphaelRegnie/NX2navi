@@ -300,6 +300,66 @@ uint64_t plat_thread_affinity(PlatThread *t, uint64_t mask) {
     return (uint64_t)SetThreadAffinityMask(t ? t->h : GetCurrentThread(), (DWORD_PTR)mask);
 }
 
+// The calling thread gets a core of its own through CPU sets: the process's default sets, which every thread without
+// sets of its own runs on (those started later too), leave the core out, and the caller's selected sets are that
+// core. The core is the highest-numbered one of the fastest efficiency class (a performance core on a hybrid CPU),
+// with both its logical processors when it has two; only processors in group 0 and in the process's affinity mask
+// count. CPU sets are soft: the scheduler may still use the core when nothing else wants it. Returns the logical
+// processors reserved, 0 when Windows has no CPU sets (before Windows 10) or fewer than two cores qualify.
+int plat_cpu_reserve(void) {
+    typedef BOOL(WINAPI * GetInfoFn)(PSYSTEM_CPU_SET_INFORMATION, ULONG, PULONG, HANDLE, ULONG);
+    typedef BOOL(WINAPI * SetProcFn)(HANDLE, const ULONG *, ULONG);
+    typedef BOOL(WINAPI * SetThreadFn)(HANDLE, const ULONG *, ULONG);
+    HMODULE k = GetModuleHandleW(L"kernel32.dll");
+    GetInfoFn get = (GetInfoFn)(void *)GetProcAddress(k, "GetSystemCpuSetInformation");
+    SetProcFn set_proc = (SetProcFn)(void *)GetProcAddress(k, "SetProcessDefaultCpuSets");
+    SetThreadFn set_thread = (SetThreadFn)(void *)GetProcAddress(k, "SetThreadSelectedCpuSets");
+    if (!get || !set_proc || !set_thread) return 0;
+    ULONG len = 0;
+    get(NULL, 0, &len, GetCurrentProcess(), 0);
+    uint8_t *buf = len ? malloc(len) : NULL;
+    if (!buf || !get((PSYSTEM_CPU_SET_INFORMATION)buf, len, &len, GetCurrentProcess(), 0)) {
+        free(buf);
+        return 0;
+    }
+    DWORD_PTR proc = 0, sys = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) || !proc) proc = ~(DWORD_PTR)0;
+    int best_class = -1, best_core = -1;
+    for (ULONG o = 0; o + sizeof(DWORD) * 2 <= len;) {   // the core: fastest class, then highest index
+        const SYSTEM_CPU_SET_INFORMATION *s = (const void *)(buf + o);
+        if (!s->Size) break;
+        if (s->Type == CpuSetInformation && s->CpuSet.Group == 0 && s->CpuSet.LogicalProcessorIndex < 64 &&
+            (proc >> s->CpuSet.LogicalProcessorIndex & 1)) {
+            int cls = s->CpuSet.EfficiencyClass, core = s->CpuSet.CoreIndex;
+            if (cls > best_class || (cls == best_class && core > best_core)) best_class = cls, best_core = core;
+        }
+        o += s->Size;
+    }
+    ULONG rest[64], mine[8];
+    int nrest = 0, nmine = 0;
+    for (ULONG o = 0; o + sizeof(DWORD) * 2 <= len;) {
+        const SYSTEM_CPU_SET_INFORMATION *s = (const void *)(buf + o);
+        if (!s->Size) break;
+        if (s->Type == CpuSetInformation && s->CpuSet.Group == 0 && s->CpuSet.LogicalProcessorIndex < 64 &&
+            (proc >> s->CpuSet.LogicalProcessorIndex & 1)) {
+            if (s->CpuSet.EfficiencyClass == best_class && s->CpuSet.CoreIndex == best_core) {
+                if (nmine < 8) mine[nmine++] = s->CpuSet.Id;
+            } else if (nrest < 64) {
+                rest[nrest++] = s->CpuSet.Id;
+            }
+        }
+        o += s->Size;
+    }
+    free(buf);
+    if (!nmine || nrest < 2) return 0;
+    if (!set_proc(GetCurrentProcess(), rest, (ULONG)nrest)) return 0;
+    if (!set_thread(GetCurrentThread(), mine, (ULONG)nmine)) {
+        set_proc(GetCurrentProcess(), NULL, 0);   // back to every processor
+        return 0;
+    }
+    return nmine;
+}
+
 uint32_t plat_cpu_count(void) {
     DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
     return n ? (uint32_t)n : 1;

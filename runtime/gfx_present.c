@@ -35,8 +35,15 @@
 #define VSYNC_HZ 60
 
 // ---- queue lock
+// Taking it hands the replay's held submissions to the queue first (vk_sync.c, submit batching), so whatever the
+// holder submits or waits for comes after them in queue order.
 static PlatRMutex g_ql;
-void vk_queue_lock(void) { plat_rmutex_lock(&g_ql); }
+void vk_queue_lock(void) {
+    plat_rmutex_lock(&g_ql);
+    vk_sync_flush_held();
+}
+void vk_queue_lock_raw(void) { plat_rmutex_lock(&g_ql); }
+int vk_queue_trylock_raw(void) { return plat_rmutex_trylock(&g_ql); }
 void vk_queue_unlock(void) { plat_rmutex_unlock(&g_ql); }
 
 // ---- window state shared with the back end

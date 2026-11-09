@@ -249,7 +249,7 @@ static int ensure_init(void) {
     P.f_depth_clamp = f2.features.depthClamp;
     P.f_fill_non_solid = f2.features.fillModeNonSolid;
     P.f_dual_src = f2.features.dualSrcBlend;
-#define PROC(field, name) (P.field = (void *)vkGetDeviceProcAddr(c->device, name))
+#define PROC(field, name) (P.field = (void *)vk_dpa(c->device, name))
     PROC(push, "vkCmdPushDescriptorSetKHR");
     // Descriptor update templates (core 1.1; the push variant comes with VK_KHR_push_descriptor on 1.1): the driver
     // walks a layout prepared when the layout is made instead of parsing write structs every draw.
@@ -567,11 +567,7 @@ void vk_pipeline_answers(const VkPipeState *s, GfxShaderAnswers *vs, GfxShaderAn
 
 // ---- vertex input (pipeline state, or vkCmdSetVertexInputEXT)
 
-typedef struct {
-    uint32_t n_attr, n_bind;
-    VkVertexInputAttributeDescription2EXT a[32];
-    VkVertexInputBindingDescription2EXT b[17];
-} VtxInput;
+typedef VkVtxInput VtxInput;
 
 // An attribute the game left without a format is a fixed one on Maxwell, a single 32-bit component of 0 (an unused
 // attribute is bound as IsFixed 1x32 float): it reads (0, 0, 0, 1), as Vulkan expands a
@@ -3694,52 +3690,121 @@ int vk_pipeline_warm_shaders(void) {
 // ---- dynamic state
 
 void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
-    if (!ensure_init()) return;
+    VkDynShadow sh;
+    uint64_t skipped = 0;
+    sh.have = 0;   // nothing known: every call is recorded
+    vk_pipeline_set_dynamic_delta(cb, s, &sh, 0, &skipped);
+}
+
+// Every graphics pipeline the replay binds lists the same dynamic states (P.dyn; mesh pipelines leave out topology,
+// primitive restart and vertex input), so a value recorded into a command buffer holds across pipeline binds until it
+// is set again. Each call is recorded only when its value differs from the one *sh says the command buffer has: a new
+// pipeline usually changes the shaders and a field or two, not the twenty states this used to record with every bind.
+int vk_pipeline_set_dynamic_delta(VkCommandBuffer cb, const VkPipeState *s, VkDynShadow *sh, int mesh, uint64_t *skipped) {
+    if (!ensure_init()) return 0;
     const poly_st *pl = &s->poly;
     const ds_st *d = &s->ds;
+    int core = (sh->have & VK_DYN_CORE) != 0, vtx = !mesh && (sh->have & VK_DYN_VTX), blend = (sh->have & VK_DYN_BLEND) != 0;
+    int n = 0, left = 0;
+#define DYN(known, field, val, call)                                         \
+    do {                                                                     \
+        if ((known) && sh->field == (val)) left++;                           \
+        else sh->field = (val), call, n++;                                   \
+    } while (0)
     // The front face maps unchanged: NX2NAVI sets the upper-left window origin, and the y-flipped viewport (y_flip) puts
     // NDC +y at row 0 as NVN does, so the framebuffer winding Vulkan tests is the one NVN tests
     // (a lower-left origin would need it mirrored).
     int front_cw = pl->front == NVN_FRONT_FACE_CW;
-    vkCmdSetCullMode(cb, (VkCullModeFlags)(pl->cull & 3));   // NVN_FACE_* has VkCullModeFlagBits' values
-    vkCmdSetFrontFace(cb, front_cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
-    vkCmdSetPrimitiveTopology(cb, vk_pipeline_topology(s->prim));
-    vkCmdSetDepthTestEnable(cb, d->dt);
-    vkCmdSetDepthWriteEnable(cb, d->dw);
-    vkCmdSetDepthCompareOp(cb, compare_op(d->df));
-    vkCmdSetStencilTestEnable(cb, d->st);
-    vkCmdSetStencilOp(cb, VK_STENCIL_FACE_FRONT_BIT, stencil_op(d->fail_f), stencil_op(d->zpass_f), stencil_op(d->zfail_f),
-                      compare_op(d->sf_f));
-    vkCmdSetStencilOp(cb, VK_STENCIL_FACE_BACK_BIT, stencil_op(d->fail_b), stencil_op(d->zpass_b), stencil_op(d->zfail_b),
-                      compare_op(d->sf_b));
+    VkCullModeFlags cull = (VkCullModeFlags)(pl->cull & 3);   // NVN_FACE_* has VkCullModeFlagBits' values
+    VkFrontFace front = front_cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    DYN(core, cull, cull, vkCmdSetCullMode(cb, cull));
+    DYN(core, front, front, vkCmdSetFrontFace(cb, front));
+    if (!mesh) {
+        VkPrimitiveTopology topo = vk_pipeline_topology(s->prim);
+        DYN(vtx, topo, topo, vkCmdSetPrimitiveTopology(cb, topo));
+    }
+    DYN(core, dt, (VkBool32)d->dt, vkCmdSetDepthTestEnable(cb, d->dt));
+    DYN(core, dw, (VkBool32)d->dw, vkCmdSetDepthWriteEnable(cb, d->dw));
+    DYN(core, dop, compare_op(d->df), vkCmdSetDepthCompareOp(cb, compare_op(d->df)));
+    DYN(core, st, (VkBool32)d->st, vkCmdSetStencilTestEnable(cb, d->st));
+    for (int f = 0; f < 2; f++) {
+        VkStencilOp o[3] = {stencil_op(f ? d->fail_b : d->fail_f), stencil_op(f ? d->zpass_b : d->zpass_f),
+                            stencil_op(f ? d->zfail_b : d->zfail_f)};
+        VkCompareOp c = compare_op(f ? d->sf_b : d->sf_f);
+        if (core && sh->scmp[f] == c && !memcmp(sh->sop[f], o, sizeof o)) {
+            left++;
+            continue;
+        }
+        vkCmdSetStencilOp(cb, f ? VK_STENCIL_FACE_BACK_BIT : VK_STENCIL_FACE_FRONT_BIT, o[0], o[1], o[2], c);
+        sh->scmp[f] = c, memcpy(sh->sop[f], o, sizeof o), n++;
+    }
     // NVN_POLYGON_OFFSET_ENABLE_* bit of the polygon mode in use: point 1, line 2, fill 4
     unsigned mode = pl->mode <= NVN_POLYGON_MODE_FILL ? pl->mode : NVN_POLYGON_MODE_FILL;
-    vkCmdSetDepthBiasEnable(cb, (pl->offset_en >> mode & 1) != 0);
-    vkCmdSetRasterizerDiscardEnable(cb, s->raster_discard != 0);
-    vkCmdSetPrimitiveRestartEnable(cb, s->prim_restart != 0);
-    if (P.dyn_vi && s->vs) {
+    VkBool32 bias_en = (pl->offset_en >> mode & 1) != 0, discard = s->raster_discard != 0, restart = s->prim_restart != 0;
+    DYN(core, bias_en, bias_en, vkCmdSetDepthBiasEnable(cb, bias_en));
+    DYN(core, discard, discard, vkCmdSetRasterizerDiscardEnable(cb, discard));
+    if (!mesh) DYN(vtx, restart, restart, vkCmdSetPrimitiveRestartEnable(cb, restart));
+    if (!mesh && P.dyn_vi && s->vs) {
         VtxInput v;
         vertex_input(s, &v);
-        rec_vertex_input(P.set_vi, cb, v.n_bind, v.b, v.n_attr, v.a);
+        if (vtx && sh->vi.n_attr == v.n_attr && sh->vi.n_bind == v.n_bind &&
+            !memcmp(sh->vi.a, v.a, sizeof v.a[0] * v.n_attr) && !memcmp(sh->vi.b, v.b, sizeof v.b[0] * v.n_bind)) {
+            left++;
+        } else {
+            rec_vertex_input(P.set_vi, cb, v.n_bind, v.b, v.n_attr, v.a);
+            sh->vi = v, n++;
+        }
+    } else if (!mesh) {
+        sh->vi.n_attr = UINT32_MAX;   // not recorded: unknown to the next draw
     }
-    if (P.dyn_clamp) rec_bool(P.set_clamp, cb, s->depth_clamp != 0);
-    if (P.dyn_poly) rec_polygon_mode(P.set_poly, cb, polygon_mode(pl->mode));
-    if (P.dyn_a2c) rec_bool((PFN_vkCmdSetDepthClampEnableEXT)P.set_a2c, cb, s->ms.a2c != 0);   // the same signature
-    int n = target_count(s);
-    if (!n) return;
-    VkBool32 en[8];
-    VkColorBlendEquationEXT eq[8];
-    VkColorComponentFlags wm[8];
-    for (int i = 0; i < n; i++) {
-        const blend_st *b = &s->blend[i];
-        en[i] = (s->color.blend_en >> i & 1) && blendable(target_format(s->color_fmt[i], NULL, NULL));
-        eq[i] = (VkColorBlendEquationEXT){blend_factor(b->src_rgb), blend_factor(b->dst_rgb), blend_op(b->eq_rgb),
-                                          blend_factor(b->src_a), blend_factor(b->dst_a), blend_op(b->eq_a)};
-        wm[i] = target_wmask(s, i);
+    if (P.dyn_clamp) {
+        VkBool32 clamp = s->depth_clamp != 0;
+        DYN(core, clamp, clamp, rec_bool(P.set_clamp, cb, clamp));
     }
-    if (P.dyn_blend_en) rec_blend_enable(P.set_blend_en, cb, 0, (uint32_t)n, en);
-    if (P.dyn_blend_eq) rec_blend_equation(P.set_blend_eq, cb, 0, (uint32_t)n, eq);
-    if (P.dyn_wmask) rec_write_mask(P.set_wmask, cb, 0, (uint32_t)n, wm);
+    if (P.dyn_poly) {
+        VkPolygonMode pm = polygon_mode(pl->mode);
+        DYN(core, poly, pm, rec_polygon_mode(P.set_poly, cb, pm));
+    }
+    if (P.dyn_a2c) {   // the same signature as the depth clamp call
+        VkBool32 a2c = s->ms.a2c != 0;
+        DYN(core, a2c, a2c, rec_bool((PFN_vkCmdSetDepthClampEnableEXT)P.set_a2c, cb, a2c));
+    }
+#undef DYN
+    sh->have |= VK_DYN_CORE;
+    if (mesh) sh->have &= ~(uint32_t)VK_DYN_VTX;
+    else sh->have |= VK_DYN_VTX;
+    int nt = target_count(s);
+    if (nt) {
+        VkBool32 en[8];
+        VkColorBlendEquationEXT eq[8];
+        VkColorComponentFlags wm[8];
+        for (int i = 0; i < nt; i++) {
+            const blend_st *b = &s->blend[i];
+            en[i] = (s->color.blend_en >> i & 1) && blendable(target_format(s->color_fmt[i], NULL, NULL));
+            eq[i] = (VkColorBlendEquationEXT){blend_factor(b->src_rgb), blend_factor(b->dst_rgb), blend_op(b->eq_rgb),
+                                              blend_factor(b->src_a), blend_factor(b->dst_a), blend_op(b->eq_a)};
+            wm[i] = target_wmask(s, i);
+        }
+        // The calls write targets [0, nt); targets past nt keep what the command buffer had.
+        int known = blend && (uint32_t)nt <= sh->nt;
+        if (P.dyn_blend_en) {
+            if (known && !memcmp(sh->en, en, sizeof en[0] * nt)) left++;
+            else rec_blend_enable(P.set_blend_en, cb, 0, (uint32_t)nt, en), n++;
+        }
+        if (P.dyn_blend_eq) {
+            if (known && !memcmp(sh->eq, eq, sizeof eq[0] * nt)) left++;
+            else rec_blend_equation(P.set_blend_eq, cb, 0, (uint32_t)nt, eq), n++;
+        }
+        if (P.dyn_wmask) {
+            if (known && !memcmp(sh->wm, wm, sizeof wm[0] * nt)) left++;
+            else rec_write_mask(P.set_wmask, cb, 0, (uint32_t)nt, wm), n++;
+        }
+        memcpy(sh->en, en, sizeof en[0] * nt), memcpy(sh->eq, eq, sizeof eq[0] * nt), memcpy(sh->wm, wm, sizeof wm[0] * nt);
+        sh->nt = blend && sh->nt > (uint32_t)nt ? sh->nt : (uint32_t)nt;
+        sh->have |= VK_DYN_BLEND;
+    }
+    *skipped += (uint64_t)left;
+    return n;
 }
 
 // ---- statistics, persistence, teardown

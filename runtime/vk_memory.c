@@ -126,7 +126,7 @@ static int memory_type(const VkCtx *c, uint32_t bits, VkMemoryPropertyFlags want
 static int import_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     if (shadow_on) return shadow_pool(c, r, addr, size);
     if (!p_host_props)
-        p_host_props = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(c->device, "vkGetMemoryHostPointerPropertiesEXT");
+        p_host_props = (PFN_vkGetMemoryHostPointerPropertiesEXT)vk_dpa(c->device, "vkGetMemoryHostPointerPropertiesEXT");
     uint64_t al = c->min_imported_host_alignment ? c->min_imported_host_alignment : 0x1000;
     r->import_lo = addr & ~(al - 1);
     r->import_hi = (addr + size + al - 1) & ~(al - 1);
@@ -1739,7 +1739,7 @@ static struct {
 
 static int merge_init(VkCtx *c) {
     WM.tried = 1;
-    WM.push = (PFN_vkCmdPushDescriptorSetKHR)vkGetDeviceProcAddr(c->device, "vkCmdPushDescriptorSetKHR");
+    WM.push = (PFN_vkCmdPushDescriptorSetKHR)vk_dpa(c->device, "vkCmdPushDescriptorSetKHR");
     VkDescriptorSetLayoutBinding b[4];
     for (int i = 0; i < 4; i++)
         b[i] = (VkDescriptorSetLayoutBinding){.binding = (uint32_t)i, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -2442,13 +2442,17 @@ void vk_mem_class_log(const VkPhysicalDeviceProperties *p, const VkPhysicalDevic
 }
 
 // ---------------------------------------------------------------- upload batches and deferred destruction
-typedef struct { VkBuffer buf; VmaAllocation alloc; } Staging;
+typedef struct { VkBuffer buf; VmaAllocation alloc; VkDeviceSize size; } Staging;   // size: the VkBuffer's own
+typedef struct { VkBuffer buf; VmaAllocation alloc; uint8_t *map; } StgChunk;          // a staging arena chunk
 typedef struct {
     VkCommandBuffer cb;
     VkFence fence;
     uint64_t seq;
     Staging *stg;
     int nstg, cap;
+    StgChunk *chunk;          // arena chunks this batch's uploads took ranges of (vk_staging_at), the last one open
+    int nchunk, cap_chunk;
+    VkDeviceSize chunk_used;  // bytes of the last chunk handed out
 } Batch;
 
 enum { DEAD_IMAGE = 1, DEAD_IMAGE_VMA, DEAD_VIEW, DEAD_BUFFER_VMA };
@@ -2480,9 +2484,64 @@ static void grow(void **arr, int *cap, size_t elem) {
     *arr = n;
 }
 
+// Staging buffers of a finished batch go back to a cache instead of the allocator: an upload-heavy scene creates and
+// retires the same few sizes thousands of times a frame (a texture re-upload, a texel copy, an ASTC decode), and each
+// vmaCreateBuffer/vmaDestroyBuffer pair walks the pool's block list under its lock. Bounded in count and bytes; a buffer
+// that does not fit is destroyed as before. The batch is complete when this runs, so nothing reads the bytes again.
+// Sizes are the VkBuffers' own: an allocation can be larger than its buffer, and a copy reads only the buffer's range.
+// cmd_lock held (retire, and vk_staging between vk_upload_begin and vk_upload_end).
+#define STG_CACHE 24
+#define STG_CACHE_BYTES (192ull << 20)
+static Staging stg_cache[STG_CACHE];
+static int stg_ncache;
+static VkDeviceSize stg_cache_bytes;
+
+// The staging arena: an upload of at most ARENA_MAX bytes takes an ARENA_ALIGN-aligned range of a persistent mapped
+// chunk (vk_staging_at) instead of a buffer of its own. The chunks belong to the open batch while it records and go
+// back to the free list when its fence signals, so a frame's few hundred small texture uploads cost a pointer bump
+// each instead of a vmaCreateBuffer and vmaDestroyBuffer under the allocator's lock. ARENA_KEEP free chunks stay; the
+// rest are destroyed. 256-byte alignment covers every bufferOffset rule of a buffer-to-image copy. NX2NAVI_STG_ARENA=0
+// gives every upload its own buffer again.
+#define ARENA_CHUNK (8ull << 20)
+#define ARENA_MAX (ARENA_CHUNK / 4)
+#define ARENA_ALIGN 256ull
+#define ARENA_KEEP 8
+static StgChunk arena_free[ARENA_KEEP];
+static int narena_free;
+static uint64_t arena_made, arena_ranges;
+
 static void free_staging(VkCtx *c, Batch *b) {
-    for (int i = 0; i < b->nstg; i++) vmaDestroyBuffer(c->vma, b->stg[i].buf, b->stg[i].alloc);
+    for (int i = 0; i < b->nstg; i++) {
+        if (stg_ncache < STG_CACHE && stg_cache_bytes + b->stg[i].size <= STG_CACHE_BYTES) {
+            stg_cache[stg_ncache++] = b->stg[i];
+            stg_cache_bytes += b->stg[i].size;
+            continue;
+        }
+        vmaDestroyBuffer(c->vma, b->stg[i].buf, b->stg[i].alloc);
+    }
     b->nstg = 0;
+    for (int i = 0; i < b->nchunk; i++) {
+        if (narena_free < ARENA_KEEP) arena_free[narena_free++] = b->chunk[i];
+        else vmaDestroyBuffer(c->vma, b->chunk[i].buf, b->chunk[i].alloc);
+    }
+    b->nchunk = 0, b->chunk_used = 0;
+}
+
+// The cached staging buffer that fits n with the least waste: at most four times the request, so a small upload does not
+// take a block-sized buffer another upload wanted.
+static int staging_cache_take(VkCtx *c, VkDeviceSize n, Staging *out, void **map) {
+    int best = -1;
+    for (int i = 0; i < stg_ncache; i++) {
+        if (stg_cache[i].size < n || stg_cache[i].size > n * 4 + 65536) continue;
+        if (best < 0 || stg_cache[i].size < stg_cache[best].size) best = i;
+    }
+    if (best < 0) return 0;
+    VmaAllocationInfo ai;
+    vmaGetAllocationInfo(c->vma, stg_cache[best].alloc, &ai);
+    *out = stg_cache[best], *map = ai.pMappedData;
+    stg_cache_bytes -= stg_cache[best].size;
+    stg_cache[best] = stg_cache[--stg_ncache];
+    return 1;
 }
 
 // Batches complete in submission order (one queue): retire from the front while their fences are signalled.
@@ -2538,6 +2597,7 @@ VkCommandBuffer vk_upload_begin(void) {
     if (nspare) {
         Batch s = spare[--nspare];
         open_b.cb = s.cb, open_b.fence = s.fence, open_b.stg = s.stg, open_b.cap = s.cap;
+        open_b.chunk = s.chunk, open_b.cap_chunk = s.cap_chunk;
         vkResetCommandBuffer(open_b.cb, 0);
         vkResetFences(c->device, 1, &open_b.fence);
     } else {
@@ -2592,6 +2652,16 @@ void *vk_staging(VkDeviceSize size, VkBuffer *buf, VmaAllocation *alloc) {
         plat_rmutex_unlock(&cmd_lock);
     }
     if (stg_pool && bi.size <= STG_BLOCK / 2) aci.pool = stg_pool;
+    if (!alloc) {   // the batch owns it, so a cached one of a fitting size serves
+        Staging cs;
+        void *cmap;
+        if (staging_cache_take(c, bi.size, &cs, &cmap)) {
+            *buf = cs.buf;
+            if (open_b.nstg == open_b.cap) grow((void **)&open_b.stg, &open_b.cap, sizeof *open_b.stg);
+            open_b.stg[open_b.nstg++] = cs;
+            return cmap;
+        }
+    }
     VmaAllocationInfo info;
     VkBuffer b;
     VmaAllocation a;
@@ -2601,9 +2671,51 @@ void *vk_staging(VkDeviceSize size, VkBuffer *buf, VmaAllocation *alloc) {
     if (alloc) *alloc = a;   // the caller destroys it (vmaDestroyBuffer) after vk_upload_flush(1)
     else {
         if (open_b.nstg == open_b.cap) grow((void **)&open_b.stg, &open_b.cap, sizeof *open_b.stg);
-        open_b.stg[open_b.nstg++] = (Staging){b, a};
+        open_b.stg[open_b.nstg++] = (Staging){b, a, bi.size};
     }
     return info.pMappedData;
+}
+
+// A range of the staging arena for an upload of the open batch (between vk_upload_begin and vk_upload_end): *buf and
+// *off name it, and the batch owns it until its fence signals. Larger requests, and every request with
+// NX2NAVI_STG_ARENA=0, get a buffer of their own at offset 0 (vk_staging).
+void *vk_staging_at(VkDeviceSize size, VkBuffer *buf, VkDeviceSize *off) {
+    static int on = -1;
+    if (on < 0) {
+        on = cfg_bool("NX2NAVI_STG_ARENA");
+        if (!on) rt_log("vk: staging arena off (NX2NAVI_STG_ARENA=0): every upload stages in a buffer of its own");
+    }
+    *off = 0;
+    if (!on || !open_active || size > ARENA_MAX) return vk_staging(size, buf, NULL);
+    VkCtx *c = vk_ctx();
+    VkDeviceSize at = (open_b.chunk_used + ARENA_ALIGN - 1) & ~(ARENA_ALIGN - 1);
+    if (!open_b.nchunk || at + size > ARENA_CHUNK) {
+        StgChunk k;
+        if (narena_free) {
+            k = arena_free[--narena_free];
+        } else {
+            VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = ARENA_CHUNK,
+                                     .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+            VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                           .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                                    VMA_ALLOCATION_CREATE_MAPPED_BIT};
+            if (stg_pool) aci.pool = stg_pool;   // half of a staging block (STG_BLOCK)
+            VmaAllocationInfo info;
+            if (vmaCreateBuffer(c->vma, &bi, &aci, &k.buf, &k.alloc, &info) != VK_SUCCESS)
+                return vk_staging(size, buf, NULL);
+            k.map = info.pMappedData;
+            if (arena_made++ < 16) rt_log("vk: staging arena chunk %llu made (%llu MiB)", (unsigned long long)arena_made,
+                                          (unsigned long long)(ARENA_CHUNK >> 20));
+        }
+        if (open_b.nchunk == open_b.cap_chunk) grow((void **)&open_b.chunk, &open_b.cap_chunk, sizeof *open_b.chunk);
+        open_b.chunk[open_b.nchunk++] = k;
+        at = 0;
+    }
+    StgChunk *k = &open_b.chunk[open_b.nchunk - 1];
+    open_b.chunk_used = at + (size ? size : 16);
+    arena_ranges++;
+    *buf = k->buf, *off = at;
+    return k->map + at;
 }
 
 uint64_t vk_upload_flush(int wait) {
@@ -2613,6 +2725,8 @@ uint64_t vk_upload_flush(int wait) {
     uint64_t seq = next_seq;
     if (c && open_active) {
         for (int i = 0; i < open_b.nstg; i++) vmaFlushAllocation(c->vma, open_b.stg[i].alloc, 0, VK_WHOLE_SIZE);
+        for (int i = 0; i < open_b.nchunk; i++)
+            vmaFlushAllocation(c->vma, open_b.chunk[i].alloc, 0, i + 1 < open_b.nchunk ? VK_WHOLE_SIZE : open_b.chunk_used);
         vk_crumb(open_b.cb, VK_CRUMB_UPLOAD_END, open_b.seq);
         vkEndCommandBuffer(open_b.cb);
         VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &open_b.cb};
@@ -2725,9 +2839,14 @@ void vk_mem_shutdown(void) {
     tl_noted = keep;
     for (int i = 0; i < nspare; i++) {
         vkDestroyFence(c->device, spare[i].fence, NULL);
-        free(spare[i].stg);
+        free(spare[i].stg), free(spare[i].chunk);
     }
     nspare = 0;
+    // The staging cache and the arena's free chunks live in stg_pool: before it goes
+    for (int i = 0; i < stg_ncache; i++) vmaDestroyBuffer(c->vma, stg_cache[i].buf, stg_cache[i].alloc);
+    stg_ncache = 0, stg_cache_bytes = 0;
+    for (int i = 0; i < narena_free; i++) vmaDestroyBuffer(c->vma, arena_free[i].buf, arena_free[i].alloc);
+    narena_free = 0;
     if (cmd_pool) vkDestroyCommandPool(c->device, cmd_pool, NULL);
     cmd_pool = VK_NULL_HANDLE;
     if (stg_pool) vmaDestroyPool(c->vma, stg_pool);   // after retire: no staging buffer is left in it

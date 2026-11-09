@@ -37,8 +37,9 @@ typedef struct VkCtx {
         has_astc_ldr,                       // textureCompressionASTC_LDR (enabled when reported)
         has_calibrated,                     // VK_KHR/EXT_calibrated_timestamps (GPU idle split in the perf line)
         has_hdr_metadata,                   // VK_EXT_hdr_metadata (vk_hdr.c vk_hdr_metadata)
-        has_mesh_shader, has_mesh_queries, has_vrs,   // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
-        has_maximal_reconvergence;          // VK_KHR_shader_maximal_reconvergence (vk_pipeline.c spirv_reconverge)
+        has_mesh_shader, has_vrs,           // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
+        has_maximal_reconvergence,          // VK_KHR_shader_maximal_reconvergence (vk_pipeline.c spirv_reconverge)
+        has_mesh_queries;                   // meshShaderQueries, kept while NX2NAVI_GPU_PASSES or NX2NAVI_DUMP is set
     // Feedback loops (maxwell.md 1.9, vk_exec_draw.c feedback_prepare): a draw samples a target of its open pass that
     // an earlier draw of the pass wrote. NX2NAVI_FEEDBACK=0: VK_FEEDBACK_OFF (sampled in GENERAL without a barrier, the
     // old behaviour); VK_FEEDBACK_LAYOUT with VK_EXT_attachment_feedback_loop_layout and dynamicRenderingLocalRead
@@ -182,9 +183,13 @@ int vk_contact_strength(void);   // percent, 0 = off
 void vk_contact_release(void);   // before the device goes away
 void vk_present_flip(void);
 // Every submission to ctx->gfx_queue (and xfer_queue when shared) takes this lock; vk_present_image and the swapchain
-// rebuild do. Recursive.
+// rebuild do. Recursive. Taking it first hands the replay's held submissions to the queue (vk_sync_flush_held); the
+// raw forms leave them held, for vk_sync.c itself.
 void vk_queue_lock(void);
 void vk_queue_unlock(void);
+void vk_queue_lock_raw(void);
+int vk_queue_trylock_raw(void);   // 1 when acquired
+void vk_sync_flush_held(void);    // queue lock held: the held submissions go to the queue in one call (vk_sync.c)
 // Copy of the last presented swapchain image, for probes: on, the next presents read the image back into a host buffer
 // and wait for the GPU. *px stays valid until the next present; the format is the swapchain's. Returns 0 with no frame.
 // The rectangle {x, y, w, h} of a dw x dh swapchain image a cw x ch picture is presented in (gfx_present.c,
@@ -241,6 +246,14 @@ void vk_mem_count(int cls, int use, uint64_t bytes);
 // submit are counted from the shared page generations and logged as `mem: dirty` every 60 frames. Nothing when tracing
 // is off: VK_MEM_BOUND is one flag test at the call site.
 void vk_mem_bound_note(void *pool);
+
+// The vkGetDeviceProcAddr the runtime fetches device entry points with: the loader's, or Streamline's interposer when
+// DLSS Frame Generation is up (vk_device.c sets it right after the device is created). Functions fetched the other way
+// bypass the plugins' hooks.
+extern PFN_vkGetDeviceProcAddr vk_dpa;
+
+// Every timed submission part's GPU duration summed, never reset: a reader differences it across frames (dynres.c).
+uint64_t vk_gpu_busy_all(void);
 #define VK_MEM_BOUND(sp) do { if ((rt_trace & RT_TRACE_PERF) && (sp).pool) vk_mem_bound_note((sp).pool); } while (0)
 void vk_mem_dirty_submit(void);                   // vk_sync_submit, under its lock, before the replay
 // VRAM mirror of buffer-bound pools (vk_memory.c). vk_mirror_on: NX2NAVI_MEMORY=mirror|verify, or the
@@ -340,6 +353,9 @@ int vk_fix_zero(void);
 VkCommandBuffer vk_upload_begin(void);
 void vk_upload_end(void);
 void *vk_staging(VkDeviceSize size, VkBuffer *buf, VmaAllocation *alloc);
+// A 256-byte-aligned range of the staging arena owned by the open upload batch (vk_memory.c): *buf at *off. Only
+// between vk_upload_begin and vk_upload_end; a large request gets a buffer of its own at offset 0.
+void *vk_staging_at(VkDeviceSize size, VkBuffer *buf, VkDeviceSize *off);
 uint64_t vk_upload_flush(int wait);
 // Deferred destruction: freed once the upload batches recorded so far and the timeline value last noted have completed.
 void vk_defer_image(VkImage img, VmaAllocation alloc);   // alloc NULL: vkDestroyImage only
@@ -353,8 +369,10 @@ int vk_astc_native(VkFormat astc_fmt);  // 1: images of this ASTC format are cre
 int vk_astc_gpu(void);                  // 1: ASTC images decoded to RGBA8 by the compute decoder (vk_astc_record)
 int vk_astc_bc(void);                   // 1: those images are BC3 instead, encoded after the decode (NX2NAVI_ASTC_BC=1)
 // One image region decoded from raw blocks: tight rows of 16-byte blocks at byte src of the source buffer (slices one
-// after the other), w x h texels and slices deep, written at offset of level / layer.
-typedef struct { VkDeviceSize src; uint32_t w, h, slices, level, layer; VkOffset3D offset; } VkAstcRegion;
+// after the other), w x h texels and slices deep, written at offset of level / layer. bl: the blocks at src are the
+// level's block-linear storage as the game laid it out, block height 2^th and depth 2^td GOBs (tex_deswizzle.c
+// nvn_bl_offset), and the decoder reads each block from its place in it (no CPU deswizzle); src is 16-byte aligned.
+typedef struct { VkDeviceSize src; uint32_t w, h, slices, level, layer; VkOffset3D offset; uint8_t bl, th, td; } VkAstcRegion;
 // Records into cb, the open upload batch (between vk_upload_begin and vk_upload_end): src (TRANSFER_SRC, src_size
 // bytes of blocks) goes to a device-local scratch buffer, a dispatch per region decodes it, and the texels are copied
 // into img (VK_IMAGE_LAYOUT_GENERAL). The caller records its usual barriers around an image copy before and after the
@@ -363,6 +381,7 @@ typedef struct { VkDeviceSize src; uint32_t w, h, slices, level, layer; VkOffset
 // 0 when the decoder is unavailable or the scratch buffer cannot be allocated (nothing recorded).
 int vk_astc_record(VkCommandBuffer cb, VkBuffer src, VkDeviceSize src_size, const VkAstcRegion *rg, int n, uint32_t bw,
                    uint32_t bh, int srgb, int bc, VkImage img, VkImageAspectFlags aspect, VkBuffer readback);
+VkDeviceSize vk_astc_region_bytes(const VkAstcRegion *r, uint32_t bw, uint32_t bh);   // source bytes the region reads
 void vk_astc_stats(uint64_t *dispatches, uint64_t *texels);   // since start
 // NX2NAVI_ASTC_TIME=1: GPU timestamps around each vk_astc_record's dispatches (logged per footprint and the largest one)
 void vk_astc_time_enable(int on);
@@ -620,6 +639,36 @@ VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info);
 // write masks and references; vertex buffers with vkCmdBindVertexBuffers2 (strides NULL when
 // vk_pipeline_vertex_input_dynamic(), else from VkPipeState.vstream).
 void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s);
+// Vertex input as vkCmdSetVertexInputEXT takes it (vk_pipeline.c vertex_input).
+typedef struct {
+    uint32_t n_attr, n_bind;
+    VkVertexInputAttributeDescription2EXT a[32];
+    VkVertexInputBindingDescription2EXT b[17];
+} VkVtxInput;
+// The dynamic state vk_pipeline_set_dynamic_delta last recorded into a command buffer, as the values its calls took.
+// have: the groups that still hold what the command buffer has. Zeroed, nothing is known and the next call records
+// everything; the owner zeroes it whenever the command buffer begins again or other code records pipelines or dynamic
+// state into it (the replay keeps it in vk_exec_draw.c's B, which vk_exec_draw_new_cb clears).
+enum { VK_DYN_CORE = 1, VK_DYN_VTX = 2, VK_DYN_BLEND = 4 };   // VTX: topology, primitive restart, vertex input
+typedef struct {
+    uint32_t have;
+    VkCullModeFlags cull;
+    VkFrontFace front;
+    VkPrimitiveTopology topo;
+    VkBool32 dt, dw, st, bias_en, discard, restart, clamp, a2c;
+    VkCompareOp dop, scmp[2];
+    VkStencilOp sop[2][3];
+    VkPolygonMode poly;
+    uint32_t nt;                            // colour targets the blend arrays cover
+    VkBool32 en[8];
+    VkColorBlendEquationEXT eq[8];
+    VkColorComponentFlags wm[8];
+    VkVtxInput vi;
+} VkDynShadow;
+// vk_pipeline_set_dynamic recording only what differs from *sh, which it then updates. mesh: the bound pipeline is a
+// mesh pipeline, which keeps topology, primitive restart and vertex input static, so binding it dropped them: they are
+// left out and marked unknown. Returns the number of state calls recorded and adds the number left out to *skipped.
+int vk_pipeline_set_dynamic_delta(VkCommandBuffer cb, const VkPipeState *s, VkDynShadow *sh, int mesh, uint64_t *skipped);
 int vk_pipeline_vertex_input_dynamic(void);    // 1: vertex input is VK_EXT_vertex_input_dynamic_state
 // Translator answers from the bound state: attr_type from the vertex attribute formats (vs), frag_out_type from the
 // colour target formats (fs). Other fields are left as they are; either pointer may be NULL.

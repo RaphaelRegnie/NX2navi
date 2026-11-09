@@ -385,6 +385,38 @@ static int shadow_scale_of(const nvn_texdesc *d, const TexVkFormat *f, uint32_t 
     return d->width * (uint32_t)scale <= most ? scale : 1;
 }
 
+// NX2NAVI_ASTC_BC_PROBE=1: measures, without changing any format, how much of the ASTC set could be compressed if the
+// alpha rule were data-driven instead of footprint-driven. Each texture's source blocks are decoded on the CPU with
+// tex_astc.c astc_decode_block (up to 512 spread over the level) and counted by whether any block has alpha below 250.
+#define ASTC_BC_PROBES 512
+static uint64_t n_probe_calls, n_probe_alpha, n_probe_opaque, n_probe_bytes_alpha, n_probe_bytes_opaque;
+
+static void astc_probe_alpha(const tex_t *t, const TexVkFormat *f) {
+    uintptr_t mem = (uintptr_t)t->mem;
+    // only a real host pointer can be read: 0 and the GPU address window are not readable from here
+    if (!mem || nvn_gpu_only(mem) || mem < 0x10000 || mem > 0x7ffffffeffffull || !f->astc_bw || !f->astc_bh) return;
+    uint32_t bw = f->astc_bw, bh = f->astc_bh;
+    uint64_t w = t->d.width ? t->d.width : 1, h = t->d.height ? t->d.height : 1;
+    uint64_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh, n = bx * by;
+    if (!n) return;
+    uint64_t probes = n < ASTC_BC_PROBES ? n : ASTC_BC_PROBES, bytes = n * 16u;
+    uint8_t rgba[16 * 16 * 4];   // a block decodes to bw x bh texels, up to 12 x 12 (astc_decode_block writes them all)
+    int opaque = 1;
+    for (uint64_t s = 0; s < probes && opaque; s++) {
+        uint64_t i = probes == n ? s : (s * n) / probes;
+        if (!astc_decode_block((const uint8_t *)mem + i * 16u, bw, bh, f->astc_srgb != 0, rgba)) continue;
+        for (int k = 0; k < (int)(bw * bh); k++)
+            if (rgba[k * 4 + 3] < 250) { opaque = 0; break; }
+    }
+    n_probe_calls++;
+    if (opaque) n_probe_opaque++, n_probe_bytes_opaque += bytes;
+    else n_probe_alpha++, n_probe_bytes_alpha += bytes;
+    if (n_probe_calls == 1 || n_probe_calls % 512 == 0)
+        rt_log("vk: ASTC alpha probe: %llu textures, %llu opaque (%.1f MiB) and %llu with alpha (%.1f MiB) so far",
+               (unsigned long long)n_probe_calls, (unsigned long long)n_probe_opaque, n_probe_bytes_opaque / 1048576.0,
+               (unsigned long long)n_probe_alpha, n_probe_bytes_alpha / 1048576.0);
+}
+
 // defer_init: the caller records the image's first transition (init_image or alias_copy).
 static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     static volatile int32_t n_unmapped, n_unsupported, n_failed, n_unbound, n_thick;
@@ -400,6 +432,8 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
         log_limited(&n_unsupported, "texture format %#x: VkFormat %d lacks features %#x", d->format, (int)f.vk, (unsigned)f.need);
         return NULL;
     }
+    // NX2NAVI_ASTC_BC_PROBE (environment; diagnostics only): measure what a data-driven alpha rule would compress
+    if (f.astc_bw && getenv("NX2NAVI_ASTC_BC_PROBE")) astc_probe_alpha(t, &f);
     nvn_texlayout L;
     nvn_tex_layout(d, &L);
     uint32_t w = umax(d->width, 1), h = umax(d->height, 1), depth = 1, layers = 1;
@@ -952,6 +986,37 @@ static uint64_t content_hash(const void *p, uint64_t n) {
     return h ^ (h >> 31);
 }
 
+// ASTC for the GPU decoder without the CPU deswizzle: the storage goes into staging as the game laid it out, in one
+// copy, and the decoder reads each block from its block-linear place (VkAstcRegion.bl, astc_decode.comp bl_block).
+// The CPU deswizzle moved every 16 bytes through the GOB arithmetic and was most of an ASTC upload's CPU time when an
+// area loads. Fills ar (n = levels * layers, level-major as upload's regions) and returns 1 when every level and layer
+// qualifies: block-linear, starting 16-byte aligned, its layout inside the storage. NX2NAVI_ASTC_GPU_DESWIZZLE=0 keeps
+// the CPU deswizzle.
+static int astc_bl_regions(const Tex *e, uint32_t levels, uint32_t layers, int bw, int bh, VkAstcRegion *ar) {
+    static int on = -1;
+    if (on < 0) {
+        on = cfg_bool("NX2NAVI_ASTC_GPU_DESWIZZLE");
+        if (!on) rt_log("vk: ASTC blocks deswizzled on the CPU (NX2NAVI_ASTC_GPU_DESWIZZLE=0)");
+    }
+    const nvn_texdesc *d = &e->t.d;
+    if (!on || nvn_tex_is_linear(d)) return 0;
+    uint32_t k = 0;
+    for (uint32_t lv = 0; lv < levels; lv++)
+        for (uint32_t ly = 0; ly < layers; ly++) {
+            uint32_t row_bytes, rows, slices, bpb;
+            uint64_t base;
+            unsigned th, td;
+            if (nvn_deswizzle_geom(d, lv, ly, &row_bytes, &rows, &slices, &base, &th, &td, &bpb) || (base & 15) || th > 5 ||
+                td > 5)
+                return 0;
+            ar[k] = (VkAstcRegion){.src = base, .w = mip(d->width, lv), .h = mip(d->height, lv), .slices = slices,
+                                   .level = lv, .layer = ly, .bl = 1, .th = (uint8_t)th, .td = (uint8_t)td};
+            if (base + vk_astc_region_bytes(&ar[k], (uint32_t)bw, (uint32_t)bh) > e->t.L.size) return 0;
+            k++;
+        }
+    return 1;
+}
+
 // Copies the whole storage into the image (every level and layer the image has).
 static void upload(Tex *e) {
     static volatile int32_t n_bad, n_undecoded, n_split;
@@ -996,6 +1061,8 @@ static void upload(Tex *e) {
     VmaAllocation ralloc = NULL;
     uint8_t *rmap = NULL, *raw_copy = NULL;
     int checked = 0, parts = 1;
+    // The GPU decoder reads the blocks in place (astc_bl_regions); the check mode compares against tight blocks.
+    int gdsw = agpu && !acheck && !one_d && astc_bl_regions(e, levels, layers, bw, bh, ar);
     // A CPU decode or copy stages at most UPLOAD_PART bytes per staging buffer (a region larger than that alone) and
     // records one copy per buffer; every part stays in the same upload batch, submitted as before. The GPU decoder
     // takes the raw blocks of every region from one buffer.
@@ -1003,9 +1070,13 @@ static void upload(Tex *e) {
         VkDeviceSize base = rg[k0].bufferOffset, size;
         for (k1 = k0 + 1; k1 < n && (agpu || (k1 + 1 < n ? rg[k1 + 1].bufferOffset : total) - base <= UPLOAD_PART);) k1++;
         size = (k1 < n ? rg[k1].bufferOffset : total) - base;
+        if (gdsw) size = t->L.size;   // the storage as it is (one part: the GPU decoder takes every region at once)
         if (k0) parts++;
         VkCommandBuffer cb = vk_upload_begin();
-        uint8_t *stg = vk_staging(size, &sb, NULL);
+        // The CPU path copies from a range of the staging arena (vk_staging_at, its offset added to the regions below);
+        // the GPU decoder binds its source buffer whole, so it keeps a buffer of its own.
+        VkDeviceSize soff = 0;
+        uint8_t *stg = agpu ? vk_staging(size, &sb, NULL) : vk_staging_at(size, &sb, &soff);
         if (acheck) rmap = vk_staging(decoded, &rbuf, &ralloc);
         // The part's copies out of the storage, with it held mapped (mem_read_hold): the game releases a texture's
         // memory on its own thread, and a decommit in the middle of a copy faulted (tex_bl_copy). Only the copies run
@@ -1019,7 +1090,11 @@ static void upload(Tex *e) {
             log_limited(&n_gone, "texture %#llx (%llu bytes): storage released during the upload; uploaded as zeros",
                         (unsigned long long)e->pub.addr, (unsigned long long)e->t.L.size);
         }
-        for (k = k0; k < k1; k++) {
+        if (gdsw) {
+            if (held) memcpy(stg, t->mem, size);
+            else memset(stg, 0, size);
+        }
+        for (k = k0; k < k1 && !gdsw; k++) {
             uint32_t lv = rg[k].imageSubresource.mipLevel, ly = rg[k].imageSubresource.baseArrayLayer;
             uint32_t w = rg[k].imageExtent.width, h = rg[k].imageExtent.height, sl = rg[k].imageExtent.depth;
             uint32_t rb = (w + bw - 1) / bw * (uint32_t)bpb, rows = (h + bh - 1) / bh;
@@ -1039,7 +1114,7 @@ static void upload(Tex *e) {
             plat_crash_context(NULL);
             mem_read_release();   // the part's reads of the storage are done
         }
-        for (k = k0; k < k1; k++) {   // the decodes, from the copies
+        for (k = k0; k < k1 && !gdsw; k++) {   // the decodes, from the copies (gdsw: ar already names the blocks)
             uint32_t lv = rg[k].imageSubresource.mipLevel, ly = rg[k].imageSubresource.baseArrayLayer;
             uint32_t w = rg[k].imageExtent.width, h = rg[k].imageExtent.height, sl = rg[k].imageExtent.depth;
             uint32_t rb = (w + bw - 1) / bw * (uint32_t)bpb, rows = (h + bh - 1) / bh;
@@ -1076,6 +1151,7 @@ static void upload(Tex *e) {
                 log_limited(&n_undecoded, "ASTC texture %#llx (fmt %#x %ux%u) not decoded on the GPU: left as it was",
                             (unsigned long long)e->pub.addr, d->format, d->width, d->height);
         } else {
+            for (k = k0; k < k1; k++) rg[k].bufferOffset += soff;
             vkCmdCopyBufferToImage(cb, sb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, k1 - k0, rg + k0);
         }
         barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);

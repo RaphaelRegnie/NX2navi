@@ -78,7 +78,9 @@ void vk_exec_frame_log(const tex_t *p, uint64_t frame) {
     }
     rt_log("frame %llu: submits %llu passes %llu draws %llu/%llu clears %llu copies %llu dispatches %llu; present %p "
            "%ux%u/%#x written %d; feedback draws %llu barriers %llu restarts %llu layouts %llu read-before-write %llu; "
-           "uniform updates %llu (%llu ended a pass); event waits %llu (%llu before their signal: %llu "
+           "uniform updates %llu (%llu ended a pass); binds %llu in %.2f ms (textures %.2f, buffers %.2f, sig %.2f, push %.2f ms; "
+           "descriptors reused %llu, resolved %llu); dynamic state calls %llu (%llu unchanged, left out); "
+           "event waits %llu (%llu before their signal: %llu "
            "signalled later, %.1f submits later on average); targets%s",
            (unsigned long long)frame, (unsigned long long)f->submits,
            (unsigned long long)f->passes, (unsigned long long)f->draws, (unsigned long long)f->draws_seen,
@@ -86,7 +88,11 @@ void vk_exec_frame_log(const tex_t *p, uint64_t frame) {
            p ? (const void *)p->mem : NULL, p ? p->d.width : 0, p ? p->d.height : 0, p ? (uint32_t)p->d.format : 0,
            hit, (unsigned long long)f->fb_draws, (unsigned long long)f->fb_barriers, (unsigned long long)f->fb_restarts,
            (unsigned long long)f->fb_layouts, (unsigned long long)f->fb_war_barriers, (unsigned long long)f->ub_updates,
-           (unsigned long long)f->ub_pass_breaks, (unsigned long long)ew, (unsigned long long)eu, (unsigned long long)el,
+           (unsigned long long)f->ub_pass_breaks, (unsigned long long)f->bind_calls,
+           (double)(f->bind_ns) / 1e6, (double)(f->bind_tex_ns) / 1e6, (double)(f->bind_buf_ns) / 1e6,
+           (double)(f->bind_sig_ns) / 1e6, (double)(f->bind_push_ns) / 1e6, (unsigned long long)f->bind_reused,
+           (unsigned long long)f->bind_resolved, (unsigned long long)f->dyn_calls, (unsigned long long)f->dyn_left,
+           (unsigned long long)ew, (unsigned long long)eu, (unsigned long long)el,
            el ? (double)ed / (double)el : 0.0, list);
     memset(f, 0, sizeof *f);
     nfw = 0;
@@ -909,6 +915,7 @@ static int evo_on = -1, evo_in;     // knob; inside a continuation
 static uintptr_t evo_queue;         // queue of the stream being walked (0: it cannot stop at a wait)
 static int evo_pending;             // continuations held
 static uint64_t evo_held, evo_resumed, evo_forced, evo_switches;   // since the last perf line
+int vk_exec_held(void) { return evo_pending; }
 #define ST_LO offsetof(VkExec, rt)
 #define ST_HI offsetof(VkExec, views)
 
@@ -985,8 +992,6 @@ static void st_swap(VkExec *ex, uint8_t *buf) {
 static int cont_ready(const Cont *c) {
     return !c->at || vk_exec_event_met(nvn_op_payload(c->at)) || vk_exec_submit_seq - c->since > CONT_MAX;
 }
-
-int vk_exec_held(void) { return evo_pending; }
 
 int vk_exec_held_ready(void) {
     for (int s = 0; evo_pending && s < EVO_QUEUES; s++)
@@ -1168,6 +1173,38 @@ static const op_hdr *walk(VkExec *ex, const op_hdr *h, int depth) {
 }
 
 int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t fence) {
+    // The replay records on the thread the game submitted from, and the kernel schedules that like any other guest
+    // thread: a preemption in the middle of a part leaves the submission late for the frame it belongs to (Kokiri
+    // Forest: 274 of 2,737 frames had a late submit). Recording keeps the highest priority so the scheduler prefers it
+    // over the guest's other cores; NX2NAVI_RECORDER_PRIO=0 leaves the guest's priorities alone.
+    static int prio_done;
+    static uint32_t rec_thread;   // the thread that got the priority and the core
+    if (!prio_done) {
+        prio_done = 1;
+        const char *e = cfg_get("NX2NAVI_RECORDER_PRIO");
+        if (!(e && !strcmp(e, "0"))) {
+            plat_thread_priority(PLAT_PRIO_HIGHEST);
+            rt_log("vk: the recording thread keeps the highest scheduling priority (NX2NAVI_RECORDER_PRIO=0 turns it off)");
+        }
+        // The recorder also gets a core of its own (plat_cpu_reserve): every other thread of the process, the guest's
+        // cores, the audio, the shader and pipeline workers, is kept off it, so nothing of this process preempts the
+        // recording. That core is then lost to the rest, so NX2NAVI_RECORDER_CORE=auto (the default) reserves it only
+        // with 12 or more logical processors; 1 always, 0 never.
+        const char *rc = cfg_value("NX2NAVI_RECORDER_CORE");
+        unsigned ncpu = plat_cpu_usable();
+        if (!strcmp(rc, "1") || (!strcmp(rc, "auto") && ncpu >= 12)) {
+            int n = plat_cpu_reserve();
+            if (n) rt_log("vk: the recording thread has a core of its own (%d logical processor%s of %u; "
+                          "NX2NAVI_RECORDER_CORE=0 turns it off)", n, n > 1 ? "s" : "", ncpu);
+            else rt_log("vk: could not reserve a core for the recording thread (NX2NAVI_RECORDER_CORE)");
+        }
+        rec_thread = plat_thread_id();
+    }
+    if (rec_thread && plat_thread_id() != rec_thread) {   // the priority and the core stay with the first thread
+        static int said;
+        if (!said++) rt_log("vk: a submission is recorded on another thread than the first one; it runs without the "
+                            "recorder's priority and core");
+    }
     VkExec *ex = &X;
     if (!x_ready) state_reset(ex), vk_dump_init(), x_ready = 1;
     const tex_t *keep[9];   // the render targets carry over to this submission (set_rt compares them by pointer)

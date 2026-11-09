@@ -97,6 +97,7 @@ enum { TAB_BYTES = 28 * 4, TAB_WUNQ = TAB_BYTES, TAB_CUNQ = TAB_BYTES + 144, TAB
 
 typedef struct {
     uint32_t in_base, out_base, width, height, bw, bh, bx, bslice, srgb;
+    uint32_t bl, th, td, nvn2;   // block-linear source (VkAstcRegion.bl) and its GOB order (Switch 2 when nvn2)
 } Push;
 
 static PlatMutex g_lock = PLAT_MUTEX_INIT;
@@ -267,7 +268,7 @@ static void reset_for(VkCtx *c) {
 }
 
 static int create_pipeline(VkCtx *c) {
-    G.push = (PFN_vkCmdPushDescriptorSetKHR)vkGetDeviceProcAddr(c->device, "vkCmdPushDescriptorSetKHR");
+    G.push = (PFN_vkCmdPushDescriptorSetKHR)vk_dpa(c->device, "vkCmdPushDescriptorSetKHR");
     VkDescriptorSetLayoutBinding b[3];
     for (int i = 0; i < 3; i++)
         b[i] = (VkDescriptorSetLayoutBinding){.binding = (uint32_t)i, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -468,10 +469,19 @@ static VkBuffer scratch_get(VkCtx *c, VkCommandBuffer cb, VkDeviceSize need, int
 }
 
 static VkDeviceSize region_out(const VkAstcRegion *r) { return (VkDeviceSize)r->w * r->h * r->slices * 4; }
-static VkDeviceSize region_in(const VkAstcRegion *r, uint32_t bw, uint32_t bh) {
+static VkDeviceSize tight_in(const VkAstcRegion *r, uint32_t bw, uint32_t bh) {
     return (VkDeviceSize)((r->w + bw - 1) / bw) * ((r->h + bh - 1) / bh) * r->slices * 16;
 }
-static VkDeviceSize region_bc(const VkAstcRegion *r) { return region_in(r, 4, 4); }   // BC3: 16 bytes per 4x4 block
+// The source bytes a region reads: its tight blocks, or for a block-linear one the whole of its level as laid out in
+// GOB blocks (columns of 64 bytes, rows of 8 * 2^th block rows, layers of 2^td slices), padding included.
+static VkDeviceSize region_in(const VkAstcRegion *r, uint32_t bw, uint32_t bh) {
+    if (!r->bl) return tight_in(r, bw, bh);
+    uint64_t row_bytes = (uint64_t)(r->w + bw - 1) / bw * 16, rows = (r->h + bh - 1) / bh;
+    uint64_t gh = 8ull << r->th, gd = 1ull << r->td;
+    return (VkDeviceSize)((row_bytes + 63) / 64 * ((rows + gh - 1) / gh) * ((r->slices + gd - 1) / gd) * (512ull << r->th << r->td));
+}
+static VkDeviceSize region_bc(const VkAstcRegion *r) { return tight_in(r, 4, 4); }   // BC3: 16 bytes per 4x4 block
+VkDeviceSize vk_astc_region_bytes(const VkAstcRegion *r, uint32_t bw, uint32_t bh) { return region_in(r, bw, bh); }
 
 typedef struct { uint32_t in_base, out_base, width, height, bx, bslice; } BcPush;   // bc3_encode.comp Params
 
@@ -589,7 +599,8 @@ int vk_astc_record(VkCommandBuffer cb, VkBuffer src, VkDeviceSize src_size, cons
             const VkAstcRegion *r = &rg[i];
             uint32_t bx = (r->w + bw - 1) / bw, by = (r->h + bh - 1) / bh;
             Push pc = {.in_base = (uint32_t)(ib / 16), .out_base = (uint32_t)(ob / 4), .width = r->w, .height = r->h,
-                       .bw = bw, .bh = bh, .bx = bx, .bslice = bx * by, .srgb = (uint32_t)(srgb != 0)};
+                       .bw = bw, .bh = bh, .bx = bx, .bslice = bx * by, .srgb = (uint32_t)(srgb != 0),
+                       .bl = r->bl, .th = r->th, .td = r->td, .nvn2 = rt_nvn_api_version[0] >= 200};
             vkCmdPushConstants(cb, G.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
             uint32_t bpw = bw * bh <= 64 ? 64 / (bw * bh) : 1;   // blocks per workgroup, as astc_decode.comp main
             vkCmdDispatch(cb, (bx + bpw - 1) / bpw, by, r->slices);
