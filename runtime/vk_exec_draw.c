@@ -43,7 +43,21 @@
 #define NVN_STAGE_CS 5
 #define NVN_STAGE_TASK 6   // NVN2
 #define NVN_STAGE_MESH 7
-#define ONESHOT_WAIT_MS 30000u   // prepare_draw: how long a one-shot draw waits for its pipeline before it is skipped
+// prepare_draw: how long a one-shot draw waits for its pipeline before it is skipped (NX2NAVI_ONESHOT_WAIT_MS, default
+// 30000). Such a draw renders into a target the previous frame did not (a volume, a LUT, a target made new at an area
+// change); skipped, the target can stay empty for the session, so the default waits. A lower value trades that risk for
+// a frame that never stalls longer than the value on a first-time pipeline.
+static uint32_t oneshot_wait_ms(void) {
+    static int64_t ms = -1;
+    if (ms < 0) {
+        ms = strtoll(cfg_value("NX2NAVI_ONESHOT_WAIT_MS"), NULL, 10);
+        if (ms < 0) ms = 0;
+        if (ms != 30000) rt_log("vk_exec: a one-shot draw waits at most %lld ms for its pipeline, then is skipped "
+                                "(NX2NAVI_ONESHOT_WAIT_MS)", (long long)ms);
+    }
+    return (uint32_t)ms;
+}
+#define ONESHOT_WAIT_MS oneshot_wait_ms()
 
 enum { W_PROGRAM, W_SHADER, W_PIPELINE, W_NO_VS, W_INDEX, W_UB, W_BIND, W_SSBO_ALIGN, W_SSBO_SLOT, W_RESTART, W_INDIRECT, W_MESH, W_COUNT };
 

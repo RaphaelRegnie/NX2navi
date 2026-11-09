@@ -164,9 +164,401 @@ static void cache_path_init(void) {
     snprintf(P.cache_path, sizeof P.cache_path, "%s/pipeline-cache.bin", exe);
 }
 
+// ---- pipeline binaries (VK_KHR_pipeline_binary; NX2NAVI_PIPE_BINARIES, default 0 while it is being tested; 1 on)
+// pipeline-cache.bin does not carry compiled pipelines from one executable to another on NVIDIA 621.01: two
+// byte-identical exes under different names, every compute module hash-identical, and the second compiled 317 of the
+// 323 compute pipelines the first had read from the file (2026-11-09). A pipeline binary made from one exe's pipeline
+// creates the same pipeline in another in 0.5 ms instead of 26 ms. So where the driver has the extension, every
+// pipeline, stage library and compute pipeline is created through pipe_create: its driver pipeline key
+// (vkGetPipelineKeyKHR, computed from the create info) is looked up in pipeline-binaries.bin next to nx2navi.exe and
+// the pipeline is made from the stored binaries; a key not there is compiled with its data captured, and its binaries
+// are appended to the file (autosave, every 2 s). pipeline-cache.bin is then neither read nor written: the driver's
+// own disk cache serves an unchanged exe, and the binaries serve a renamed or updated one.
+// Each binary is stored once under its own binary key: on NVIDIA 621.01 nearly every graphics pipeline has, besides
+// its own binaries of 20-200 KB, one 2 MiB binary that is byte-identical across pipelines (2,506 copies in a 4.7 GB
+// first-version file).
+// File: header {"NX2NPBIN", version, the driver's global key size and bytes} (another global key: another driver or
+// GPU, so the file starts empty); then records {u32 bytes after this field, u32 type, u32 key size, 32 key bytes,
+// payload}: type PB_BLOB, a binary under its binary key, payload its data; type PB_PIPE, a pipeline under its pipeline
+// key, payload {u32 count, count x {u32 key size, 32 key bytes}} naming its binaries. Only an index of the records
+// stays in memory; a pipeline's records are read from the file when it is created. NX2NAVI_PIPE_BINARIES_MAX_MB
+// (default 1024, 0 no limit): a larger file starts empty.
+#define PB_VERSION 2
+// 64-bit file offsets: long is 32 bits on Windows, and a file over 2 GB read as cut short.
+#ifdef _WIN32
+#define pb_seek _fseeki64
+#define pb_tell _ftelli64
+#else
+#define pb_seek fseeko
+#define pb_tell ftello
+#endif
+#define PB_MAX_BIN 8
+#define PB_KEY VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR
+enum { PB_BLOB = 1, PB_PIPE = 2 };
+#define PB_HEAD (4 + 4 + PB_KEY)       // a record's bytes after its size field and before its payload
+typedef struct { char magic[8]; uint32_t version, gkey_size; uint8_t gkey[PB_KEY]; } PbHeader;
+typedef struct { uint64_t h, off; uint32_t size; } PbSlot;   // off: file offset of the record's size field
+static struct {
+    int on;
+    PFN_vkCreatePipelineBinariesKHR create;
+    PFN_vkDestroyPipelineBinaryKHR destroy;
+    PFN_vkGetPipelineKeyKHR key;
+    PFN_vkGetPipelineBinaryDataKHR data;
+    PFN_vkReleaseCapturedPipelineDataKHR release;
+    char path[PLAT_PATH_MAX * 2 + 32];
+    PlatMutex lock;                    // the index, the pending records and rf
+    FILE *rf;                          // reads records
+    PbSlot *slot;
+    uint32_t cap, n, pipes, blobs;
+    uint8_t *pend;                     // records not written yet; they follow the file's end in this order
+    size_t pend_n, pend_cap;
+    uint64_t file_size;                // bytes on disk
+    int no_capture[3];                 // kind (pipe_create) whose create refused the capture flag
+    uint64_t from_file, load_fail, compiled, captured, capture_fail, blob_new, blob_shared;
+    double from_ms, compile_ms;
+} PB = {.lock = PLAT_MUTEX_INIT};
+static __thread int pb_last;           // 1: the last pipe_create on this thread made its pipeline from binaries
+
+static uint64_t pb_hash(uint32_t type, const uint8_t *key, uint32_t n) {
+    uint64_t h = fnv(fnv(FNV0, &type, 4), key, n);
+    return h ? h : 1;
+}
+
+static PbSlot *pb_find(uint64_t h) {   // caller holds PB.lock
+    if (!PB.cap) return NULL;
+    for (uint32_t j = (uint32_t)h & (PB.cap - 1);; j = (j + 1) & (PB.cap - 1)) {
+        if (!PB.slot[j].h) return NULL;
+        if (PB.slot[j].h == h) return &PB.slot[j];
+    }
+}
+
+// Enters a record (a hash match is taken as the key: 64 bits). 0 when one with the key is there already or out of
+// memory. Caller holds PB.lock.
+static int pb_insert(uint64_t h, uint64_t off, uint32_t size) {
+    if ((PB.n + 1) * 2 > PB.cap) {
+        uint32_t cap = PB.cap ? PB.cap * 2 : 4096;
+        PbSlot *t = calloc(cap, sizeof *t);
+        if (!t) return 0;
+        for (uint32_t i = 0; i < PB.cap; i++) {
+            if (!PB.slot[i].h) continue;
+            uint32_t j = (uint32_t)PB.slot[i].h & (cap - 1);
+            while (t[j].h) j = (j + 1) & (cap - 1);
+            t[j] = PB.slot[i];
+        }
+        free(PB.slot);
+        PB.slot = t, PB.cap = cap;
+    }
+    if (pb_find(h)) return 0;
+    uint32_t j = (uint32_t)h & (PB.cap - 1);
+    while (PB.slot[j].h) j = (j + 1) & (PB.cap - 1);
+    PB.slot[j] = (PbSlot){h, off, size};
+    PB.n++;
+    return 1;
+}
+
+static void pb_rewrite(const PbHeader *hd) {   // an empty file with this driver's header
+    FILE *f = fopen(PB.path, "wb");
+    if (f) fwrite(hd, sizeof *hd, 1, f), fclose(f);
+    PB.file_size = f ? sizeof *hd : 0;
+}
+
+// Opens pipeline-binaries.bin and indexes its records (cache_load, before P.cache).
+static void pb_init(VkCtx *c) {
+    if (!c->has_pipeline_binary || !P.cache_path[0]) return;
+#define PBPROC(field, name) (PB.field = (void *)vk_dpa(c->device, name))
+    if (!PBPROC(create, "vkCreatePipelineBinariesKHR") || !PBPROC(destroy, "vkDestroyPipelineBinaryKHR") ||
+        !PBPROC(key, "vkGetPipelineKeyKHR") || !PBPROC(data, "vkGetPipelineBinaryDataKHR") ||
+        !PBPROC(release, "vkReleaseCapturedPipelineDataKHR")) {
+        rt_log("vk_pipeline: pipeline binaries: the driver lacks a VK_KHR_pipeline_binary function; using pipeline-cache.bin");
+        return;
+    }
+#undef PBPROC
+    PbHeader want = {{'N', 'X', '2', 'N', 'P', 'B', 'I', 'N'}, PB_VERSION, 0, {0}};
+    VkPipelineBinaryKeyKHR gk = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
+    if (PB.key(c->device, NULL, &gk) != VK_SUCCESS || !gk.keySize || gk.keySize > PB_KEY) {
+        rt_log("vk_pipeline: pipeline binaries: no global key from the driver; using pipeline-cache.bin");
+        return;
+    }
+    want.gkey_size = gk.keySize;
+    memcpy(want.gkey, gk.key, gk.keySize);
+    snprintf(PB.path, sizeof PB.path, "%s", P.cache_path);
+    char *cut = plat_last_sep(PB.path);
+    snprintf(cut ? cut + 1 : PB.path, sizeof PB.path - (size_t)(cut ? cut + 1 - PB.path : 0), "pipeline-binaries.bin");
+    uint64_t cap = (uint64_t)strtoull(cfg_value("NX2NAVI_PIPE_BINARIES_MAX_MB"), NULL, 10) << 20;
+    FILE *f = fopen(PB.path, "rb");
+    PbHeader hd;
+    const char *why = NULL;
+    uint64_t good = 0, len = 0;
+    if (f) {
+        pb_seek(f, 0, SEEK_END);
+        len = (uint64_t)pb_tell(f);
+        pb_seek(f, 0, SEEK_SET);
+        if (fread(&hd, sizeof hd, 1, f) != 1 || memcmp(&hd, &want, sizeof hd)) why = "written by another driver, GPU or version";
+        else if (cap && len > cap) why = "over NX2NAVI_PIPE_BINARIES_MAX_MB";
+        else {
+            good = sizeof hd;
+            for (;;) {   // index: per record its type, key and offset
+                uint32_t head[3];
+                uint8_t key[PB_KEY];
+                if (fread(head, sizeof head, 1, f) != 1 || head[2] > PB_KEY || head[0] < PB_HEAD ||
+                    (head[1] != PB_BLOB && head[1] != PB_PIPE) || fread(key, PB_KEY, 1, f) != 1 || good + 4 + head[0] > len)
+                    break;
+                if (pb_insert(pb_hash(head[1], key, head[2]), good, head[0])) {
+                    if (head[1] == PB_PIPE) PB.pipes++;
+                    else PB.blobs++;
+                }
+                good += 4 + (uint64_t)head[0];
+                if (pb_seek(f, (int64_t)good, SEEK_SET)) break;
+            }
+            if (good != len) why = "cut short (a record half written)";
+        }
+        fclose(f);
+    }
+    if (why || !f) {   // start empty: the index is dropped and the file rewritten
+        if (f) rt_log("vk_pipeline: pipeline binaries: %s %s (%.0f MB); starting empty", PB.path, why, len / 1048576.0);
+        free(PB.slot), PB.slot = NULL, PB.cap = PB.n = PB.pipes = PB.blobs = 0;
+        pb_rewrite(&want);
+    } else {
+        PB.file_size = len;
+    }
+    PB.rf = fopen(PB.path, "rb");
+    PB.on = PB.rf != NULL && PB.file_size >= sizeof want;
+    rt_log("vk_pipeline: pipeline binaries %s: %s, %u pipelines, %u binaries, %.1f MB (NX2NAVI_PIPE_BINARIES=0 goes back "
+           "to pipeline-cache.bin)", PB.on ? "on" : "off (cannot open the file)", PB.path, PB.pipes, PB.blobs,
+           PB.file_size / 1048576.0);
+}
+
+// The payload of the record of (type, key), malloc'd (*size bytes), or NULL. Caller holds PB.lock.
+static uint8_t *pb_read(uint32_t type, const uint8_t *key, uint32_t ks, uint32_t *size) {
+    PbSlot *s = pb_find(pb_hash(type, key, ks));
+    if (!s || s->size < PB_HEAD) return NULL;
+    uint32_t n = s->size - PB_HEAD;
+    uint8_t *head = malloc(PB_HEAD + (size_t)n), *out = NULL;
+    if (!head) return NULL;
+    int ok;
+    if (s->off >= PB.file_size) {   // still pending, at its place in pend
+        size_t at = (size_t)(s->off - PB.file_size) + 4;
+        ok = at + s->size <= PB.pend_n;
+        if (ok) memcpy(head, PB.pend + at, s->size);
+    } else {
+        ok = !pb_seek(PB.rf, (int64_t)(s->off + 4), SEEK_SET) && fread(head, s->size, 1, PB.rf) == 1;
+    }
+    uint32_t t, k;
+    if (ok) memcpy(&t, head, 4), memcpy(&k, head + 4, 4);
+    if (ok && t == type && k == ks && !memcmp(head + 8, key, ks)) {   // the key itself, not only its hash
+        memmove(head, head + PB_HEAD, n);
+        out = head, *size = n;
+    } else {
+        free(head);
+    }
+    return out;
+}
+
+// The binaries stored for pipeline key k, created in bins (*n of them). 0 when none are stored or they fail.
+static int pb_load(const VkPipelineBinaryKeyKHR *k, VkPipelineBinaryKHR bins[PB_MAX_BIN], uint32_t *n) {
+    VkPipelineBinaryKeyKHR keys[PB_MAX_BIN];
+    VkPipelineBinaryDataKHR data[PB_MAX_BIN];
+    uint8_t *blob[PB_MAX_BIN] = {0};
+    uint32_t nb = 0, size = 0;
+    plat_mutex_lock(&PB.lock);
+    uint8_t *pipe = pb_read(PB_PIPE, k->key, k->keySize, &size);
+    int ok = pipe && size >= 4;
+    if (ok) memcpy(&nb, pipe, 4);
+    if (!nb || nb > PB_MAX_BIN || size < 4 + nb * (4 + PB_KEY)) ok = 0;
+    for (uint32_t i = 0; ok && i < nb; i++) {
+        const uint8_t *e = pipe + 4 + i * (4 + PB_KEY);
+        uint32_t ks, ds = 0;
+        memcpy(&ks, e, 4);
+        keys[i] = (VkPipelineBinaryKeyKHR){.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR, .keySize = ks};
+        memcpy(keys[i].key, e + 4, PB_KEY);
+        if (ks > PB_KEY || !(blob[i] = pb_read(PB_BLOB, keys[i].key, ks, &ds))) ok = 0;
+        else data[i] = (VkPipelineBinaryDataKHR){.dataSize = ds, .pData = blob[i]};
+    }
+    plat_mutex_unlock(&PB.lock);
+    if (ok) {
+        VkPipelineBinaryKeysAndDataKHR kd = {.binaryCount = nb, .pPipelineBinaryKeys = keys, .pPipelineBinaryData = data};
+        VkPipelineBinaryCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_CREATE_INFO_KHR, .pKeysAndDataInfo = &kd};
+        VkPipelineBinaryHandlesInfoKHR hi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_HANDLES_INFO_KHR,
+                                             .pipelineBinaryCount = nb, .pPipelineBinaries = bins};
+        ok = PB.create(P.device, &ci, NULL, &hi) == VK_SUCCESS;
+        *n = nb;
+    }
+    for (uint32_t i = 0; i < PB_MAX_BIN; i++) free(blob[i]);
+    free(pipe);
+    return ok;
+}
+
+// Appends one record to pend and the index. Caller holds PB.lock.
+static int pb_put(uint32_t type, const uint8_t *key, uint32_t ks, const void *a, size_t an, const void *b, size_t bn) {
+    size_t size = PB_HEAD + an + bn;
+    if (size >= (1u << 31)) return 0;
+    if (PB.pend_n + 4 + size > PB.pend_cap) {
+        size_t cap = PB.pend_cap ? PB.pend_cap * 2 : (size_t)4 << 20;
+        while (cap < PB.pend_n + 4 + size) cap *= 2;
+        uint8_t *t = realloc(PB.pend, cap);
+        if (!t) return 0;
+        PB.pend = t, PB.pend_cap = cap;
+    }
+    if (!pb_insert(pb_hash(type, key, ks), PB.file_size + PB.pend_n, (uint32_t)size)) return 0;
+    uint8_t *o = PB.pend + PB.pend_n;
+    uint32_t s32 = (uint32_t)size;
+    memcpy(o, &s32, 4), memcpy(o + 4, &type, 4), memcpy(o + 8, &ks, 4);
+    memset(o + 12, 0, PB_KEY), memcpy(o + 12, key, ks);
+    if (an) memcpy(o + 4 + PB_HEAD, a, an);
+    if (bn) memcpy(o + 4 + PB_HEAD + an, b, bn);
+    PB.pend_n += 4 + size;
+    if (type == PB_PIPE) PB.pipes++;
+    else PB.blobs++;
+    return 1;
+}
+
+static void pb_flush(void);
+
+// Stores the binaries of pipeline p (created with its data captured) under pipeline key k, then frees the data. A
+// binary whose key is stored already is not stored again.
+static void pb_capture(VkPipeline p, const VkPipelineBinaryKeyKHR *k) {
+    VkPipelineBinaryCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_CREATE_INFO_KHR, .pipeline = p};
+    VkPipelineBinaryKHR bins[PB_MAX_BIN];
+    VkPipelineBinaryHandlesInfoKHR hi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_HANDLES_INFO_KHR};
+    uint32_t nb = 0;
+    int ok = PB.create(P.device, &ci, NULL, &hi) == VK_SUCCESS && hi.pipelineBinaryCount &&
+             hi.pipelineBinaryCount <= PB_MAX_BIN;
+    if (ok) {
+        hi.pPipelineBinaries = bins;
+        ok = PB.create(P.device, &ci, NULL, &hi) == VK_SUCCESS;
+        nb = ok ? hi.pipelineBinaryCount : 0;
+    }
+    VkPipelineBinaryKeyKHR keys[PB_MAX_BIN];
+    uint8_t list[4 + PB_MAX_BIN * (4 + PB_KEY)] = {0};
+    memcpy(list, &nb, 4);
+    for (uint32_t i = 0; ok && i < nb; i++) {   // each binary's key, and its data unless stored already
+        VkPipelineBinaryDataInfoKHR di = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_DATA_INFO_KHR, .pipelineBinary = bins[i]};
+        keys[i] = (VkPipelineBinaryKeyKHR){.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
+        size_t ds = 0;
+        ok = PB.data(P.device, &di, &keys[i], &ds, NULL) == VK_SUCCESS && keys[i].keySize && keys[i].keySize <= PB_KEY;
+        if (!ok) break;
+        memcpy(list + 4 + i * (4 + PB_KEY), &keys[i].keySize, 4), memcpy(list + 8 + i * (4 + PB_KEY), keys[i].key, keys[i].keySize);
+        plat_mutex_lock(&PB.lock);
+        int have = pb_find(pb_hash(PB_BLOB, keys[i].key, keys[i].keySize)) != NULL;
+        plat_mutex_unlock(&PB.lock);
+        if (have) {
+            PB.blob_shared++;
+            continue;
+        }
+        uint8_t *d = malloc(ds ? ds : 1);
+        ok = d && PB.data(P.device, &di, &keys[i], &ds, d) == VK_SUCCESS;
+        if (ok) {
+            plat_mutex_lock(&PB.lock);
+            if (pb_put(PB_BLOB, keys[i].key, keys[i].keySize, d, ds, NULL, 0)) PB.blob_new++;
+            plat_mutex_unlock(&PB.lock);   // a 0 from pb_put: another thread stored the same binary meanwhile
+        }
+        free(d);
+    }
+    for (uint32_t i = 0; i < nb; i++) PB.destroy(P.device, bins[i], NULL);
+    VkReleaseCapturedPipelineDataInfoKHR ri = {.sType = VK_STRUCTURE_TYPE_RELEASE_CAPTURED_PIPELINE_DATA_INFO_KHR, .pipeline = p};
+    PB.release(P.device, &ri, NULL);
+    plat_mutex_lock(&PB.lock);
+    if (ok && pb_put(PB_PIPE, k->key, k->keySize, list, 4 + nb * (4 + PB_KEY), NULL, 0)) PB.captured++;
+    else if (!ok) PB.capture_fail++;
+    int full = PB.pend_n >= ((size_t)64 << 20);
+    plat_mutex_unlock(&PB.lock);
+    if (full) pb_flush();   // a cold boot captures thousands before the autosave thread runs: keep the buffer small
+}
+
+// Appends the pending records (the autosave thread every 2 s, and the save at exit).
+static void pb_flush(void) {
+    if (!PB.on) return;
+    plat_mutex_lock(&PB.lock);
+    if (PB.pend_n) {
+        FILE *f = fopen(PB.path, "ab");
+        int ok = f && fwrite(PB.pend, PB.pend_n, 1, f) == 1;
+        if (f) ok = !fclose(f) && ok;
+        if (ok) PB.file_size += PB.pend_n;
+        else rt_log("vk_pipeline: pipeline binaries: cannot append to %s; this run's binaries stay in memory", PB.path);
+        if (ok) PB.pend_n = 0;
+    }
+    plat_mutex_unlock(&PB.lock);
+}
+
+static void pb_log(const char *when) {
+    if (!PB.on) return;
+    plat_mutex_lock(&PB.lock);
+    rt_log("vk_pipeline: pipeline binaries %s: %llu made from pipeline-binaries.bin (avg %.2f ms), %llu compiled (avg %.1f "
+           "ms), %llu captured, %llu could not be stored, %llu stored ones failed; binaries %llu new, %llu shared; %u pipelines and "
+           "%u binaries in the file, %.1f MB", when,
+           (unsigned long long)PB.from_file, PB.from_file ? PB.from_ms / PB.from_file : 0.0,
+           (unsigned long long)PB.compiled, PB.compiled ? PB.compile_ms / PB.compiled : 0.0,
+           (unsigned long long)PB.captured, (unsigned long long)PB.capture_fail, (unsigned long long)PB.load_fail,
+           (unsigned long long)PB.blob_new, (unsigned long long)PB.blob_shared, PB.pipes, PB.blobs,
+           (PB.file_size + PB.pend_n) / 1048576.0);
+    plat_mutex_unlock(&PB.lock);
+}
+
+// Creates one pipeline: kind 0 a graphics pipeline, 1 a graphics pipeline library, 2 a compute pipeline; ci its
+// Vk*PipelineCreateInfo. With binaries on: from the stored binaries of its pipeline key when there are any, else
+// compiled with P.cache and its binaries captured. The create info is restored before returning.
+typedef struct { VkStructureType sType; const void *pNext; VkPipelineCreateFlags flags; } PipeCiHead;
+static VkResult pipe_create(int kind, void *ci, VkPipeline *pipe) {
+    PipeCiHead *hd = ci;
+    VkResult r;
+    pb_last = 0;
+#define PIPE_CREATE(cache) (kind == 2 ? vkCreateComputePipelines(P.device, cache, 1, ci, NULL, pipe) \
+                                      : vkCreateGraphicsPipelines(P.device, cache, 1, ci, NULL, pipe))
+    if (!PB.on) return PIPE_CREATE(P.cache);
+    VkPipelineCreateInfoKHR kci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_INFO_KHR, .pNext = ci};
+    VkPipelineBinaryKeyKHR key = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
+    int keyed = PB.key(P.device, &kci, &key) == VK_SUCCESS && key.keySize && key.keySize <= PB_KEY;
+    const void *next = hd->pNext;
+    if (keyed) {
+        VkPipelineBinaryKHR bins[PB_MAX_BIN];
+        uint32_t nb = 0;
+        uint64_t t0 = plat_now_ns();
+        if (pb_load(&key, bins, &nb)) {
+            VkPipelineBinaryInfoKHR bi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_INFO_KHR, .pNext = next,
+                                          .binaryCount = nb, .pPipelineBinaries = bins};
+            hd->pNext = &bi;
+            r = PIPE_CREATE(VK_NULL_HANDLE);   // a pipeline made from binaries takes no pipeline cache
+            hd->pNext = next;
+            for (uint32_t i = 0; i < nb; i++) PB.destroy(P.device, bins[i], NULL);
+            plat_mutex_lock(&PB.lock);
+            if (r == VK_SUCCESS) PB.from_file++, PB.from_ms += (plat_now_ns() - t0) / 1e6;
+            else PB.load_fail++;
+            plat_mutex_unlock(&PB.lock);
+            if (r == VK_SUCCESS) return pb_last = 1, r;
+        }
+    }
+    int capture = keyed && !PB.no_capture[kind];
+    VkPipelineCreateFlags2CreateInfoKHR f2 = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO_KHR, .pNext = next,
+                                              .flags = (VkPipelineCreateFlags2KHR)hd->flags | VK_PIPELINE_CREATE_2_CAPTURE_DATA_BIT_KHR};
+    uint64_t t0 = plat_now_ns();
+    if (capture) hd->pNext = &f2;
+    r = PIPE_CREATE(P.cache);
+    hd->pNext = next;
+    if (capture && r < 0) {   // the driver refuses the capture for this kind: create without it from now on
+        PB.no_capture[kind] = 1;
+        rt_log("vk_pipeline: pipeline binaries: a %s with its data captured failed (%d); such pipelines are not stored",
+               kind == 2 ? "compute pipeline" : kind ? "pipeline library" : "graphics pipeline", (int)r);
+        capture = 0;
+        r = PIPE_CREATE(P.cache);
+    }
+#undef PIPE_CREATE
+    if (r == VK_SUCCESS && *pipe) {
+        plat_mutex_lock(&PB.lock);
+        PB.compiled++, PB.compile_ms += (plat_now_ns() - t0) / 1e6;
+        plat_mutex_unlock(&PB.lock);
+        if (capture) pb_capture(*pipe, &key);
+    }
+    return r;
+}
+
 // Cache data whose header names another device or driver is dropped before Vulkan sees it.
 static void cache_load(VkCtx *c) {
     cache_path_init();
+    pb_init(c);
+    if (PB.on) {   // the binaries carry compiled pipelines across runs; P.cache stays VK_NULL_HANDLE
+        rt_log("vk_pipeline: %s is not read or written while pipeline binaries are on", P.cache_path);
+        return;
+    }
     void *data = NULL;
     size_t size = 0;
     FILE *f = P.cache_path[0] ? fopen(P.cache_path, "rb") : NULL;
@@ -1442,7 +1834,7 @@ static const void *fb_chain(VkPipelineCreationFeedbackCreateInfo *ci, VkPipeline
 }
 
 static void fb_note(int kind, const VkPipelineCreationFeedback *fb) {
-    if (!P.feedback || !(fb->flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)) return;
+    if (!P.feedback || !P.cache || !(fb->flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)) return;
     int hit = (fb->flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0;
     double ms = (double)fb->duration / 1e6;
     plat_mutex_lock(&FB.lock);
@@ -1454,7 +1846,8 @@ static void fb_note(int kind, const VkPipelineCreationFeedback *fb) {
 
 // One line: per kind, builds that came from pipeline-cache.bin of all builds so far, with the average time of each.
 static void fb_log(const char *when) {
-    if (!P.feedback) return;
+    pb_log(when);
+    if (!P.feedback || !P.cache) return;
     static const char *const kn[FB_KINDS] = {"pipelines", "libraries", "compute"};
     char line[512];
     int o = snprintf(line, sizeof line, "vk_pipeline: pipeline-cache.bin hits %s:", when);
@@ -1718,7 +2111,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     pi.pNext = fb_chain(&fci, &fb, pi.pNext);
     uint64_t p0 = perf_begin();
     crash_note("a graphics pipeline", s->vs, s->fs, s->ts);
-    VkResult r = vkCreateGraphicsPipelines(P.device, P.cache, 1, &pi, NULL, &pipe);
+    VkResult r = pipe_create(0, &pi, &pipe);
     plat_crash_context(NULL);
     perf_end(PERF_PIPE, p0);   // counts on the render thread only, so background builds stay out of it
     if (r != VK_SUCCESS) {
@@ -1877,7 +2270,7 @@ static VkPipeline lib_create(int kind, const VkPipeState *s, const GKey *k, VkPi
     VkPipelineCreationFeedback fb;
     pi.pNext = fb_chain(&fci, &fb, pi.pNext);
     crash_note("a pipeline library", s->vs, s->fs, NULL);
-    if (vkCreateGraphicsPipelines(P.device, P.cache, 1, &pi, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
+    if (pipe_create(1, &pi, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
     plat_crash_context(NULL);
     if (pipe && (kind == LIB_PR || kind == LIB_FS)) fb_note(FB_LIBRARY, &fb);   // the shader libraries: the others compile nothing
 out:
@@ -3098,13 +3491,13 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l, int cache
     VkPipelineCreationFeedback fb;
     ci.pNext = fb_chain(&fci, &fb, ci.pNext);
     crash_note("a compute pipeline", cs, NULL, NULL);
-    if (vkCreateComputePipelines(P.device, P.cache, 1, &ci, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
+    if (pipe_create(2, &ci, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
     plat_crash_context(NULL);
     if (pipe) fb_note(FB_COMPUTE, &fb);
     if (P.feedback >= 2 && (pipe || !cached_only))
         rt_log("vk_pipeline: compute %016llx: %llu words, module %016llx, %s, %.1f ms", (unsigned long long)fnv(FNV0, code, words * 4),
                (unsigned long long)words, (unsigned long long)mm_hash,
-               !pipe ? "failed" : fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT ? "from pipeline-cache.bin" : "compiled",
+               !pipe ? "failed" : pb_last ? "from pipeline-binaries.bin" : fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT ? "from pipeline-cache.bin" : "compiled",
                (double)fb.duration / 1e6);
     vkDestroyShaderModule(P.device, m, NULL);
     free(over);
@@ -4114,7 +4507,7 @@ void vk_pipeline_stats(VkPipeStats *s) {
 static PlatMutex save_lock = PLAT_MUTEX_INIT;   // one cache save at a time; shutdown takes it to destroy the cache
 
 void vk_pipeline_save(void) {
-    if (P.ready) keys_flush();
+    if (P.ready) keys_flush(), pb_flush();
     if (P.ready && P.gpl) {
         rt_log("vk_pipeline: gpl: %llu fast links (%llu by workers; avg %.2f ms, max %.2f ms, %llu failed), %llu draws "
                "lookups found shader libraries missing (left to a worker), %llu optimised pipelines swapped in (%llu queued "
@@ -4140,6 +4533,7 @@ void vk_pipeline_save(void) {
                    (unsigned long long)P.g.pre_used[LIB_FS], (unsigned long long)LB.cs_draw);
     }
     gfx_shader_record_flush(1);
+    if (P.ready && !P.cache) pb_log("at a save");   // with P.cache the line comes with its own save below
     if (!P.ready || !P.cache || !P.cache_path[0]) return;
     // Not under P.lock: the driver synchronises P.cache, and holding P.lock through the copy and the file write (about
     // 60 ms on the 1.4.3 fight) stopped every pipeline lookup of the replay, a freeze at each 20 s autosave.
@@ -4170,7 +4564,11 @@ static void autosave_once(void) {
     static uint64_t last_n, last_ms, last_keys;
     if (!P.ready) return;
     uint64_t now = plat_now_ms();
-    if (*(volatile uint32_t *)&K.pend_n && now - last_keys >= 2000) last_keys = now, keys_flush();
+    if (now - last_keys >= 2000) {
+        last_keys = now;
+        if (*(volatile uint32_t *)&K.pend_n) keys_flush();
+        pb_flush();
+    }
     gfx_shader_record_flush(0);
     if (now - last_ms < 20000) return;
     VkPipeStats s;

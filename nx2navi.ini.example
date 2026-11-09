@@ -66,6 +66,10 @@
 # Which draws are dropped instead of waiting for their pipeline: strict (only draws into per-frame passes), any (also
 # draws into passes whose target the previous frame rendered) or fullscreen (those and full-screen draws).
 # pipe_skip = fullscreen
+# How long (ms) a draw into a target the previous frame did not render waits for a pipeline built for the first time,
+# then is skipped. The default waits, as such a target (a lookup table, a new area's target) can stay empty if
+# skipped; a lower value caps the stall.
+# oneshot_wait_ms = 30000
 # Build shader stage libraries in the background ahead of time, and the threads for it (1 to 16; default: a quarter of
 # the CPU threads).
 # lib_prebuild = 1
@@ -83,6 +87,12 @@
 # pipe_feedback = 1
 # pipeline-cache.bin larger than this (MB) starts empty and is rewritten (0: no limit).
 # pipeline_cache_max_mb = 512
+# 1: where the driver has VK_KHR_pipeline_binary, compiled pipelines are kept in pipeline-binaries.bin under the
+# runtime's own keys, so a renamed or updated exe starts without compiling them again (pipeline-cache.bin is then
+# not used). Default 0 (pipeline-cache.bin only) while it is being tested.
+# pipe_binaries = 0
+# pipeline-binaries.bin larger than this (MB) starts empty and is rewritten (0: no limit).
+# pipe_binaries_max_mb = 1024
 # Build known pipelines ahead of time.
 # pipe_prebuild = 1
 # 1: the start waits until every known pipeline is built. Default 0: with the graphics pipeline library the start

@@ -238,6 +238,8 @@ typedef struct {
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh;
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR vrs;
     VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR mrc;
+    VkPhysicalDeviceMaintenance5FeaturesKHR m5;
+    VkPhysicalDevicePipelineBinaryFeaturesKHR pbin;
 } FeatureChain;
 
 static int create_device(void) {
@@ -280,6 +282,17 @@ static int create_device(void) {
     // (vk_pipeline.c spirv_reconverge)
     OPTIONAL_EXT(has_maximal_reconvergence, VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME, mrc,
                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
+    // Compiled pipelines kept under the runtime's own keys (vk_pipeline.c pipe_create): VK_KHR_pipeline_binary, which
+    // needs VK_KHR_maintenance5 (core only from Vulkan 1.4; the instance asks for 1.3). NX2NAVI_PIPE_BINARIES=0 leaves
+    // both off.
+    if (cfg_bool("NX2NAVI_PIPE_BINARIES") && has_ext(ep, ne, VK_KHR_PIPELINE_BINARY_EXTENSION_NAME) &&
+        has_ext(ep, ne, VK_KHR_MAINTENANCE_5_EXTENSION_NAME)) {
+        g_vk.has_pipeline_binary = 1;
+        ext[n_ext++] = VK_KHR_MAINTENANCE_5_EXTENSION_NAME;
+        ext[n_ext++] = VK_KHR_PIPELINE_BINARY_EXTENSION_NAME;
+        CHAIN(m5, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR);
+        CHAIN(pbin, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR);
+    }
     // Feedback loops (vk.h VkCtx.feedback): the layout, and barriers inside dynamic rendering
     int has_fbl = 0, has_lr = 0;
     if (has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME) &&
@@ -377,6 +390,7 @@ static int create_device(void) {
         rt_log("vk: mesh shaders: %s", g_vk.has_mesh_shader ? "VK_EXT_mesh_shader" : "not supported (task/mesh draws are skipped)");
     }   // vkGetDeviceFaultInfoEXT needs the feature, not just the extension
     if (g_vk.has_maximal_reconvergence && !c->mrc.shaderMaximalReconvergence) g_vk.has_maximal_reconvergence = 0;
+    if (g_vk.has_pipeline_binary && !(c->pbin.pipelineBinaries && c->m5.maintenance5)) g_vk.has_pipeline_binary = 0;
     g_vk.has_buffer_device_address = c->f12.bufferDeviceAddress;
     g_vk.has_astc_ldr = h->textureCompressionASTC_LDR;
     {
