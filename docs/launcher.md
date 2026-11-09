@@ -185,11 +185,18 @@ The stub swaps `python.next` in while no Python runs, then starts the new versio
      header written per install (`layout.h`, `patches.h`, `romfs_config.h`) are compiled on the player's PC.
    - Every other file compiles only when its source, a header it includes, the flags or the compiler changed
      (`build-cache/obj/objects.json`, from clang's dependency files). The kit's folder is not part of that key, so the
-     objects of the version before are reused although each version lives in its own folder. The lifted code
-     includes only `cpu.h` and `simd.h`: a change there compiles it all again, which is rare.
+     objects of the version before are reused although each version lives in its own folder. The compiler counts by
+     its version and size, not its file time, and the faster CLANG64 compiler, whose objects are the same, not at all.
+     The lifted code includes only `cpu.h` and `simd.h`: a change there compiles it all again, which is rare.
+   - An object an earlier version recorded under its own key form is taken over when its compile and its files are
+     the same (`ObjectCache.adopt`): 0.6.0's keys, and 0.5.0's, which named the kit's folder. An update keeps the
+     x86-64 level the game's code was compiled for (`build-cache/obj/lifted-build.json`; generic for the objects of
+     0.5.0 and earlier); Rebuild the Game compiles it for this processor's (`--retune`).
 6. **Swap In the New Build**: lld links `ocarina.exe.new`, which replaces `ocarina.exe` only once it is complete. A
    failed rebuild leaves the old build playable; Rebuild the Game tries again.
-7. **Prepare the Shaders** again for the new build; shaders the translator already prepared come from the cache.
+7. **Prepare the Shaders** is skipped once shaders were prepared before (`shader-prepared.bin`): the game keeps using
+   them and translates them again with the new translator in the background (`NX2NAVI_SHADER_CARRY`). With
+   `shader_carry = 0`, or nothing prepared yet, the step prepares them all as at the install.
 8. **Draw the Button Prompts**, with button art in the new version: only when the art, the prompt tools or the key
    bindings changed, or a prompt folder is missing (a first version with art draws them all).
 9. Every version but the current and the previous one is deleted, except a staged release newer than the current
