@@ -18,7 +18,25 @@ amplitude before the strength (0.2 to 1.5, default 0.6; lower makes weak pulses 
 
 The log names the layout in effect (`input: gamepad layout ...`) and each gamepad's first press
 (`input: gamepad "...": first press`); the menu shows the layout under *Automatic*. The game's prompts show the Switch
-letters.
+letters unless *Button prompts* says otherwise (below).
+
+## Button prompts
+
+`NX2NAVI_PROMPTS` (`prompts`, the *Button prompts* row on the Controls tab) picks the controller whose buttons the game's prompts show: `nintendo` (default, the game's own), `xbox` or `playstation`. It changes three things the game draws:
+
+- the button font every prompt in text uses (dialogue, the button guides, the controls screen): A B X Y, L R ZL ZR, Plus and Minus, the d-pad and the sticks with their directions become that pad's buttons (LB RB LT RT, Menu and View; L1 R1 L2 R2, Options and Create; its d-pad and sticks). Power, Home and the console stay;
+- the letter in the action prompt (top right);
+- the ocarina's note buttons.
+
+A, B, X and Y show the button the *Button layout* presses: with `nintendo` (by position) Switch A is the right face button, so its prompts show B or circle, B shows A or cross, X shows Y or triangle and Y shows X or square; with `xbox` and `automatic` (by label) A shows A or cross, B shows B or circle, X shows X or square and Y shows Y or triangle. The game reads the font and the interface textures once at start, so a change shows after a restart (the row says so; the menu's Restart button restarts). A button remapped on this tab keeps its old prompt.
+
+The prompts live in four overlay folders next to the exe, `romfs-patches-xbox`, `romfs-patches-xbox-label`, `romfs-patches-playstation` and `romfs-patches-playstation-label` (by position and by label), which `runtime/romfs.c` loads in place of the game's files. `tools/pad_prompts.py` draws them on the player's machine from the player's own RomFS and a folder of button art, which the repository does not hold:
+
+```
+python tools\pad_prompts.py --art <art pack>\Source --game <install folder>
+```
+
+The art folder holds `XGamepad/Default`, `XGamepad/Light`, `P5Gamepad/Default` and `P5Gamepad/Light` with the file names of `STYLES` in the tool. Without the folders the row says *prompt files missing* and the Switch prompts stay; so they do when a RomFS mod replaces one of the same files (*off: a RomFS mod replaces their files*). The log has a `RomFS overlay: ... button prompts` line for the folder in use. The tool needs fontTools, Pillow and zstandard (`tools/requirements-py314.txt`).
 
 The actions are the game's own, as its *Basic Controls* screen (Plus menu, System) names them:
 

@@ -338,14 +338,26 @@ int probe_cfg(void) {
               EQ(input_prompts_folder(PROMPTS_XBOX, "auto"), "romfs-patches-xbox-label") &&
               EQ(input_prompts_folder(PROMPTS_XBOX, NULL), "romfs-patches-xbox-label"),
           "prompts: the face buttons by position for the Nintendo layout, by label for xbox and auto");
-    // romfs-patches-xbox shows A as B (tests/romfs_prompts_test.py checks the folders' contents). It is right exactly
-    // where the layout puts A on the east button, which an Xbox pad labels B.
+    CHECK(input_prompts_pick("PlayStation", "nintendo") == PROMPTS_PLAYSTATION &&
+              input_prompts_pick("playstation", "xbox_prompts") == PROMPTS_PLAYSTATION &&
+              input_prompts_pick("ps", "nintendo") == PROMPTS_NINTENDO,
+          "prompts: playstation in any case; an unknown value is the game's own");
+    CHECK(EQ(input_prompts_folder(PROMPTS_PLAYSTATION, "nintendo"), "romfs-patches-playstation") &&
+              EQ(input_prompts_folder(PROMPTS_PLAYSTATION, "xbox_prompts"), "romfs-patches-playstation") &&
+              EQ(input_prompts_folder(PROMPTS_PLAYSTATION, "xbox"), "romfs-patches-playstation-label") &&
+              EQ(input_prompts_folder(PROMPTS_PLAYSTATION, "auto"), "romfs-patches-playstation-label") &&
+              EQ(input_prompts_folder(PROMPTS_PLAYSTATION, NULL), "romfs-patches-playstation-label"),
+          "prompts: the PlayStation face buttons by position for the Nintendo layout, by label for xbox and auto");
+    // romfs-patches-xbox shows A as B and romfs-patches-playstation A as circle (tools/pad_prompts.py FACE). That is
+    // right exactly where the layout puts A on the east button, which an Xbox pad labels B and a PlayStation pad circle.
     input_map_reset();
     static const char *const layouts[] = {"nintendo", "xbox", "auto", "xbox_prompts"};
     for (int i = 0; i < 4; i++) {
         int a_east = input_map_pad_buttons((uint8_t[PAD_COUNT]){[PAD_EAST] = 1}, input_pad_layout_pick(layouts[i], 0)) == 1ull << B_A;
         CHECK(a_east == EQ(input_prompts_folder(PROMPTS_XBOX, layouts[i]), "romfs-patches-xbox"),
               "prompts: the folder names A as B exactly when the layout puts A on the button labelled B");
+        CHECK(a_east == EQ(input_prompts_folder(PROMPTS_PLAYSTATION, layouts[i]), "romfs-patches-playstation"),
+              "prompts: the folder names A as circle exactly when the layout puts A on the circle button");
     }
     // The default layout is the Switch's own buttons by position, whatever the pad's labels (an Xbox pad's east button
     // is labelled B and does Switch A): A right, B bottom, X top, Y left, L/R the bumpers, ZL/ZR the triggers.

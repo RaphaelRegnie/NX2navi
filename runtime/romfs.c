@@ -780,7 +780,8 @@ static void camera_overlay(void) {
 // did not load (ROMFS_PROMPTS_*). The menu compares them with the settings in effect (ui/menu.cpp prompts_note).
 // romfs-patches-pc keeps that name, but at a game resolution of another shape than 16:9 its files come from pc_dir,
 // romfs-patches-pc-<w>x<h> (overlay_init).
-static struct { const char *name; int ready; } prompts_folders[3];
+#define PROMPTS_FOLDERS 5   // Xbox and PlayStation by position and by label, then PC
+static struct { const char *name; int ready; } prompts_folders[PROMPTS_FOLDERS];
 static const char *prompts_wanted, *prompts_loaded;
 static int prompts_off;
 static char pc_dir[64];
@@ -788,7 +789,7 @@ static char pc_dir[64];
 const char *romfs_prompts(void) { return prompts_loaded; }
 
 int romfs_prompts_ready(const char *folder) {
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < PROMPTS_FOLDERS; i++)
         if (folder && prompts_folders[i].name && !strcmp(prompts_folders[i].name, folder)) return prompts_folders[i].ready;
     return 0;
 }
@@ -822,8 +823,9 @@ static void overlay_init(void) {
     // A game resolution that is not 16:9 takes romfs-patches-<w>x<h> instead when it is there: the same overlay with
     // the UI laid out for that shape (make_romfs_patches.py --aspect), when the game version has the camera aspect patch
     // the layout goes with (res_wants_wide_overlay).
-    // With prompts = xbox, the Xbox prompts' folder for the pad layout in its place (input_prompts_folder): the same
-    // patches with Xbox button icons (make_romfs_patches.py --prompts). The game reads the archives once at boot, so
+    // With prompts = xbox or playstation, that pad's prompts folder for the pad layout in its place
+    // (input_prompts_folder): the game's button font and interface textures with that pad's buttons drawn in
+    // (tools/pad_prompts.py). The game reads the font and the archives once at boot, so
     // the prompts stay until restart even though the layout itself changes live. Each folder replaces romfs-patches as
     // a whole and the setup builds no folder of another shape with Xbox prompts, so a game resolution that is not 16:9
     // keeps the Switch prompts. So does a RomFS mod (the NX2NAVI_ROMFS_MODS manifest or a player mod) that replaces one of
@@ -847,11 +849,13 @@ static void overlay_init(void) {
                    "(tools/make_romfs_patches.py --aspect %ux%u)", out[0], out[1], out[0], out[1]);
         }
     }
-    static const char *const layouts[2] = {"nintendo", "xbox"};   // one of each Xbox folder, then the PC one
-    for (int i = 0; i < 3; i++) {
-        const char *name = i < 2 ? input_prompts_folder(PROMPTS_XBOX, layouts[i]) : input_prompts_folder(PROMPTS_PC, 0);
+    static const char *const layouts[2] = {"nintendo", "xbox"};   // each pad's two folders, then the PC one
+    static const int pads[2] = {PROMPTS_XBOX, PROMPTS_PLAYSTATION};
+    for (int i = 0; i < PROMPTS_FOLDERS; i++) {
+        int pc = i == PROMPTS_FOLDERS - 1;
+        const char *name = pc ? input_prompts_folder(PROMPTS_PC, 0) : input_prompts_folder(pads[i / 2], layouts[i % 2]);
         const char *dir = name;
-        if (i == 2) {
+        if (pc) {
             if (wide) snprintf(pc_dir, sizeof pc_dir, "%s-%ux%u", name, out[0], out[1]);
             else snprintf(pc_dir, sizeof pc_dir, "%s", name);
             dir = pc_dir;
@@ -862,7 +866,7 @@ static void overlay_init(void) {
     }
     const char *layout = cfg_value("NX2NAVI_PAD_LAYOUT");
     int pick = input_prompts_pick(cfg_get("NX2NAVI_PROMPTS"), layout), shaped = wide && pick == PROMPTS_PC;
-    const char *style = pick == PROMPTS_PC ? "keyboard and mouse" : "Xbox";
+    const char *style = pick == PROMPTS_PC ? "keyboard and mouse" : pick == PROMPTS_PLAYSTATION ? "PlayStation" : "Xbox";
     prompts_wanted = input_prompts_folder(pick, layout);
     prompts_off = !prompts_wanted                         ? ROMFS_PROMPTS_OK
                   : wide && !shaped                       ? ROMFS_PROMPTS_SHAPE
@@ -883,12 +887,14 @@ static void overlay_init(void) {
             rt_log("RomFS overlay: %s failed its check (run the setup again); romfs-patches loads instead", path);
         }
     } else if (prompts_wanted) {
-        rt_log("RomFS overlay: prompts = %s, but %s; Switch prompts stay", pick == PROMPTS_PC ? "pc" : "xbox",
+        rt_log("RomFS overlay: prompts = %s, but %s; Switch prompts stay",
+               pick == PROMPTS_PC ? "pc" : pick == PROMPTS_PLAYSTATION ? "playstation" : "xbox",
                prompts_off == ROMFS_PROMPTS_SHAPE     ? (shaped ? "the game resolution has no romfs-patches-pc-<w>x<h> "
                                                                   "(tools/make_romfs_patches.py --prompts pc --aspect)"
                                                              : "the game resolution takes its own UI layout")
                : prompts_off == ROMFS_PROMPTS_PATCHES ? "NX2NAVI_ROMFS_PATCHES is set"
-                                                      : "their folder has no manifest.tsv (run the setup again)");
+               : pick == PROMPTS_PC                   ? "their folder has no manifest.tsv (run the setup again)"
+                                                      : "their folder has no manifest.tsv (tools/pad_prompts.py writes it)");
     }
     size_t prompts_end = noverlay;
     char plain[2100];   // romfs-patches, when it has a manifest
