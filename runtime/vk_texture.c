@@ -116,7 +116,7 @@ static uint64_t ru_same_n, ru_same_bytes;   // re-uploads skipped: the pages wer
 // NX2NAVI_TEX_ALIAS (default on; =0: a new image over live storage starts empty): a new descriptor over the storage of a
 // live image that the GPU wrote gets that image's content (alias_copy). Counts since the last log line.
 static int tex_alias = -1;
-static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit;
+static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit, n_alias_kept;
 static uint32_t submit_epoch = 1;   // bumped per queue submit: draw bindings check a texture's storage once per submit
 // Mirrored textures the GPU wrote into, sorted by address (vk_texture_cpu_stale, vk_texture_write_back). Changed under
 // tex_lock and owned_lock; read under either.
@@ -1639,18 +1639,23 @@ static void create_failed(const TexKey *k) {
 // The start of e's content at its address, for a new entry and for a superseded one taken back (taken_back): another
 // descriptor's released entry there is superseded, and a live one holding GPU-written content is the alias source,
 // preferring the one that differs only in swizzle (same_but_swizzle). A superseded entry is kept for its own
-// descriptor, which takes it back and starts over here as a new entry would (alias copy or init_image): Ocarina
-// alternates descriptors at some addresses every frame (a 2560x1440 target and a 480x270 one in Kokiri Forest), and
-// destroying the released one made both images again each frame. Released mirrored entries are still destroyed: their
-// content is the storage's, uploaded when an entry is made.
+// descriptor, which takes it back here: Ocarina alternates descriptors at some addresses every frame (a 2560x1440
+// target and a 480x270 one in Kokiri Forest), and destroying the released one made both images again each frame. It
+// starts over as a new entry would (alias copy or init_image) when a texture at its address holds GPU content written
+// since its release (newer), and else keeps its own: the memory still holds what it held then. Ocarina gives its scene
+// picture (r11g11b10f) a second descriptor at the same address that nothing draws into (rgb9e5, read raw by the post
+// pass), and the picture, taken back about once a second and restarted empty, went black for a frame (issue #253).
+// Released mirrored entries are still destroyed: their content is the storage's, uploaded when an entry is made.
 static void start_at(Tex *e, const TexKey *k, int taken_back) {
     int alias = 0;
     Tex *src = NULL;
     const char *why = "no live texture with GPU content";   // for the log of an alias left empty
     const Tex *other = NULL;
+    int newer = 0;   // taken back: a texture at this address holds GPU content written since e's release
     for (Tex *p = nvn_hm_get(&by_addr, &k->addr), *nx; p; p = nx) {
         nx = p->next_at;
         if (p == e) continue;
+        if (taken_back && p->use_frame >= e->rel_frame && alias_has_gpu_content(p)) newer = 1;
         if (p->released) {
             if (p->pub.mirrored) destroy_tex(p);
             else p->superseded = 1;
@@ -1664,6 +1669,10 @@ static void start_at(Tex *e, const TexKey *k, int taken_back) {
         src = p;
     }
     if (alias) perf_count(PERF_CNT_TEX_ALIAS);
+    if (taken_back && !newer && !e->pub.mirrored) {   // its image still holds its content
+        n_alias_kept++;
+        return;
+    }
     if (!tex_alias) {   // create_tex initialised a new entry
         if (taken_back) init_new(e);
         return;
@@ -2084,10 +2093,11 @@ void vk_texture_new_submit(void) {
     uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED) / 60;
     if ((rt_trace & RT_TRACE_PERF) && f != log_at && tex_alias > 0) {
         log_at = f;
-        rt_log("perf: frame %llu: texture aliases: content copied %llu, filled from storage %llu, left uninitialised %llu",
+        rt_log("perf: frame %llu: texture aliases: content copied %llu, filled from storage %llu, left uninitialised %llu; "
+               "taken back with their own content %llu",
                (unsigned long long)f * 60, (unsigned long long)n_alias_copied, (unsigned long long)n_alias_upload,
-               (unsigned long long)n_alias_uninit);
-        n_alias_copied = n_alias_upload = n_alias_uninit = 0;
+               (unsigned long long)n_alias_uninit, (unsigned long long)n_alias_kept);
+        n_alias_copied = n_alias_upload = n_alias_uninit = n_alias_kept = 0;
         rt_log("perf: frame %llu: texture re-uploads %llu (%.1f MiB, %.2f ms), after WriteTexels %llu (%.1f MiB, %.2f ms); "
                "skipped with unchanged bytes %llu (%.1f MiB)",
                (unsigned long long)f * 60, (unsigned long long)ru_n, ru_bytes / 1048576.0, ru_ns / 1e6,
