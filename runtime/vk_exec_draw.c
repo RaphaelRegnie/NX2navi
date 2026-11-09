@@ -4881,5 +4881,5 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     if (!on) { op_draw_impl(ex, op, payload); return; }
     uint64_t t0 = plat_now_ns();
     op_draw_impl(ex, op, payload);
-    perf_replay_op(op_is_draw(op) ? PERF_RP_DRAW : PERF_RP_BIND, plat_now_ns() - t0);
+    perf_replay_op_at(op_is_draw(op) ? PERF_RP_DRAW : PERF_RP_BIND, op, plat_now_ns() - t0);
 }

@@ -817,5 +817,5 @@ void vk_exec_op_xfer(VkExec *ex, uint32_t op, const void *payload) {
     if (!on) { op_xfer_impl(ex, op, payload); return; }
     uint64_t t0 = plat_now_ns();
     op_xfer_impl(ex, op, payload);
-    perf_replay_op(PERF_RP_XFER, plat_now_ns() - t0);
+    perf_replay_op_at(PERF_RP_XFER, op, plat_now_ns() - t0);
 }

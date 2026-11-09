@@ -524,7 +524,11 @@ uint64_t vk_sync_submit(const uint64_t *handles, int n) {
     CmdSlot *s = take_slot(c, fence);
     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-    uint64_t t0 = perf_begin();
+    // NX2NAVI_REPLAY_TIME: the replaying thread's CPU time over the replay too (perf_replay_cpu), against its wall time
+    static int cpu_on = -1;
+    if (cpu_on < 0) cpu_on = cfg_bool("NX2NAVI_REPLAY_TIME");
+    uint32_t me = plat_thread_id();
+    uint64_t t0 = perf_begin(), cpu0 = cpu_on ? plat_thread_cpu_ns(me) : 0;
     vkBeginCommandBuffer(s->cb, &bi);
     vk_crumb(s->cb, VK_CRUMB_SUBMIT, fence);
     ts_begin(s->cb);
@@ -536,6 +540,7 @@ uint64_t vk_sync_submit(const uint64_t *handles, int n) {
     // The recorder is done with the part: the end-of-submission crumb, then the end, by the recorder when it records.
     if (!rec_end_cb(s->cb, VK_CRUMB_SUBMIT_END, fence)) vkEndCommandBuffer(s->cb);
     perf_replay(t0);
+    if (cpu0) perf_replay_cpu(plat_thread_cpu_ns(me) - cpu0);
     // After the recording: the uploads it asked for (and every earlier one) precede it in queue order.
     vk_upload_flush(0);
     VkCommandBuffer pro = prologue(c, fence);

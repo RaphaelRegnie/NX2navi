@@ -31,6 +31,7 @@ static volatile uint64_t part_fence;   // the value of the part being recorded (
 
 // Producer statistics, logged by rec_stats_log.
 static struct { uint64_t packets, words, drains, fallbacks, drain_ns, full_waits, parts, parts_on; } RS_;
+static volatile uint64_t full_ns_all, drain_ns_all;   // since the start, for rec_wait_totals (never reset)
 
 enum {
     R_PAD, R_BeginQuery, R_BeginRendering, R_BindDescriptorSets, R_BindIndexBuffer, R_BindPipeline, R_BindVertexBuffers2,
@@ -92,9 +93,11 @@ static void wake(void) {
 static void wait_space(uint64_t need) {
     if (put_h + need - __atomic_load_n(&tail, __ATOMIC_ACQUIRE) <= RING_WORDS) return;
     RS_.full_waits++;
+    uint64_t t0 = now_ns();
     __atomic_store_n(&head, put_h, __ATOMIC_RELEASE);
     wake();
     while (put_h + need - __atomic_load_n(&tail, __ATOMIC_ACQUIRE) > RING_WORDS) _mm_pause();
+    full_ns_all += now_ns() - t0;
 }
 
 // Room for a packet of bytes of arguments; the caller fills it and calls pub().
@@ -130,8 +133,11 @@ void rec_drain(void) {
     for (int i = 0; __atomic_load_n(&tail, __ATOMIC_ACQUIRE) != put_h; i++)
         if (i < 20000) _mm_pause();
         else plat_yield();
-    RS_.drains++, RS_.drain_ns += now_ns() - t0;
+    uint64_t d = now_ns() - t0;
+    RS_.drains++, RS_.drain_ns += d, drain_ns_all += d;
 }
+
+void rec_wait_totals(uint64_t *full_ns, uint64_t *drain_ns) { *full_ns = full_ns_all, *drain_ns = drain_ns_all; }
 
 void rec_begin(VkCommandBuffer cb, uint64_t fence) {
     static int mode = -1;

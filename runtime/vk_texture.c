@@ -204,11 +204,23 @@ static void tex_init(void *p) {
     __atomic_store_n(&tex_ready, 1, __ATOMIC_RELEASE);
     return;
 }
-static void lock(void) {
+// NX2NAVI_LOCK_TIME: the outermost hold of the lock is timed from here, and one over 1 ms is reported with the code
+// that took it (perf_lock_hold); lock is not inlined so that its return address names that code.
+static uint64_t hold_t0;
+static void *hold_site;
+__attribute__((noinline)) static void lock(void) {
     if (!__atomic_load_n(&tex_ready, __ATOMIC_ACQUIRE)) plat_once(&tex_once, tex_init, NULL);
-    plat_rmutex_lock(&tex_lock);
+    plat_rmutex_lock_at(&tex_lock, __builtin_return_address(0));
+    if (tex_lock.depth == 1 && perf_lock_holds_on()) hold_t0 = plat_now_ns(), hold_site = __builtin_return_address(0);
 }
-static void unlock(void) { plat_rmutex_unlock(&tex_lock); }
+static void unlock(void) {
+    if (tex_lock.depth == 1 && hold_t0) {
+        uint64_t d = plat_now_ns() - hold_t0;
+        hold_t0 = 0;
+        if (d > 1000000) perf_lock_hold(hold_site, d);
+    }
+    plat_rmutex_unlock(&tex_lock);
+}
 
 static uint32_t umax(uint32_t a, uint32_t b) { return a > b ? a : b; }
 static uint32_t mip(uint32_t v, unsigned lv) { return umax(v >> lv, 1); }

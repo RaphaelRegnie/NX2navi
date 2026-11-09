@@ -20,6 +20,7 @@ void rec_end(void);                   // waits for the recorder; no-op when rec_
 // when it records cb, and the wait for it (1); otherwise rec_end and the breadcrumb, and the caller ends cb (0).
 int rec_end_cb(VkCommandBuffer cb, int crumb, uint64_t n);
 void rec_drain(void);                 // waits until the recorder made every call queued so far
+void rec_wait_totals(uint64_t *full_ns, uint64_t *drain_ns);   // producer time spent on a full ring and in drains
 void rec_stats_log(void);             // NX2NAVI_TRACE=perf: packets, bytes, drains and waits since the last call
 // NX2NAVI_REC_CHECK=1 (debug, recorder on): vk_memory.c reports each object it defers (destroy 0, stamped tl) or destroys
 // (destroy 1) with the value the GPU reached (gpu); a packet of the part being recorded that still names it is logged

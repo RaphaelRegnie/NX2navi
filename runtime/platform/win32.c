@@ -465,11 +465,35 @@ void plat_sleep_ms(uint32_t ms) { Sleep(ms); }
 // ---- locks and condition variables
 
 void plat_mutex_init(PlatMutex *m) { InitializeSRWLock((PSRWLOCK)m); }
-void plat_mutex_lock(PlatMutex *m) { AcquireSRWLockExclusive((PSRWLOCK)m); }
+static _Thread_local PlatLockNote lock_note;   // plat_lock_timing
+void plat_lock_timing(PlatLockNote fn) { lock_note = fn; }
+
+void plat_mutex_lock_at(PlatMutex *m, void *site) {
+    if (!lock_note || TryAcquireSRWLockExclusive((PSRWLOCK)m)) {
+        if (!lock_note) AcquireSRWLockExclusive((PSRWLOCK)m);
+        return;
+    }
+    uint64_t t0 = plat_now_ns();
+    AcquireSRWLockExclusive((PSRWLOCK)m);
+    lock_note(site, plat_now_ns() - t0);
+}
+
+void plat_mutex_lock(PlatMutex *m) {
+    if (!lock_note) { AcquireSRWLockExclusive((PSRWLOCK)m); return; }
+    plat_mutex_lock_at(m, __builtin_return_address(0));
+}
 int plat_mutex_trylock(PlatMutex *m) { return TryAcquireSRWLockExclusive((PSRWLOCK)m) != 0; }
 void plat_mutex_unlock(PlatMutex *m) { ReleaseSRWLockExclusive((PSRWLOCK)m); }
 
-void plat_mutex_lock_shared(PlatMutex *m) { AcquireSRWLockShared((PSRWLOCK)m); }
+void plat_mutex_lock_shared(PlatMutex *m) {
+    if (!lock_note || TryAcquireSRWLockShared((PSRWLOCK)m)) {
+        if (!lock_note) AcquireSRWLockShared((PSRWLOCK)m);
+        return;
+    }
+    uint64_t t0 = plat_now_ns();
+    AcquireSRWLockShared((PSRWLOCK)m);
+    lock_note(__builtin_return_address(0), plat_now_ns() - t0);
+}
 int plat_mutex_trylock_shared(PlatMutex *m) { return TryAcquireSRWLockShared((PSRWLOCK)m) != 0; }
 void plat_mutex_unlock_shared(PlatMutex *m) { ReleaseSRWLockShared((PSRWLOCK)m); }
 

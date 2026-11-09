@@ -161,6 +161,14 @@ void plat_rmutex_lock(PlatRMutex *m);
 int plat_rmutex_trylock(PlatRMutex *m);   // 1 when acquired (or already held by this thread)
 void plat_rmutex_unlock(PlatRMutex *m);
 
+// Lock-wait timing (NX2NAVI_LOCK_TIME, perf.c): after plat_lock_timing(fn) on a thread, each plat_mutex_lock(_shared)
+// or plat_rmutex_lock there that has to wait calls fn with the address of the code that asked for the lock (for a
+// recursive mutex, the caller of plat_rmutex_lock) and the nanoseconds it waited. NULL turns it off. Windows only.
+typedef void (*PlatLockNote)(void *site, uint64_t ns);
+void plat_lock_timing(PlatLockNote fn);
+void plat_mutex_lock_at(PlatMutex *m, void *site);     // plat_mutex_lock reporting site as the asker
+void plat_rmutex_lock_at(PlatRMutex *m, void *site);   // plat_rmutex_lock reporting site as the asker
+
 // One-time initialisation: the first caller runs fn(arg), every other caller waits until it returned. Zero-initialised
 // (PLAT_ONCE_INIT) has not run.
 typedef struct { volatile int32_t state; } PlatOnce;

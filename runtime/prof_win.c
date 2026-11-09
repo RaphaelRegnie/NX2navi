@@ -61,6 +61,7 @@ static volatile LONG stop, written;
 static uintptr_t exe_lo, exe_hi;
 static int only_render;             // NX2NAVI_PROFILE_RENDER=1: sample the render thread only
 static int only_main;               // NX2NAVI_PROFILE_MAIN=1: sample the guest main thread only
+static int only_replay;             // NX2NAVI_PROFILE_REPLAY=1: sample the replay thread only, without call chains
 static int chains;                  // call chains are kept: NX2NAVI_PROFILE_RENDER or NX2NAVI_PROFILE_CHAINS
 static volatile uint64_t cur_frame; // last presented frame
 static uint64_t frame_lo, frame_hi; // NX2NAVI_PROFILE_FRAMES=<lo>-<hi>: sample only while presents lo..hi-1 are pending
@@ -262,7 +263,8 @@ static DWORD WINAPI sampler_main(void *arg) {
         uint64_t now = slow_ns ? kern_now_ns() : 0;
         for (int i = 0; i < n_threads; i++) {
             ThreadSlot *t = &threads[i];
-            if ((only_render && t->tid != render_tid) || (only_main && t->tid != main_tid)) continue;
+            if ((only_render && t->tid != render_tid) || (only_main && t->tid != main_tid) || (only_replay && t->tid != replay_tid))
+                continue;
             uint64_t cyc = 0;
             if (slow_ns && t->depth && QueryThreadCycleTime(t->h, &cyc) && cyc == t->cycles) {   // still waiting
                 Sample *s = &ring[ring_n++ & (SLOW_RING - 1)];
@@ -365,6 +367,7 @@ int prof_sampler_start(void) {
     }
     only_render = cfg_get("NX2NAVI_PROFILE_RENDER") != NULL;
     only_main = !only_render && cfg_get("NX2NAVI_PROFILE_MAIN") != NULL;
+    only_replay = !only_render && !only_main && cfg_get("NX2NAVI_PROFILE_REPLAY") != NULL;
     const char *ch = cfg_get("NX2NAVI_PROFILE_CHAINS");
     const char *sl = cfg_get("NX2NAVI_PROFILE_SLOW");
     slow_ns = sl && atoi(sl) > 0 ? (uint64_t)atoi(sl) * 1000000ull : 0;

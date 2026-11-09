@@ -473,3 +473,7 @@
 # gets a "texup:" line in the log that splits it: creation, staging, storage copy, ASTC recording, scratch buffers and
 # new device memory (up to 400 lines; 0: none; 16 catches the area-change hitches).
 # texup_log_ms = 0
+# 1: the frame-time summary also lists the locks the replay waited for, by the code that asked (addresses; the line's
+# "ref" is perf_lock_timing_here, which the link map names), the recorder's waits, and the texture lock's holds over
+# 1 ms. Off by default.
+# lock_time = 0

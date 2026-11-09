@@ -21,6 +21,7 @@
 #include "nvn_api.h"
 #include "nvn_tex.h"
 #include "platform/platform.h"
+#include "prof.h"
 #include "tex.h"
 #include "vk.h"
 #include "vk_exec.h"
@@ -1205,6 +1206,9 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
         if (!said++) rt_log("vk: a submission is recorded on another thread than the first one; it runs without the "
                             "recorder's priority and core");
     }
+    perf_lock_timing_here();   // NX2NAVI_LOCK_TIME
+    if (prof_replay_tid != plat_thread_id()) perf_replay_thread();   // the profiler follows the thread replaying now
+    perf_rec_waits = rec_wait_totals;
     VkExec *ex = &X;
     if (!x_ready) state_reset(ex), vk_dump_init(), x_ready = 1;
     const tex_t *keep[9];   // the render targets carry over to this submission (set_rt compares them by pointer)

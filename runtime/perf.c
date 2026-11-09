@@ -9,6 +9,7 @@
 #include "flight.h"
 #include "gfx.h"
 #include "host.h"
+#include "nvn_api.h"
 #include "perfmon.h"
 #include "prof.h"
 #include "platform/platform.h"
@@ -95,6 +96,12 @@ void perf_gpu_wait(uint64_t t0) {
 
 static volatile int64_t replay_ns;         // perf_replay: summed over the window, any thread
 static volatile int64_t frame_replay_ns;   // the same since the previous present (frame-time summary)
+// The replaying thread's CPU time over the same spans (perf_replay_cpu): the rest of the replay's wall time it was
+// waiting (a lock, the recorder) or not running (preempted). Since the previous present, and over the period.
+static volatile int64_t frame_replay_cpu_ns;
+static uint64_t per_replay_ns, per_replay_cpu_ns;
+
+void perf_replay_cpu(uint64_t ns) { plat_add64(&frame_replay_cpu_ns, (int64_t)ns); }
 
 void perf_replay(uint64_t t0) {
     if (!t0) return;
@@ -115,7 +122,12 @@ void perf_count(int kind) {
 #define FT_BINS 1024              // 0.25 ms bins up to 256 ms; slower frames land in the last bin
 #define FT_WORST 5
 #define FT_PERIOD_NS 60000000000ull
-typedef struct { uint64_t frame, ns, wait[PERF_N], replay; } FtWorst;
+typedef struct {
+    uint64_t frame, ns, wait[PERF_N], replay;
+    uint64_t op_ns[PERF_RP_N], op_n[PERF_RP_N], max_ns, hold_ns;   // NX2NAVI_REPLAY_TIME: the frame's replay ops
+    uint64_t replay_cpu;   // the replaying thread's CPU time in the frame's replay
+    uint32_t max_op;
+} FtWorst;
 // What a frame over 25 ms spent its time on, so a count of slow frames says where to look instead of only that they
 // happened. A frame is charged to the largest part when that part is at least a quarter of it, and to "unattributed"
 // otherwise - the part of a slow frame none of the recorded waits explains (the GPU, or a stall outside them).
@@ -133,9 +145,117 @@ static uint64_t summary_t0;   // start of the current period (0: not started)
 
 // NX2NAVI_REPLAY_TIME=1: how the replay splits between the kinds of op it walks, reported with the frame-time summary.
 // The replay is recorded on one thread, so these need no atomics. The kinds are PERF_RP_* in host.h.
+// NX2NAVI_LOCK_TIME=1 (default 0): the replay threads time every lock they have to wait for (platform.h
+// plat_lock_timing), kept per asking site, and the frame-time summary lists the sites that waited longest since the last
+// summary, with the recorder's full-ring and drain waits. Sites are code addresses; "ref" is perf_lock_timing_here's,
+// which the link map names, so the others resolve as offsets from it.
+#define LT_N 512
+static struct { void *site; uint64_t ns, n, max, ns0, n0; } lt[LT_N];
+static struct { void *site; uint64_t ns, n, max, ns0, n0; } lh[LT_N];   // texture lock holds over 1 ms (perf_lock_hold)
+static uint64_t lt_lost_ns, lt_rec0[2];
+static volatile int64_t fr_hold_ns;   // the texture lock's holds over 1 ms since the last present (ft_frame)
+void (*perf_rec_waits)(uint64_t *full_ns, uint64_t *drain_ns);
+
+static void lt_add(typeof(lt[0]) *tab, void *site, uint64_t ns) {
+    uint32_t h = (uint32_t)(((uintptr_t)site * 0x9E3779B97F4A7C15ull) >> 55);
+    for (uint32_t k = 0; k < 32; k++) {
+        typeof(lt[0]) *e = &tab[(h + k) % LT_N];
+        void *cur = __atomic_load_n(&e->site, __ATOMIC_ACQUIRE);
+        if (!cur && __atomic_compare_exchange_n(&e->site, &cur, site, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) cur = site;
+        if (cur != site) continue;
+        __atomic_fetch_add(&e->ns, ns, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&e->n, 1, __ATOMIC_RELAXED);
+        uint64_t m = __atomic_load_n(&e->max, __ATOMIC_RELAXED);
+        while (ns > m && !__atomic_compare_exchange_n(&e->max, &m, ns, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+        return;
+    }
+    __atomic_fetch_add(&lt_lost_ns, ns, __ATOMIC_RELAXED);
+}
+
+static void lt_note(void *site, uint64_t ns) { lt_add(lt, site, ns); }
+void perf_lock_hold(void *site, uint64_t ns) {
+    lt_add((typeof(lt[0]) *)lh, site, ns);
+    plat_add64(&fr_hold_ns, (int64_t)ns);
+}
+
+static int lt_on = -1;
+int perf_lock_holds_on(void) {
+    if (lt_on < 0) lt_on = cfg_bool("NX2NAVI_LOCK_TIME");
+    return lt_on;
+}
+void perf_lock_timing_here(void) {
+    if (lt_on < 0) lt_on = cfg_bool("NX2NAVI_LOCK_TIME");
+    if (lt_on) plat_lock_timing(lt_note);
+}
+
+// The eight sites of tab with the most time since the last summary, appended to line; returns the period's total and
+// sets *count, then starts a new period.
+static uint64_t lt_top(typeof(lt[0]) *tab, char *line, int *n, size_t cap, uint64_t *count) {
+    uint64_t all = 0, cnt = 0;
+    int top[8], ntop = 0;
+    for (int i = 0; i < LT_N; i++) {
+        if (!__atomic_load_n(&tab[i].site, __ATOMIC_ACQUIRE)) continue;
+        uint64_t d = __atomic_load_n(&tab[i].ns, __ATOMIC_RELAXED) - tab[i].ns0;
+        all += d, cnt += __atomic_load_n(&tab[i].n, __ATOMIC_RELAXED) - tab[i].n0;
+        int at;
+        if (ntop < 8) at = ntop++;
+        else if (d > tab[top[7]].ns - tab[top[7]].ns0) at = 7;
+        else continue;
+        top[at] = i;
+        for (int j = at; j > 0; j--) {   // keep top sorted by this period's time
+            uint64_t x = tab[top[j]].ns - tab[top[j]].ns0, y = tab[top[j - 1]].ns - tab[top[j - 1]].ns0;
+            if (x <= y) break;
+            int t = top[j]; top[j] = top[j - 1], top[j - 1] = t;
+        }
+    }
+    for (int j = 0; j < ntop && *n >= 0 && *n < (int)cap - 80; j++) {
+        typeof(lt[0]) *e = &tab[top[j]];
+        *n += snprintf(line + *n, cap - *n, " %p %.1f ms (%llu, max %.2f ms);", e->site, (e->ns - e->ns0) / 1e6,
+                       (unsigned long long)(e->n - e->n0), e->max / 1e6);
+    }
+    for (int i = 0; i < LT_N; i++) tab[i].ns0 = tab[i].ns, tab[i].n0 = tab[i].n, tab[i].max = 0;
+    *count = cnt;
+    return all;
+}
+
+// The lock lines of a summary: the replay threads' waits with the recorder's, then the texture lock's long holds.
+static void lt_report(void) {
+    uint64_t rec[2] = {0, 0}, waits, holds;
+    if (perf_rec_waits) perf_rec_waits(&rec[0], &rec[1]);
+    char line[1400], top[1200];
+    int n = 0;
+    top[0] = 0;
+    uint64_t all = lt_top(lt, top, &n, sizeof top, &waits);
+    rt_log("frametime:   replay lock waits: %.0f ms (%llu waits, %.0f ms unplaced); recorder ring full %.0f ms, drains "
+           "%.0f ms; ref %p:%s", all / 1e6, (unsigned long long)waits, lt_lost_ns / 1e6, (rec[0] - lt_rec0[0]) / 1e6,
+           (rec[1] - lt_rec0[1]) / 1e6, (void *)perf_lock_timing_here, top);
+    n = 0, top[0] = 0;
+    all = lt_top((typeof(lt[0]) *)lh, top, &n, sizeof top, &holds);
+    snprintf(line, sizeof line, "frametime:   texture lock held over 1 ms: %.0f ms (%llu holds):%s", all / 1e6,
+             (unsigned long long)holds, top);
+    rt_log("%s", line);
+    lt_rec0[0] = rec[0], lt_rec0[1] = rec[1], lt_lost_ns = 0;
+}
+
 static uint64_t rp_ns[PERF_RP_N], rp_n[PERF_RP_N];
 void perf_replay_op(int cat, uint64_t ns) {
     if ((unsigned)cat < PERF_RP_N) rp_ns[cat] += ns, rp_n[cat]++;
+}
+
+// The replay ops since the last present (NX2NAVI_REPLAY_TIME), so a frame over 25 ms charged to the replay can say
+// what its replay was: how many ops of each kind, their time, the slowest op and how long the texture lock was held
+// over 1 ms (NX2NAVI_LOCK_TIME). The present thread takes and clears them in ft_frame; the replay adds.
+static volatile int64_t fr_ns[PERF_RP_N], fr_n[PERF_RP_N], fr_max_ns, fr_max_op;
+// Over the period: the frames over 25 ms charged to the replay, their sums, and how often each op was a frame's slowest.
+static uint64_t sr_n, sr_ns[PERF_RP_N], sr_cnt[PERF_RP_N], sr_max_ns, sr_hold_ns, sr_max_op[256], sr_wall, sr_cpu;
+
+void perf_replay_op_at(int cat, uint32_t op, uint64_t ns) {
+    if ((unsigned)cat >= PERF_RP_N) return;
+    perf_replay_op(cat, ns);
+    plat_add64(&fr_ns[cat], (int64_t)ns);
+    plat_add64(&fr_n[cat], 1);
+    // one replay thread at a time records ops; a race with the present only misnames the frame's slowest op
+    if ((int64_t)ns > fr_max_ns) fr_max_ns = (int64_t)ns, fr_max_op = op;
 }
 
 static void ft_report(uint64_t now, const char *tag) {
@@ -166,17 +286,54 @@ static void ft_report(uint64_t now, const char *tag) {
                    (unsigned long long)rp_n[PERF_RP_BIND], rp_ns[PERF_RP_XFER] / 1e6, (unsigned long long)rp_n[PERF_RP_XFER],
                    rp_ns[PERF_RP_OTHER] / 1e6, (unsigned long long)rp_n[PERF_RP_OTHER]);
         }
+        if (lt_on > 0) lt_report();
+        if (per_replay_ns && per_replay_cpu_ns)
+            rt_log("frametime:   replay: %.0f ms, the replaying thread on the CPU for %.0f ms of it (%.0f%%); the frames over "
+                   "25 ms charged to the replay: %.0f ms, on the CPU %.0f ms (%.0f%%)", per_replay_ns / 1e6,
+                   per_replay_cpu_ns / 1e6, 100.0 * per_replay_cpu_ns / per_replay_ns, sr_wall / 1e6, sr_cpu / 1e6,
+                   sr_wall ? 100.0 * sr_cpu / sr_wall : 0.0);
+        if (sr_n && (sr_cnt[PERF_RP_DRAW] || sr_cnt[PERF_RP_BIND])) {   // the replay of the frames over 25 ms charged to it, per frame
+            int top[3] = {-1, -1, -1};
+            for (int o = 0; o < 256; o++)
+                for (int j = 0; j < 3; j++)
+                    if (sr_max_op[o] && (top[j] < 0 || sr_max_op[o] > sr_max_op[top[j]])) {
+                        for (int k = 2; k > j; k--) top[k] = top[k - 1];
+                        top[j] = o;
+                        break;
+                    }
+            char ops[160];
+            int n = 0;
+            ops[0] = 0;
+            for (int j = 0; j < 3 && top[j] >= 0; j++)
+                n += snprintf(ops + n, sizeof ops - n, "%s%s %llu", j ? ", " : "", nvn_op_name((uint32_t)top[j]),
+                              (unsigned long long)sr_max_op[top[j]]);
+            rt_log("frametime:   slow replay frames %llu, per frame: draws %.1f ms (%.0f), binds %.1f ms (%.0f), transfers "
+                   "%.1f ms (%.0f); its slowest op %.1f ms (%s); texture lock held over 1 ms %.1f ms",
+                   (unsigned long long)sr_n, sr_ns[PERF_RP_DRAW] / 1e6 / sr_n, (double)sr_cnt[PERF_RP_DRAW] / sr_n,
+                   sr_ns[PERF_RP_BIND] / 1e6 / sr_n, (double)sr_cnt[PERF_RP_BIND] / sr_n, sr_ns[PERF_RP_XFER] / 1e6 / sr_n,
+                   (double)sr_cnt[PERF_RP_XFER] / sr_n, sr_max_ns / 1e6 / sr_n, ops, sr_hold_ns / 1e6 / sr_n);
+        }
         for (int i = 0; i < ft.nworst; i++) {
             const FtWorst *w = &ft.worst[i];
-            rt_log("frametime:   worst frame %llu: %.1f ms; shader translation %.1f, pipeline build %.1f, texture upload %.1f (astc %.1f), replay %.1f, fence/present wait %.1f, pacing %.1f",
+            char ops[200] = "";
+            if (w->op_n[PERF_RP_DRAW] || w->op_n[PERF_RP_BIND] || w->op_n[PERF_RP_XFER])
+                snprintf(ops, sizeof ops, "; ops: draws %.1f ms (%llu), binds %.1f ms (%llu), transfers %.1f ms (%llu), slowest "
+                         "%s %.1f ms, texture lock held %.1f ms", w->op_ns[PERF_RP_DRAW] / 1e6,
+                         (unsigned long long)w->op_n[PERF_RP_DRAW], w->op_ns[PERF_RP_BIND] / 1e6,
+                         (unsigned long long)w->op_n[PERF_RP_BIND], w->op_ns[PERF_RP_XFER] / 1e6,
+                         (unsigned long long)w->op_n[PERF_RP_XFER], nvn_op_name(w->max_op), w->max_ns / 1e6, w->hold_ns / 1e6);
+            rt_log("frametime:   worst frame %llu: %.1f ms; shader translation %.1f, pipeline build %.1f, texture upload %.1f (astc %.1f), replay %.1f (on the CPU %.1f), fence/present wait %.1f, pacing %.1f%s",
                    (unsigned long long)w->frame, w->ns / 1e6, w->wait[PERF_XLATE] / 1e6, w->wait[PERF_PIPE] / 1e6,
-                   w->wait[PERF_TEX] / 1e6, w->wait[PERF_ASTC] / 1e6, w->replay / 1e6,
-                   (w->wait[PERF_FENCE] + w->wait[PERF_DRAIN]) / 1e6, w->wait[PERF_PACE] / 1e6);
+                   w->wait[PERF_TEX] / 1e6, w->wait[PERF_ASTC] / 1e6, w->replay / 1e6, w->replay_cpu / 1e6,
+                   (w->wait[PERF_FENCE] + w->wait[PERF_DRAIN]) / 1e6, w->wait[PERF_PACE] / 1e6, ops);
         }
     }
     memset(&ft, 0, sizeof ft);
     memset(rp_ns, 0, sizeof rp_ns);
     memset(rp_n, 0, sizeof rp_n);
+    sr_n = sr_max_ns = sr_hold_ns = sr_wall = sr_cpu = 0;
+    per_replay_ns = per_replay_cpu_ns = 0;
+    memset(sr_ns, 0, sizeof sr_ns), memset(sr_cnt, 0, sizeof sr_cnt), memset(sr_max_op, 0, sizeof sr_max_op);
     ft.t0 = now;
 }
 
@@ -196,6 +353,12 @@ void perf_summary_flush(void) {   // at exit (prof_write)
 static uint64_t ft_frame(uint64_t frame, uint64_t now, uint64_t d) {
     int64_t rep = plat_xchg64(&frame_replay_ns, 0);
     vk_texstat_frame(frame, d);
+    uint64_t f_cpu = (uint64_t)plat_xchg64(&frame_replay_cpu_ns, 0);
+    per_replay_ns += rep > 0 ? (uint64_t)rep : 0, per_replay_cpu_ns += f_cpu;
+    uint64_t f_ns[PERF_RP_N], f_n[PERF_RP_N], f_max = (uint64_t)plat_xchg64(&fr_max_ns, 0);
+    uint64_t f_hold = (uint64_t)plat_xchg64(&fr_hold_ns, 0);
+    uint32_t f_op = (uint32_t)fr_max_op;
+    for (int c = 0; c < PERF_RP_N; c++) f_ns[c] = (uint64_t)plat_xchg64(&fr_ns[c], 0), f_n[c] = (uint64_t)plat_xchg64(&fr_n[c], 0);
     if (!summary_t0) {   // the first present starts the period; there is no interval yet
         summary_t0 = now;
         ft.t0 = now;
@@ -225,6 +388,11 @@ static uint64_t ft_frame(uint64_t frame, uint64_t now, uint64_t d) {
         if (part[best] * 4 < d) best = FT_C_OTHER;   // no recorded part explains a quarter of the frame
         ft.slow_n[best]++;
         ft.slow_ns[best] += d;
+        if (best == FT_C_REPLAY) {
+            sr_n++, sr_max_ns += f_max, sr_hold_ns += f_hold, sr_max_op[f_op & 255]++;
+            sr_wall += rep > 0 ? (uint64_t)rep : 0, sr_cpu += f_cpu;
+            for (int c = 0; c < PERF_RP_N; c++) sr_ns[c] += f_ns[c], sr_cnt[c] += f_n[c];
+        }
     }
     if (d > 25000000ull && (ft.nworst < FT_WORST || d > ft.worst[FT_WORST - 1].ns)) {
         int i = ft.nworst < FT_WORST ? ft.nworst++ : FT_WORST - 1;
@@ -233,6 +401,8 @@ static uint64_t ft_frame(uint64_t frame, uint64_t now, uint64_t d) {
         ft.worst[i].ns = d;
         memcpy(ft.worst[i].wait, frame_ns, sizeof frame_ns);
         ft.worst[i].replay = (uint64_t)rep;
+        memcpy(ft.worst[i].op_ns, f_ns, sizeof f_ns), memcpy(ft.worst[i].op_n, f_n, sizeof f_n);
+        ft.worst[i].max_ns = f_max, ft.worst[i].max_op = f_op, ft.worst[i].hold_ns = f_hold, ft.worst[i].replay_cpu = f_cpu;
     }
     if (now - summary_t0 >= FT_PERIOD_NS) {
         ft_report(now, "60 s");

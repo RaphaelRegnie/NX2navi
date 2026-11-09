@@ -52,6 +52,12 @@ void perf_count(int kind);
 // and resource binds between them; xfer is copies and clears.
 enum { PERF_RP_DRAW, PERF_RP_BIND, PERF_RP_XFER, PERF_RP_OTHER, PERF_RP_N };
 void perf_replay_op(int cat, uint64_t ns);
+void perf_replay_op_at(int cat, uint32_t op, uint64_t ns);
+void perf_replay_cpu(uint64_t ns);   // the replaying thread's CPU time over one submission's replay (vk_sync.c)   // as perf_replay_op, also kept per frame for slow frames
+void perf_lock_timing_here(void);
+int perf_lock_holds_on(void);                   // NX2NAVI_LOCK_TIME
+void perf_lock_hold(void *site, uint64_t ns);   // a lock held ns from site (vk_texture.c, holds over 1 ms)   // NX2NAVI_LOCK_TIME: this thread's lock waits go into the frame-time summary
+extern void (*perf_rec_waits)(uint64_t *full_ns, uint64_t *drain_ns);   // set by the back end (vk_rec.c totals)
 void perf_present(uint64_t frame);
 void perf_summary_flush(void);                  // prints the frame-time summary of the running period (exit); the 60 s lines come from perf_present
 void gfx_exit_log(void);                        // back end's lines for the exit summary (weak no-op in prof_win.c)

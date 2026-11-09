@@ -562,6 +562,10 @@ int plat_mutex_trylock(PlatMutex *m) {
     return 0;
 }
 
+// Lock-wait timing is Windows only (platform.h): here the note is kept and never called.
+void plat_lock_timing(PlatLockNote fn) { (void)fn; }
+void plat_mutex_lock_at(PlatMutex *m, void *site) { (void)site; plat_mutex_lock(m); }
+
 void plat_mutex_lock(PlatMutex *m) {
     volatile uint32_t *w = lk(m);
     for (int spin = 0;; spin++) {
