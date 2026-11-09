@@ -565,3 +565,8 @@
 # page the game wrote; 0 (default) copies only the written pages there, which saved 47-57 MiB of copies a frame in
 # Kokiri Forest.
 # flush_upload = 0
+# For measuring: only mirrors of the game's memory pools up to this many KiB send what shaders write through the
+# device address table to game memory as well; larger mirrors keep it in video memory and are not evicted. On PCIe 3.0
+# those second writes cost about 3 ms of GPU time a frame. 0 (default): every mirror sends them. A pool that needs them
+# and is left without shows as foliage stretched into columns or flickering.
+# gpa_twin_max_kb = 0
