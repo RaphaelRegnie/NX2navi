@@ -43,7 +43,7 @@ typedef struct Tex {
     VmaAllocation bound_to;       // the pool memory it is bound into
     uint32_t wgen;                // page generation of the last upload check
     uint32_t checked;             // submit_epoch of the last check from a draw binding
-    uint32_t use_ep;              // submit_epoch when a lookup last reached it (touch)
+    uint32_t use_round;           // look_round when a lookup last reached it (touch)
     uint64_t use_frame;           // gfx_counters.frames then
     int uploaded, released;
     uint32_t rel_serial;          // reg_serial when it was released: slots registered before then are stale (slot_resolve)
@@ -679,12 +679,18 @@ static uint64_t n_pressure_drops;
 static int comes_back_intact(const Tex *e) { return e->pub.mirrored && !e->pub.gpu_owned && !e->gpu_dirty; }
 
 // When a lookup last reached an entry: entry_of (every texture get and slot resolution) and the per-submit check of a
-// slot lookup (vk_texture_by_id_locked). The texture pool refresh looks every registered slot up once per submission
-// (vk_exec_draw.c pool_sync_entries), so an entry no lookup reached for IDLE_SUBMITS submissions and STALE_FRAMES
-// presents (below) has no live descriptor naming it: the game keeps the texture object, nothing samples it.
-#define IDLE_SUBMITS 240
+// slot lookup (vk_texture_by_id_locked). The texture pool refresh looks every registered slot up once in each
+// submission that draws through the pool (vk_exec_draw.c pool_sync_entries), so an entry no lookup reached for
+// IDLE_ROUNDS such submissions and STALE_FRAMES presents (below) has no live descriptor naming it: the game keeps the
+// texture object, nothing samples it. The clock is look_round, which only a submission whose slot checks reached half
+// of the registered pool slots moves on (vk_texture_new_submit): counted in submissions, a pause screen or a fade that
+// draws nothing through the pool made the whole world's textures idle within seconds.
+#define IDLE_ROUNDS 240
+static uint32_t look_round = 1;     // submissions whose lookups walked the texture pool
+static uint32_t round_checks;       // slot checks of the submission being recorded (vk_texture_by_id_locked)
+static uint32_t pool_slots;         // registered slots the pool covers (id < VK_POOL_TEX)
 static void touch(Tex *e) {
-    e->use_ep = submit_epoch;
+    e->use_round = look_round;
     e->use_frame = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
 }
 static int idle(const Tex *e, uint64_t now);
@@ -749,7 +755,7 @@ static int commit_is_low(void) {
 // depth target at the host present (vk_dlssg.c vk_dlssg_frame tags it), after the blit deferred destruction waits for.
 #define STALE_FRAMES 120
 static int idle(const Tex *e, uint64_t now) {
-    return submit_epoch - e->use_ep >= IDLE_SUBMITS && now - e->use_frame >= STALE_FRAMES;
+    return look_round - e->use_round >= IDLE_ROUNDS && now - e->use_frame >= STALE_FRAMES;
 }
 
 static void drop_stale(uint64_t keep, uint64_t *count) {
@@ -767,7 +773,7 @@ static void drop_stale(uint64_t keep, uint64_t *count) {
 
 // NX2NAVI_TEX_EVICT (default on; 0 = only released entries go under VRAM pressure, as before): above the VRAM pressure
 // threshold, once the released entries that come back intact are gone, live entries go too, least recently looked up
-// first: those that come back intact and that no lookup reached for IDLE_SUBMITS submissions and STALE_FRAMES presents
+// first: those that come back intact and that no lookup reached for IDLE_ROUNDS pool walks and STALE_FRAMES presents
 // (touch: no live descriptor names them). A later lookup creates the image again and uploads it from its storage, as
 // for a texture seen the first time. Up to EVICT_STEP entries per check, until the device-local use is 2% of the budget
 // under the threshold; the next check waits until the GPU is past the submissions that may still name the images, as
@@ -786,9 +792,9 @@ static void evict_idle(uint64_t want, uint64_t used, uint64_t budget) {   // tex
     for (uint32_t i = 0; i < by_key.cap; i++) {   // the EVICT_STEP oldest candidates, oldest first
         Tex *e = by_key.vals[i];
         if (!e || e->released || !e->bytes || !comes_back_intact(e) || !idle(e, now)) continue;
-        uint32_t age = submit_epoch - e->use_ep;
+        uint32_t age = look_round - e->use_round;
         int at = nv;
-        while (at > 0 && submit_epoch - v[at - 1]->use_ep < age) at--;
+        while (at > 0 && look_round - v[at - 1]->use_round < age) at--;
         if (at == EVICT_STEP) continue;
         if (nv < EVICT_STEP) nv++;
         memmove(v + at + 1, v + at, sizeof *v * (size_t)(nv - 1 - at));
@@ -1465,6 +1471,7 @@ void vk_texture_register(int id, const tex_t *t, const view_t *v) {
         return;
     }
     s->t = *t;
+    if (!s->used && id < VK_POOL_TEX) pool_slots++;
     s->used = 1;
     s->ce = NULL;
     slots_gen++;
@@ -1635,6 +1642,7 @@ const VkTexImage *vk_texture_by_id_locked(int id, view_t *view, int *has_view) {
     // replay race the GPU read on hardware too). After one check an entry is either uploaded or never uploads (not
     // mirrored, GPU-owned or no CPU layout), so a slot that checked its entry in this submit has nothing left to do.
     if (e && s->cepoch != submit_epoch) {
+        round_checks++;
         if (!e->uploaded || e->checked != submit_epoch) {
             make_fresh_snap(e);
             e->checked = submit_epoch;
@@ -1664,6 +1672,8 @@ uint32_t vk_texture_epoch(void) { return __atomic_load_n(&submit_epoch, __ATOMIC
 
 void vk_texture_new_submit(void) {
     lock();
+    if (round_checks && (uint64_t)round_checks * 2 >= pool_slots) look_round++;   // the last one walked the pool
+    round_checks = 0;
     if (!++submit_epoch) submit_epoch = 1;
     sweep_pressure();
     static uint64_t log_at;
@@ -2424,7 +2434,7 @@ void vk_texture_census(VkTexCensus *s) {
 // With NX2NAVI_TRACE=perf every 600 frames, after vk_memory.c's vram line: what the live entries' own memory holds. By
 // kind: decoded ASTC (as BC3 or RGBA8) and other textures whose content the CPU provides, all of which a re-upload
 // brings back (comes_back_intact), and the GPU-written ones (render targets, textures the GPU drew or copied into),
-// whose content lives only in the image. "idle" is the part no lookup reached for IDLE_SUBMITS submissions and
+// whose content lives only in the image. "idle" is the part no lookup reached for IDLE_ROUNDS pool walks and
 // STALE_FRAMES presents (touch). Then the entries that share their storage address with another live entry (each
 // descriptor of the same storage gets an image of its own), the formats holding the most, and the largest entries.
 void vk_texture_census_log(uint64_t frame) {
@@ -2502,7 +2512,7 @@ void vk_texture_shutdown(void) {
     by_addr = (nvn_hmap){.klen = 8};
     samplers = (nvn_hmap){.klen = sizeof(samp_par)};
     free(tslots), free(sslots);
-    tslots = NULL, sslots = NULL, ntslots = nsslots = 0, nreleased = 0;
+    tslots = NULL, sslots = NULL, ntslots = nsslots = 0, nreleased = 0, pool_slots = 0;
     rel_head = rel_tail = NULL, rel_bytes = 0;
     if (sinfo) memset(sinfo, 0, sizeof *sinfo << 20);   // no slot is registered: tokens 0
     unlock();
