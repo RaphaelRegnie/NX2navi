@@ -1850,6 +1850,21 @@ PlatChild *plat_child_start(const char *exe, const char *arg, uint32_t *err) {
         return NULL;
     }
     CloseHandle(pi.hThread);
+    // Every child goes into one job that ends its processes when its last handle closes, which is when this process
+    // ends: a translator stuck on a program would otherwise outlive a game that exited or crashed before stopping it.
+    // The handle is never closed by hand. A failure leaves the child as it was before.
+    static HANDLE job;
+    static INIT_ONCE job_once = INIT_ONCE_STATIC_INIT;
+    BOOL pending;
+    if (InitOnceBeginInitialize(&job_once, 0, &pending, NULL) && pending) {
+        HANDLE j = CreateJobObjectW(NULL, NULL);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li = {0};
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (j && !SetInformationJobObject(j, JobObjectExtendedLimitInformation, &li, sizeof li)) CloseHandle(j), j = NULL;
+        job = j;
+        InitOnceComplete(&job_once, 0, NULL);
+    }
+    if (job) AssignProcessToJobObject(job, pi.hProcess);
     PlatChild *c = malloc(sizeof *c);
     if (!c) {
         TerminateProcess(pi.hProcess, 1);
