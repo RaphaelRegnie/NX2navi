@@ -195,6 +195,12 @@ game folder is the default `<launcher>\game`. The dump is never touched.
    ```
 
    `--ffx` puts AMD's signed `amd_fidelityfx_vk.dll` (FidelityFX SDK 1.1.4) in the release for FSR 3.1.
+   NVIDIA's `nvngx_dlss.dll` goes in by itself: the script downloads the version `tools/dlss_pin.py` pins from
+   NVIDIA's DLSS SDK repository (cached in `toolchain/launcher-dl/`), checks its size and sha256, and puts it in
+   `bin/` with `nvngx_dlss-NOTICE.txt`; `make_game.py` copies both beside the game. `--dlss FILE` takes a copy on disk
+   instead (it must be the pinned file), `--no-dlss` leaves DLSS out. NVIDIA's RTX SDKs License lets an application
+   ship the library; it also asks that a commercial release be announced to NVIDIA first
+   (https://developer.nvidia.com/sw-notification) and that the use of DLSS be credited.
 
    On Linux it cross-compiles the two programs with clang, lld and llvm-windres against the same MSYS2 packages and
    unpacks Tcl/Tk with msiextract (msitools). It writes into `build/launcher-release`: `NX2navi-Setup-<version>.exe`
