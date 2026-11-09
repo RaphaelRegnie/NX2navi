@@ -150,9 +150,12 @@ def open_path(path):
 
 
 def start_game(exe):
-    """Start the game from its own folder; returns the process to watch."""
+    """Start the game from its own folder; returns the process to watch. ocarina.exe is a console program and the
+    launcher has no console, so without CREATE_NO_WINDOW Windows opened an empty console window beside the game,
+    titled with the exe's path. With it the game still has a console (hidden), which its restarts inherit."""
     exe = Path(exe)
-    flags = {'creationflags': CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
+    flags = {'creationflags': CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' \
+        else {'start_new_session': True}
     return subprocess.Popen([str(exe)], cwd=str(exe.parent), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, close_fds=True, **flags)
 
