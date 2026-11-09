@@ -988,6 +988,23 @@ static int cont_ready(const Cont *c) {
 
 int vk_exec_held(void) { return evo_pending; }
 
+int vk_exec_held_ready(void) {
+    for (int s = 0; evo_pending && s < EVO_QUEUES; s++)
+        if (evq[s].head && cont_ready(evq[s].head)) return 1;
+    return 0;
+}
+
+// Held work that goes on in a submission without commands of its own (the present thread's empty one after its blit,
+// vk_backend.c present_main, or the one a waiting present makes, present_held) gets what any submission's recording
+// gets: the VRAM mirror sync before and the write-back after (vk_mem_mirror_begin/end), and a uniform copy (vk_usnap).
+// Without them its draws read mirrors that missed the CPU's writes since the last submission, and its GPU writes never
+// went back to guest memory: the next vk_mem_mirror_begin dropped the write-back list. NX2NAVI_HELD_SYNC=0: as before.
+static int held_sync(void) {
+    static int on = -1;
+    if (on < 0) on = rt_knob("HELD_SYNC", "1");
+    return on;
+}
+
 // Walks the continuation from where it stopped; 1 when it stopped at another wait (c->i, c->at updated), 0 when done.
 static int cont_walk(VkExec *ex, Cont *c) {
     if (c->at && !vk_exec_event_met(nvn_op_payload(c->at))) {
@@ -1176,7 +1193,8 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     int evo = evo_enabled() && gfx_submit_queue;
     int slot = evo ? evq_slot(gfx_submit_queue) : -1;
     if (evo && slot < 0) evo = 0;
-    if (n) {
+    int synced = n || (evo_pending && held_sync() && vk_exec_held_ready());   // held_sync
+    if (synced) {
         vk_mem_mirror_begin();
         if (evo_pending) {   // the uniform snapshot covers what held submissions bind too: they may go on here
             int tot = n;
@@ -1184,7 +1202,7 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
                 for (Cont *c = evq[s].head; c; c = c->next) tot += c->n;
             uint64_t *all = malloc(sizeof *all * (size_t)tot);
             if (!all) rt_fatal("vk: out of memory (snapshot handles)");
-            memcpy(all, handles, sizeof *all * (size_t)n);
+            if (n) memcpy(all, handles, sizeof *all * (size_t)n);
             int k = n;
             for (int s = 0; s < EVO_QUEUES; s++)
                 for (Cont *c = evq[s].head; c; c = c->next) memcpy(all + k, c->h, sizeof *all * (size_t)c->n), k += c->n;
@@ -1211,7 +1229,7 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     vk_exec_pass_end(ex);
     x_here = 0;
     if (ex->recorded) vk_exec_barrier(ex);   // later submissions see this one's writes
-    if (n) ex->recorded += vk_mem_mirror_end(ex->cb, fence), vk_usnap_end(fence);   // VRAM mirror bytes the GPU wrote go back to guest memory
+    if (synced) ex->recorded += vk_mem_mirror_end(ex->cb, fence), vk_usnap_end(fence);   // VRAM mirror bytes the GPU wrote go back to guest memory
     if (ex->nviews) {
         ViewList *l = malloc(sizeof *l + sizeof(VkImageView) * (size_t)ex->nviews);
         if (!l) rt_fatal("vk: out of memory");

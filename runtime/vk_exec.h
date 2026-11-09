@@ -210,6 +210,7 @@ extern int vk_exec_signalled;                 // set by every replayed SignalEve
 void vk_exec_event_stats(uint64_t *waits, uint64_t *unmet, uint64_t *late, uint64_t *late_subs);
 extern uint64_t vk_exec_submit_seq;   // replay thread: submissions replayed so far
 int vk_exec_held(void);               // replay thread: held submissions waiting for a signal (event order)
+int vk_exec_held_ready(void);         // ... and one of them can go on now (vk_backend.c present_held)
 // vk_dlaa.c: once DLSS has scaled the scene this frame, passes larger than the scene's light target vk_dlaa_swap_img
 // sample DLSS's output vk_dlaa_swap_view in its place, so the game's scaling draw scales DLSS's picture.
 extern const VkTexImage *vk_dlaa_swap_img;
