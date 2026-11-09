@@ -63,7 +63,7 @@ typedef struct PoolRec {
     VmaAllocation malloc_;
     uint32_t acc_sub;                  // replay: the last submission that synced the mirror (mirror_sync)
     uint32_t wb_sub;                   // replay: the last submission that wrote mirror bytes back to guest memory
-    uint32_t refused_sub;              // replay: the submission that refused its mirror for the VRAM budget, 0 none
+    uint32_t retry_sub;                // replay: a mirror refused for the VRAM budget is asked again from here, 0 never
     uint32_t vd_wrote_sub, vd_use_sub; // verify mode: the last submission that bound it written / used its mirror
     uint64_t vd_wrote_n;               // verify mode: written bindings of it so far
     uint32_t mgen;                     // gen_lock: every page write stamped up to this generation is in the mirror
@@ -669,6 +669,26 @@ int vk_mem_vram(uint64_t *used, uint64_t *budget, int *exact) {
     return ok;
 }
 
+// vk_mem_vram's use less the free space inside VMA's device-local blocks: the driver counts a block whole for as long
+// as one allocation lives in it, and the next allocation of its type takes a hole first. The evictions measure with
+// this: a texture or mirror freed in the middle of a block left the driver's figure where it was, so an eviction that
+// waited for that figure to fall went on until nearly every idle texture and mirror was gone (16.2 GiB in use, 9.2 GiB
+// of it free inside blocks after the evictions).
+int vk_mem_vram_live(uint64_t *used, uint64_t *budget) {
+    int exact;
+    if (!vk_mem_vram(used, budget, &exact)) return 0;
+    VkCtx *c = vk_ctx();
+    VmaBudget vb[VK_MAX_MEMORY_HEAPS];
+    vmaGetHeapBudgets(c->vma, vb);
+    uint64_t slack = 0;
+    for (uint32_t h = 0; h < c->mem_props.memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
+        if ((c->mem_props.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+            vb[h].statistics.blockBytes > vb[h].statistics.allocationBytes)
+            slack += vb[h].statistics.blockBytes - vb[h].statistics.allocationBytes;
+    *used = *used > slack ? *used - slack : 0;
+    return 1;
+}
+
 // ---------------------------------------------------------------- page write generations
 // Two-level table over the guest address space (below 2^39): 256 MiB chunks of 65,536 page generations, allocated
 // when a page of the chunk is first stamped. 0 = never stamped.
@@ -1239,6 +1259,7 @@ static void dirty_frame(uint64_t frame) {
 #define VERIFY_SAMPLES 64
 #define VERIFY_LOG 200
 enum { MR_BUDGET, MR_UNTRACKED, MR_OVERLAP, MR_ALLOC, MR_N };
+#define RETRY_SUBS 600                 // a pool refused for the budget asks again this many submissions later (eviction)
 
 int vk_mirror_on;
 static int mirror_verify;
@@ -1364,7 +1385,7 @@ static void mbarrier(VkCommandBuffer cb, VkPipelineStageFlags2 ss, VkAccessFlags
 
 static void refuse(PoolRec *r, int why, const char *what) {
     r->mstate = MS_REFUSED;
-    r->refused_sub = why == MR_BUDGET ? (msub ? msub : 1) : 0;
+    r->retry_sub = why == MR_BUDGET ? (msub + RETRY_SUBS ? msub + RETRY_SUBS : 1) : 0;
     uint64_t n = r->import_hi - r->import_lo;
     static volatile int32_t logged;   // budget refusals are asked again (vk_mem_use): a few lines in all
     if (plat_inc64(&m_refused_n[why]) <= 4 && plat_inc32(&logged) <= 12) {
@@ -1377,22 +1398,23 @@ static void refuse(PoolRec *r, int why, const char *what) {
 }
 
 // ---- eviction (NX2NAVI_MIRROR_EVICT, default on; 0 = a pool over the budget stays imported, as before)
-// A pool whose mirror would not fit the VRAM budget stayed imported for good: in a scene that streams in more pools
-// than fit, whichever pool came last lost its mirror, however hot, while mirrors of pools nothing had used for minutes
-// kept their VRAM. Now the mirrors no submission synced for MIRROR_IDLE submissions make room, least recently synced
-// first (mirror_evict), and a pool refused for the budget asks again after RETRY_SUBS submissions (vk_mem_use). Above
-// the texture threshold (NX2NAVI_TEX_VRAM_PRESSURE, 90% of the budget) mirrors idle for EVICT_IDLE_PRESSURE submissions
-// also go on their own every 8 submissions (vk_mem_mirror_begin), so the textures get the room.
+// A pool whose mirror would not fit the VRAM budget stayed imported for good, however hot, while mirrors nothing had
+// used for minutes kept their VRAM; draws that read an imported pool over PCIe bring a discrete GPU down to a few
+// frames per second. Now a new mirror that does not fit takes the room of mirrors no submission synced for MIRROR_IDLE
+// submissions, least recently synced first (mirror_evict); when that is not enough, idle textures are asked to make
+// the rest (vk_texture_want_room) and the pool asks again RETRY_SOON submissions later; any other pool refused for the
+// budget asks again after RETRY_SUBS submissions (vk_mem_use). Mirrors never go to make room for textures: evicted
+// under VRAM pressure during a menu, 395 of them were refused again when the world came back and the game ran at 4 fps.
+// The budget counts the free space inside VMA's blocks as room (vk_mem_vram_live).
 // A victim was neither synced, used nor written back in the submission being recorded (it has nothing in the copy,
 // write-back or snapshot lists), and every GPU write to it went back to guest memory at the end of the submission that
 // made it (vk_mem_mirror_end), so the imported buffer holds everything. The device address table moves its pages back
 // to the imported buffer (vk_gpa_remap_plain); a shader of a submission in flight that reads the old record still finds
 // the mirror, destroyed only once the submission being recorded is done (vk_defer_buffer). The pool is mirrored again,
-// from a whole copy, on its next buffer use. Its freed bytes count as room at once (evict_room): VMA places the next
-// mirror into the holes before the driver's budget shows the release.
+// from a whole copy, on its next buffer use. Its freed bytes count as room at once (evict_room), until the GPU is past
+// the submission and the destroy shows in VMA's figures.
 #define MIRROR_IDLE 120
-#define RETRY_SUBS 600
-#define EVICT_IDLE_PRESSURE 600
+#define RETRY_SOON 16
 static int mirror_evict_on = -1;
 static int64_t m_evicted_n, m_evicted_bytes, m_retries;
 static uint64_t room_bytes, room_fence;   // replay: bytes evicted that the budget may still count, until room_fence
@@ -1440,7 +1462,7 @@ static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) 
         PoolRec *r = v[n];
         idle_for[n] = msub - r->acc_sub;
         mirror_forget(r);   // off the list, mirror_gen bumped: no buffer use gets the mirror from here on
-        r->mstate = MS_NONE, r->acc_sub = 0, r->refused_sub = 0;
+        r->mstate = MS_NONE, r->acc_sub = 0, r->retry_sub = 0;
         dead[n] = r->mbuf, dead_a[n] = r->malloc_;
         r->mbuf = VK_NULL_HANDLE, r->malloc_ = NULL;
         plat_mutex_lock(&flush_lock);   // flushes not copied yet: the next mirror starts from a whole copy
@@ -1482,10 +1504,13 @@ static void mirror_create(PoolRec *r) {
     if (r1 >= SNAP_REGIONS) return refuse(r, MR_UNTRACKED, "outside the write-watched address space");
     uint64_t used, budget;
     int exact;
-    if (vk_mem_vram(&used, &budget, &exact)) {
-        uint64_t room = evict_room();
-        used = used > room ? used - room : 0;
-        if (used + n + budget / 8 > budget && evict_enabled()) {   // room from mirrors nothing synced for a while
+    int evict = evict_enabled();
+    if (evict ? vk_mem_vram_live(&used, &budget) : vk_mem_vram(&used, &budget, &exact)) {
+        if (evict) {
+            uint64_t room = evict_room();
+            used = used > room ? used - room : 0;
+        }
+        if (used + n + budget / 8 > budget && evict) {   // room from mirrors nothing synced for a while
             char why[96];
             snprintf(why, sizeof why, "room for a %.1f MiB mirror", n / 1048576.0);
             uint64_t f = mirror_evict(used + n + budget / 8 - budget, MIRROR_IDLE, why);
@@ -1495,7 +1520,12 @@ static void mirror_create(PoolRec *r) {
             char why[128];
             snprintf(why, sizeof why, "its %.1f MiB mirror does not fit the VRAM budget (%.0f of %.0f MiB in use)",
                      n / 1048576.0, used / 1048576.0, budget / 1048576.0);
-            return refuse(r, MR_BUDGET, why);
+            refuse(r, MR_BUDGET, why);
+            if (evict) {   // idle textures make the rest; asked again once they had the time
+                vk_texture_want_room(used + n + budget / 8 - budget);
+                r->retry_sub = msub + RETRY_SOON ? msub + RETRY_SOON : 1;
+            }
+            return;
         }
     }
     plat_mutex_lock(&gen_lock);
@@ -1622,11 +1652,11 @@ static void mirror_sync(PoolRec *r) {
 
 void vk_mem_use(VkMemSpan *sp) {
     PoolRec *r = sp->pool;
-    if (r->mstate == MS_REFUSED && r->refused_sub && msub - r->refused_sub >= RETRY_SUBS && evict_enabled()) {
+    if (r->mstate == MS_REFUSED && r->retry_sub && (int32_t)(msub - r->retry_sub) >= 0 && evict_enabled()) {
         plat_dec64(&m_refused_n[MR_BUDGET]);   // counted again if refused again
         plat_add64(&m_refused_bytes[MR_BUDGET], -(int64_t)(r->import_hi - r->import_lo));
         plat_inc64(&m_retries);
-        r->mstate = MS_NONE, r->refused_sub = 0;   // refuse sets it again
+        r->mstate = MS_NONE, r->retry_sub = 0;   // refuse sets it again
     }
     if (r->mstate == MS_NONE) mirror_create(r);
     if (r->mstate != MS_ON) return;
@@ -1997,19 +2027,6 @@ void vk_mem_mirror_begin(void) {
     msub = msub + 1 ? msub + 1 : 1;
     __atomic_add_fetch(&mirror_gen, 1, __ATOMIC_RELEASE);
     mepoch = vk_texture_epoch();
-    if (!(msub & 7) && nm && evict_enabled()) {   // VRAM pressure: idle mirrors make room for the textures
-        static int pressure = -1;   // the textures' threshold (vk_texture.c sweep_pressure)
-        if (pressure < 0) {
-            const char *e = cfg_get("NX2NAVI_TEX_VRAM_PRESSURE");
-            pressure = e && *e ? atoi(e) : 90;
-            if (pressure < 0 || pressure > 100) pressure = 90;
-        }
-        uint64_t used, budget, room = evict_room();
-        int exact;
-        if (pressure && vk_mem_vram(&used, &budget, &exact) && used > room &&
-            used - room > budget / 100 * (uint64_t)pressure)
-            mirror_evict(used - room - budget / 100 * (uint64_t)pressure + budget / 50, EVICT_IDLE_PRESSURE, "VRAM pressure");
-    }
     uint64_t q = 0, run0 = 0, run1 = 0;
     int have = 0;
     plat_mutex_lock_shared(&pool_lock);

@@ -776,13 +776,23 @@ static void drop_stale(uint64_t keep, uint64_t *count) {
 // first: those that come back intact and that no lookup reached for IDLE_ROUNDS pool walks and STALE_FRAMES presents
 // (touch: no live descriptor names them). A later lookup creates the image again and uploads it from its storage, as
 // for a texture seen the first time. Up to EVICT_STEP entries per check, until the device-local use is 2% of the budget
-// under the threshold; the next check waits until the GPU is past the submissions that may still name the images, as
-// their memory goes back to the driver only then (vk_defer_image) and the budget would show the old use.
+// under the threshold. The use counts the free space inside VMA's blocks as free (vk_mem_vram_live): a freed texture
+// leaves a hole the driver still counts, and measured that way the evictions went on until nearly every idle texture
+// was gone. The next check waits until the GPU is past the submissions that may still name the images, as their
+// memory goes back to VMA only then (vk_defer_image). A VRAM mirror that did not fit asks for room the same way, below
+// the threshold too (vk_texture_want_room): a pool without its mirror costs far more than a texture uploaded again.
 #define EVICT_STEP 64
 static int tex_evict = -1;
 static uint64_t evict_wait;                       // vk_sync_fence_done value the next eviction waits for
 static uint64_t n_evict, n_evict_bytes;           // since the last perf line
 static int evict_logs;
+static volatile int64_t room_wanted;               // bytes refused VRAM mirrors asked for (vk_texture_want_room)
+
+void vk_texture_want_room(uint64_t bytes) {
+    int64_t cur = __atomic_load_n(&room_wanted, __ATOMIC_RELAXED);   // the largest request since the last check
+    while ((int64_t)bytes > cur && !__atomic_compare_exchange_n(&room_wanted, &cur, (int64_t)bytes, 0, __ATOMIC_RELAXED,
+                                                                 __ATOMIC_RELAXED)) {}
+}
 
 static void evict_idle(uint64_t want, uint64_t used, uint64_t budget) {   // tex_lock held
     if (vk_sync_fence_done() < evict_wait) return;
@@ -826,9 +836,13 @@ static void sweep_pressure(void) {   // tex_lock held
     if (submit_epoch & 7) return;   // the budget and commit queries every 8 submits
     uint64_t used, budget;
     int exact, dropped = 0;
-    if (vram_pressure && (rel_head || tex_evict) && vk_mem_vram(&used, &budget, &exact) &&
-        used > budget / 100 * (uint64_t)vram_pressure) {
-        uint64_t freed = 0, over = used - budget / 100 * (uint64_t)vram_pressure + budget / 50;
+    uint64_t wanted = tex_evict ? (uint64_t)plat_xchg64(&room_wanted, 0) : 0;
+    int known = vram_pressure && (rel_head || tex_evict || wanted) &&
+                (tex_evict ? vk_mem_vram_live(&used, &budget) : vk_mem_vram(&used, &budget, &exact));
+    if (known && (used > budget / 100 * (uint64_t)vram_pressure || wanted)) {
+        uint64_t freed = 0, over = used > budget / 100 * (uint64_t)vram_pressure
+                                       ? used - budget / 100 * (uint64_t)vram_pressure + budget / 50 : 0;
+        if (wanted > over) over = wanted;
         for (Tex *e = rel_head, *next; e && dropped < PRESSURE_STEP; e = next) {
             next = e->rel_next;
             if (!comes_back_intact(e)) continue;
