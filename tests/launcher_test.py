@@ -1583,13 +1583,41 @@ class MakeGameTest(Tmp):
         self.assertEqual(self.mg.lifted_level(obj, 3, update=False), 3)
 
     def test_updates_skip_shader_preparation(self):
+        """An update leaves the shaders to the game (shader_carry) only when they were prepared and the cache names the
+        translator they were made with: without that the game has nothing to carry them over by."""
         out = self.tmp / 'game'
-        out.mkdir()
+        (out / 'shader-cache').mkdir(parents=True)
         self.assertFalse(self.mg.shader_carry(out))   # nothing prepared yet: the update prepares
         (out / 'shader-prepared.bin').write_bytes(b'x')
+        self.assertFalse(self.mg.shader_carry(out))   # prepared, but the cache names no translator
+        (out / 'shader-cache' / 'identities.txt').write_text('# translators\n' + 'ab' * 32 + '\n')
         self.assertTrue(self.mg.shader_carry(out))
         (out / 'nx2navi.ini').write_text('[performance]\nNX2NAVI_SHADER_CARRY = "0"\n')
         self.assertFalse(self.mg.shader_carry(out))
+
+    def test_cache_from_before_carrying_names_its_translator(self):
+        """Before a new translator goes beside the game, a shader cache with no identities.txt gets one naming the
+        translator still there, in the form runtime/gfx_shader.c reads (ids_parse): '#' lines, then 64 hex digits."""
+        out = self.tmp / 'game'
+        out.mkdir()
+        old = 'B72C60033CE90FC475EF5B4D397555DDA9A52AD0FDF480B8A4E292ED925A6DE7'
+        (out / 'nx2navi_xlate.id').write_text(old + '\r\n')
+        self.mg.note_cache_translator(out)   # no cache: nothing to name
+        self.assertFalse((out / 'shader-cache' / 'identities.txt').exists())
+        (out / 'shader-cache').mkdir()
+        self.mg.note_cache_translator(out)
+        ids = out / 'shader-cache' / 'identities.txt'
+        lines = ids.read_bytes().decode('ascii').split('\n')
+        self.assertTrue(lines[0].startswith('#'))
+        self.assertEqual(lines[1], old.lower())
+        self.assertEqual(self.mg.cache_identities(out), [old.lower()])
+        (out / 'nx2navi_xlate.id').write_text('cd' * 32)   # a file the game keeps is never written over
+        self.mg.note_cache_translator(out)
+        self.assertEqual(self.mg.cache_identities(out), [old.lower()])
+        ids.unlink()
+        (out / 'nx2navi_xlate.id').write_text('not an identity')
+        self.mg.note_cache_translator(out)
+        self.assertFalse(ids.exists())
 
     def test_dlssg_beside_the_game(self):
         """DLSS Frame Generation's files go beside the game only as a whole set, with the licence texts; the release

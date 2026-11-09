@@ -1207,6 +1207,7 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None, update=False):
         state_link.write_text(link_key, encoding='utf-8')
     copy_if_changed(gen / 'romfs-index.bin', out / 'romfs-index.bin')
     xlate = xlate_source()
+    note_cache_translator(out)   # before the new translator replaces the one the shader cache was made with
     for name in (XLATE_NAME, 'nx2navi_xlate.id'):
         copy_if_changed(xlate / name, out / name)
     if (KIT / 'bin' / 'amd_fidelityfx_vk.dll').is_file():   # FSR 3.1 (runtime/vk_ffx.cpp)
@@ -1247,10 +1248,47 @@ def shader_progress(phase, done, total, quiet_s, elapsed_s):
     return {'step': 'shaders', 'fraction': round(fraction, 4), 'detail': detail}
 
 
+# In the game's shader-cache/: the translator identities its translations are of, newest first (runtime/gfx_shader.c,
+# "Carry"): '#' comment lines, then one identity a line in 64 hex digits, the content of nx2navi_xlate.id.
+SHADER_IDS = 'identities.txt'
+HEX64 = re.compile(r'[0-9a-fA-F]{64}')
+
+
+def cache_identities(out):
+    """The translator identities the game's shader cache lists (SHADER_IDS), lower case; [] when it has none."""
+    try:
+        text = (out / 'shader-cache' / SHADER_IDS).read_text(encoding='ascii', errors='replace')
+    except OSError:
+        return []
+    return [line.strip().lower() for line in text.splitlines() if HEX64.fullmatch(line.strip())]
+
+
+def note_cache_translator(out):
+    """Before a new translator goes beside the game: a shader cache that has no SHADER_IDS yet (made before the game
+    carried translations over) gets one naming the translator that made it, the one still beside the game. The game
+    then carries those translations over at this update too (runtime/gfx_shader.c ids_load), and the update need not
+    prepare them all again (shader_carry). Nothing when there is no cache, the file is there, or the old id is no
+    identity."""
+    cache, ids = out / 'shader-cache', out / 'shader-cache' / SHADER_IDS
+    if not cache.is_dir() or ids.exists():
+        return
+    try:
+        old = (out / 'nx2navi_xlate.id').read_text(encoding='ascii', errors='replace').strip()[:64]
+    except OSError:
+        return
+    if not HEX64.fullmatch(old):
+        return
+    tmp = ids.with_name(SHADER_IDS + '.tmp')
+    tmp.write_text('# Translator identities this shader cache holds translations of, newest first\n' + old.lower() + '\n',
+                   encoding='ascii', newline='\n')
+    os.replace(tmp, ids)
+
+
 def shader_carry(out):
     """Whether the game carries the shaders prepared before an update over (runtime/gfx_shader.c, NX2NAVI_SHADER_CARRY,
     on unless the environment or nx2navi.ini sets it to 0) and there are some: shader-prepared.bin is written by a
-    finished preparation."""
+    finished preparation, and the cache must name the translator its translations are of (SHADER_IDS,
+    note_cache_translator), else the game has nothing to carry them over by."""
     if os.environ.get('NX2NAVI_SHADER_CARRY', '').strip() == '0':
         return False
     try:
@@ -1260,7 +1298,7 @@ def shader_carry(out):
                 return False
     except OSError:
         pass
-    return (out / 'shader-prepared.bin').is_file()
+    return (out / 'shader-prepared.bin').is_file() and bool(cache_identities(out))
 
 
 def step_shaders(out, update=False):
@@ -1274,6 +1312,7 @@ def step_shaders(out, update=False):
     # has one: the compile step, which always runs first, stops a build without it.
     for d in (KIT / 'bin', KIT / 'build' / 'xlate'):
         if (d / XLATE_NAME).is_file():
+            note_cache_translator(out)
             for name in (XLATE_NAME, 'nx2navi_xlate.id'):
                 copy_if_changed(d / name, out / name)
             break
