@@ -340,6 +340,11 @@ class UninstallTest(Tmp):
         subprocess.run(f'cmd.exe /c "{script.replace("ping -n 3 127.0.0.1 >nul", "echo")}"', capture_output=True)
         self.assertFalse(root.exists())
 
+    def test_script_leaves_out_percent_paths(self):
+        script = winsys.uninstall_script([Path('C:/%HOMEPATH%'), Path('C:/x/a')], [Path('C:/%TEMP%/b')])
+        self.assertNotIn('%', script)
+        self.assertIn('a', script)
+
 
 # ---------------------------------------------------------------- toolchain
 

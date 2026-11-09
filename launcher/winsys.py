@@ -222,11 +222,13 @@ def uninstall_plan(layout, remove_game=''):
 
 def uninstall_script(gone, empty):
     """The cmd.exe line that deletes them once the launcher has exited: a file with del, a folder with rmdir /s, the
-    folders that must be empty with a plain rmdir (which leaves a folder that still holds something)."""
+    folders that must be empty with a plain rmdir (which leaves a folder that still holds something). A path holding
+    % is left out: cmd.exe expands %NAME% even inside quotes, so a folder named C:\%HOMEPATH% would delete another."""
     steps = ['ping -n 3 127.0.0.1 >nul']
     for p in gone:
-        steps.append(f'(if exist "{p}\\*" (rmdir /s /q "{p}") else if exist "{p}" (del /f /q "{p}"))')
-    steps += [f'rmdir "{p}" 2>nul' for p in empty]
+        if '%' not in str(p):
+            steps.append(f'(if exist "{p}\\*" (rmdir /s /q "{p}") else if exist "{p}" (del /f /q "{p}"))')
+    steps += [f'rmdir "{p}" 2>nul' for p in empty if '%' not in str(p)]
     return ' & '.join(steps)
 
 
@@ -244,6 +246,9 @@ def uninstall(layout, remove_game='', log=print):
             pass
         # one command line as cmd.exe reads it: a list would have its quotes escaped as \", which cmd.exe does not
         # understand, and no rmdir would find its folder
+        kept = [str(p) for p in list(gone) + list(empty) if '%' in str(p) and os.path.exists(p)]
+        if kept:
+            log('uninstall: remove these yourself (their names hold %): ' + ', '.join(kept))
         start_detached(f'cmd.exe /c "{uninstall_script(gone, empty)}"', cwd=os.environ.get('TEMP', 'C:\\'))
     else:
         log('uninstall: remove these yourself: ' + ', '.join(str(p) for p in gone if p.exists()))
