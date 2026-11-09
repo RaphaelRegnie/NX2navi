@@ -474,6 +474,10 @@
 # Extra lines in the log, comma separated: svc, host, ipc, fs, gfx, perf, sched, audio, present or all. The menu's
 # Performance log sets perf (frame timings). Default: none.
 # trace = perf
+# 1: with trace = perf, every 600 frames a walk of the process's address space counts its private and write-combined
+# memory (the "mem: process" line). The walk holds the address-space lock for 100-240 ms and delays the next frame by
+# as much, so it is off unless asked for.
+# mem_census = 0
 # Flight recorder: keeps the last frames and saves them to a flight folder next to the folder of nx2navi.exe when a frame
 # takes longer than flight_spike_ms (0 to 60000).
 # flight = 0

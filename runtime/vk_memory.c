@@ -2498,7 +2498,12 @@ static void heap_log(VkCtx *c, uint64_t frame, const VmaBudget *vb) {
                       d->statistics.allocationBytes / M, d->allocationSizeMax / M);
     }
     rt_log("%s", line);
-    if (plat_xchg32(&census_busy, 1)) return;
+    // The address-space walk of the census (plat_mem_census, 100-240 ms of VirtualQuery) runs on its own thread, but
+    // it holds the process's address-space lock, which the game's threads take at every page fault and every
+    // VirtualAlloc: the present after each walk arrived 65-120 ms late. NX2NAVI_MEM_CENSUS=1 asks for it.
+    static int census_on = -1;
+    if (census_on < 0) census_on = cfg_bool("NX2NAVI_MEM_CENSUS");
+    if (!census_on || plat_xchg32(&census_busy, 1)) return;
     CensusJob *j = malloc(sizeof *j);
     if (j) *j = (CensusJob){c, frame};
     if (!j || !plat_thread_spawn(census_main, j, "mem census", 0)) free(j), plat_xchg32(&census_busy, 0);
