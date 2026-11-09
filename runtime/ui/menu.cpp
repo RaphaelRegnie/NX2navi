@@ -739,16 +739,6 @@ static void row_fps_limit() {
     opt_choice_list("NX2NAVI_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, n, UI_MENU_FPS_LIMIT_DESC, cur, note);
 }
 
-// The menu's name of a NX2NAVI_VK_PRESENT mode (gfx_window_present_mode); NULL for another.
-static const char *present_name(const char *mode) {
-    static const struct { const char *mode; UiTextId name; } names[] = {
-        {"mailbox", UI_MENU_PRESENT_MAILBOX}, {"fifo", UI_MENU_PRESENT_VSYNC}, {"immediate", UI_MENU_PRESENT_IMMEDIATE},
-    };
-    for (const auto &n : names)
-        if (!strcmp(n.mode, mode)) return menu_text(n.name);
-    return nullptr;
-}
-
 // "in use: ..." under the VSync row when the swapchain does other than the row says: VSync when it is off and the driver
 // cannot present without waiting, Immediate when it is on and the driver has neither mailbox nor relaxed FIFO
 // (gfx_present.c pick_present_mode), so the game tears; NULL otherwise, and before the first swapchain.
@@ -780,6 +770,23 @@ static bool dlss_offered(void) {
 // for the mode (vk_dlaa.c evaluate, dlss_preset at its default). The list: bilinear, FSR 1, the DLSS modes where DLSS
 // runs (dlss_offered), the FSR 3.1 modes; a DLSS mode still set where DLSS does not run stays listed last until another
 // choice replaces it, so the row shows what is set.
+// The Upscaling row's name of what is set now, for the performance overlay.
+static void upscaling_name(char *out, size_t size) {
+    static const char *const modes[] = {"dlaa", "quality", "balanced", "performance", "ultra_performance"};
+    static const UiTextId dlss[] = {UI_MENU_DLSS_DLAA, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED, UI_MENU_DLSS_PERFORMANCE, UI_MENU_DLSS_ULTRA};
+    static const UiTextId fsr3[] = {UI_MENU_FSR3_NATIVE, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED, UI_MENU_DLSS_PERFORMANCE, UI_MENU_DLSS_ULTRA};
+    if (!cfg_bool("NX2NAVI_DLAA")) {
+        if (strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr")) snprintf(out, size, "%s", menu_text(UI_MENU_UPSCALER_BILINEAR));
+        else snprintf(out, size, menu_text(UI_MENU_OV_FMT_FSR), cfg_int("NX2NAVI_SHARPNESS"));
+        return;
+    }
+    int mode = 0;
+    for (int i = 0; i < 5; i++)
+        if (!strcmp(cfg_value("NX2NAVI_DLSS"), modes[i])) mode = i;
+    if (!strcmp(cfg_value("NX2NAVI_TAA"), "fsr3")) snprintf(out, size, "AMD FSR 3.1 %s", menu_text(fsr3[mode]));
+    else snprintf(out, size, mode ? "DLSS %s" : "NVIDIA %s", menu_text(dlss[mode]));
+}
+
 static void row_upscaling(void) {
     static const char *const modes[] = {"dlaa", "quality", "balanced", "performance", "ultra_performance"};
     static const UiTextId mode_names[] = {UI_MENU_DLSS_DLAA, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED,
@@ -824,7 +831,7 @@ static void row_upscaling(void) {
     bool temporal = now.kind >= DLSS;
     int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, n, cur, 1,
                               dlss ? UI_MENU_UPSCALING_DESC : UI_MENU_UPSCALING_DESC_FSR,
-                              temporal ? menu_text(dlss ? UI_MENU_UPSCALING_DLSS_NOTE : UI_MENU_UPSCALING_FSR_NOTE) : nullptr);
+                              temporal && dlss ? menu_text(UI_MENU_UPSCALING_DLSS_NOTE) : nullptr);
     if (nv < 0 || nv >= n) return;
     const Entry e = list[nv];
     opt_apply("NX2NAVI_UPSCALER", e.kind == FSR1 ? "fsr" : "bilinear");
@@ -858,7 +865,7 @@ static void row_hdr(void) {
     // game's own tonemap in place (vk_hdr.c aces_extend), so NX2NAVI_HDR_HUE changes nothing in this game
 }
 
-// Frame generation (vk_fg.cpp), after a restart; it needs a temporal upscaler's motion vectors
+// Frame generation (vk_fg.cpp, at once; NVIDIA's after a restart); it needs a temporal upscaler's motion vectors
 static void row_framegen(void) {
     // the generated frames are made from DLSS's or FSR 3.1's motion vectors: without one of them it would do nothing
     const bool dlss = dlss_offered();
@@ -1316,9 +1323,8 @@ static void perf_tick(uint64_t now, const MenuTarget *t) {
     g_perf_last_ns = now;
 }
 
-// The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), how the
-// present scales the image to the window (gfx_present.c, the last present), the frame limit and the presentation mode
-// in use; formatted into the panel's picture lines.
+// The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), then the
+// settings as the menu's rows name them, so the overlay and the menu agree.
 static void perf_picture(const MenuTarget *t, PerfPanel *p) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
@@ -1326,24 +1332,24 @@ static void perf_picture(const MenuTarget *t, PerfPanel *p) {
     snprintf(v[0], sizeof v[0], menu_text(UI_MENU_OV_FMT_SIZE), t->width, t->height);
     snprintf(v[1], sizeof v[1], menu_text(UI_MENU_OV_FMT_SIZE), (unsigned)t->image_w, (unsigned)t->image_h);
     snprintf(v[2], sizeof v[2], menu_text(UI_MENU_OV_FMT_SCENE), scene[0], scene[1], scene[0] * 100.0 / out[0]);
-    int sharp = cfg_int("NX2NAVI_SHARPNESS");
-    sharp = sharp < 0 ? 0 : sharp > 100 ? 100 : sharp;
-    if (t->scaler == 2) {
-        snprintf(v[3], sizeof v[3], menu_text(UI_MENU_OV_FMT_FSR), sharp);
-    } else if (t->scaler == 3) {   // shrunk by the blit, then RCAS (vk_fsr.c shrink_sharpen)
-        snprintf(v[3], sizeof v[3], menu_text(UI_MENU_OV_FMT_SHRINK), sharp);
-    } else {
-        // FSR with sharpness 0 and an image larger than the window: the plain shrink blit (vk_fsr_record)
-        int down = t->scaler == 1 && !strcmp(cfg_value("NX2NAVI_UPSCALER"), "fsr") &&
-                   (t->image_w > (int)t->width || t->image_h > (int)t->height);
-        snprintf(v[3], sizeof v[3], "%s",
-                 menu_text(down ? UI_MENU_OV_SCALE_DOWN : t->scaler ? UI_MENU_OV_SCALE_BILINEAR : UI_MENU_OV_SCALE_NONE));
-    }
+    upscaling_name(v[3], sizeof v[3]);
     double hz = frame_step_limit_hz();
     snprintf(v[4], sizeof v[4], "%s", menu_text(UI_MENU_OV_NONE));
     if (hz > 0) snprintf(v[4], sizeof v[4], menu_text(UI_MENU_OV_FPS), hz);
-    const char *pm = present_name(gfx_window_present_mode());
-    snprintf(v[5], sizeof v[5], "%s", pm ? pm : menu_text(UI_MENU_OV_NONE));
+    snprintf(v[5], sizeof v[5], "%s", menu_text(strcmp(cfg_value("NX2NAVI_VK_PRESENT"), "immediate") ? UI_MENU_ON : UI_MENU_OFF));
+    v[6][0] = v[7][0] = 0;
+    if (wide_available()) {
+        const char *a = cfg_value("NX2NAVI_GAME_ASPECT");
+        snprintf(v[6], sizeof v[6], "%s", menu_text(!strcmp(a, "window") ? UI_MENU_GAME_ASPECT_WINDOW : !strcmp(a, "21:9") ? UI_MENU_GAME_ASPECT_21_9
+                                                    : !strcmp(a, "32:9") ? UI_MENU_GAME_ASPECT_32_9 : UI_MENU_GAME_ASPECT_16_9));
+        const char *r = cfg_value("NX2NAVI_GAME_RES");
+        if (!strcmp(r, "window")) snprintf(v[7], sizeof v[7], "%s", menu_text(UI_MENU_GAME_RES_NATIVE));
+        else snprintf(v[7], sizeof v[7], "%sp", r);
+    }
+    const char *hdr = cfg_value("NX2NAVI_HDR");
+    snprintf(v[8], sizeof v[8], "%s", menu_text(!strcmp(hdr, "native") ? UI_MENU_HDR_NATIVE : cfg_bool("NX2NAVI_HDR") ? UI_MENU_HDR_ENHANCED : UI_MENU_FRAMEGEN_OFF));
+    const char *fg = cfg_value("NX2NAVI_FRAMEGEN");
+    snprintf(v[9], sizeof v[9], "%s", !strcmp(fg, "fsr3") ? "AMD FSR 3.1" : !strcmp(fg, "dlss") ? "NVIDIA DLSS" : menu_text(UI_MENU_FRAMEGEN_OFF));
     // The 3D scene's size is known only where resolution.c sets it (the builds with its patch sets); Ocarina sizes its
     // own scene dynamically and res_sizes would report a fixed 1600x900, so the line is left out
     p->scene_known = res_adjustable() != 0;

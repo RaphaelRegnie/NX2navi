@@ -2776,6 +2776,22 @@ static void bind_vertex_buffers(VkExec *ex) {
     B.vb_valid = 1;
 }
 
+// NX2NAVI_FOLIAGE_SHADOW_CULL=<layer>[f] (0 to 3, default 1; 3 turns it off): the foliage's mesh draws into the sun's shadow cascades
+// from this layer on drop one side of their cards ("f": the front faces, else the back faces). The game draws them
+// double-sided, and stacks of alpha-tested cards seen from the sun reached about 1,000 million fragments in one draw of
+// the 2.5 million texel far cascade, where half the cards still cover the same texels. Cull mode is dynamic state, so
+// this needs no other pipeline.
+static void foliage_shadow_cull(const VkExec *ex, VkPipeState *s) {
+    static int from = -1, face;
+    if (from < 0) {
+        const char *e = cfg_get("NX2NAVI_FOLIAGE_SHADOW_CULL");
+        from = e && *e ? atoi(e) : 1;
+        face = e && strchr(e, 'f') ? NVN_FACE_FRONT : NVN_FACE_BACK;
+    }
+    if (!ex->color[0].image && ex->depth.image && (int)ex->depth.base_layer >= from && s->poly.cull == NVN_FACE_NONE)
+        s->poly.cull = (unsigned)face;
+}
+
 // NX2NAVI_PIPE_SKIP: which draws are skipped, rather than waited for, while their shaders or pipeline build.
 // strict (0): only draws whose pass targets were all rendered in the previous presented frame; a pass with a target
 //   that was not counts as one-shot and waits.
@@ -2953,6 +2969,7 @@ static int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int
     uint32_t fbl = feedback_prepare(ex, fs);
     VkPipeState s = ex->pipe;
     s.vs = vs, s.fs = fs, s.ts = ts;
+    if (mesh) foliage_shadow_cull(ex, &s);
     s.feedback = (uint8_t)((fbl & 0xff ? 1 : 0) | (fbl & 0x100 ? 2 : 0));
     s.prim = (uint8_t)prim;
     s.depth_minus_w = (uint8_t)(nvn_depth_minus_w() != 0);
@@ -3033,7 +3050,7 @@ static int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int
     if (fbl & ex->fb_dirty) feedback_barrier(ex);
     feedback_written(ex, &s, fbl);
     if (!mesh) bind_vertex_buffers(ex);
-    if (vk_dump_armed && !mesh) vk_dump_draw(ex, &s, p, info);
+    if (vk_dump_armed) vk_dump_draw(ex, &s, p, info);
     if (vk_hdr_track) vk_hdr_draw(ex, info);
     vk_exec_oq_draw(ex);
     DRS.issued[mesh]++;
@@ -3813,6 +3830,25 @@ static PFN_vkCmdDrawMeshTasksEXT draw_mesh_fn(void) {
     return fn;
 }
 
+// NX2NAVI_FOLIAGE_SHADOW_VRS (0 to 3, default 2): the foliage's mesh draws in the shadow cascades from this one on shade one
+// fragment per 2x2 pixels; 3 turns it off. A leaf's alpha test then runs a quarter as often, and the far cascade's texels
+// are metres across the forest floor, where the coarser cut-out does not show. A mesh pipeline has the rate as dynamic
+// state, so every mesh draw sets it.
+static void mesh_shading_rate(VkExec *ex) {
+    static PFN_vkCmdSetFragmentShadingRateKHR fn;
+    static int looked, from;
+    if (!looked) {
+        looked = 1;
+        const char *e = cfg_get("NX2NAVI_FOLIAGE_SHADOW_VRS");
+        from = e && *e ? atoi(e) : 2;
+        if (vk_ctx()->has_vrs)
+            fn = (PFN_vkCmdSetFragmentShadingRateKHR)vkGetDeviceProcAddr(vk_ctx()->device, "vkCmdSetFragmentShadingRateKHR");
+    }
+    if (!fn) return;
+    rec_shading_rate(fn, ex->cb, !ex->color[0].image && ex->depth.image && (int)ex->depth.base_layer >= from ? 2 : 1);
+    ex->recorded++;
+}
+
 static void op_draw_mesh(VkExec *ex, const p_draw_mesh *d) {
     PFN_vkCmdDrawMeshTasksEXT fn = draw_mesh_fn();
     if (!fn) return warn_once(W_MESH, "mesh draws need VK_EXT_mesh_shader: skipped");
@@ -3828,6 +3864,7 @@ static void op_draw_mesh(VkExec *ex, const p_draw_mesh *d) {
         n_logged++;
         rt_log("vk: mesh draw: %u workgroups, program %llu", d->count, (unsigned long long)ex->prog->serial);
     }
+    mesh_shading_rate(ex);
     rec_draw_mesh(fn, ex->cb, d->count, 1, 1);
     ex->recorded++;
 }
@@ -3840,6 +3877,35 @@ static void op_draw_mesh(VkExec *ex, const p_draw_mesh *d) {
 enum { MESH_RING = 4096 };
 static VkBuffer mesh_ring;
 static uint32_t mesh_ring_next;
+
+// NX2NAVI_GPU_PASSES: the workgroup counts of the indirect mesh draws of the timed frames, copied to host memory.
+int vk_gpu_passes_capturing(void);
+enum { MESH_COUNTS = 4096 };
+static VkBuffer mesh_count_buf;
+static uint32_t *mesh_count_map, mesh_count_n, mesh_count_was;
+uint32_t vk_exec_mesh_counts(const uint32_t **out) {
+    *out = mesh_count_map;
+    return mesh_count_map ? mesh_count_n : 0;
+}
+static void mesh_count_note(VkExec *ex, const VkMemSpan *src) {
+    uint32_t cap = (uint32_t)vk_gpu_passes_capturing();
+    if (!cap) { mesh_count_was = 0; return; }
+    if (!mesh_count_was) mesh_count_was = 1, mesh_count_n = 0;
+    if (!mesh_count_buf) {
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = 4ull * MESH_COUNTS,
+                                 .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        VmaAllocation a;
+        if (vmaCreateBuffer(vk_ctx()->vma, &bi, &ai, &mesh_count_buf, &a, &info) != VK_SUCCESS) return;
+        mesh_count_map = info.pMappedData;
+    }
+    if (mesh_count_n >= MESH_COUNTS) return;
+    VkBufferCopy cp = {src->offset, 4ull * mesh_count_n++, 4};
+    vkCmdCopyBuffer(ex->cb, src->buffer, mesh_count_buf, 1, &cp);
+    ex->recorded++;
+}
 
 static int mesh_ring_entry(VkExec *ex, const VkMemSpan *src, VkDeviceSize *at) {
     if (!mesh_ring) {
@@ -3857,6 +3923,7 @@ static int mesh_ring_entry(VkExec *ex, const VkMemSpan *src, VkDeviceSize *at) {
     vkCmdFillBuffer(ex->cb, mesh_ring, *at + 4, 8, 1);
     VkBufferCopy cp = {src->offset, *at, 4};
     vkCmdCopyBuffer(ex->cb, src->buffer, mesh_ring, 1, &cp);
+    mesh_count_note(ex, src);
     VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
                            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
@@ -3897,6 +3964,7 @@ static void op_draw_mesh_ind(VkExec *ex, const p_draw_mesh_ind *d) {
         rt_log("vk: indirect mesh draw: arguments at %#llx, program %llu", (unsigned long long)d->ind,
                (unsigned long long)ex->prog->serial);
     }
+    mesh_shading_rate(ex);
     rec_draw_mesh_ind(fn, ex->cb, mesh_ring, at, 1, 12);
     ex->recorded++;
     vk_mem_count(ip.cls, VK_MUSE_IND, 4);

@@ -37,7 +37,7 @@ typedef struct VkCtx {
         has_astc_ldr,                       // textureCompressionASTC_LDR (enabled when reported)
         has_calibrated,                     // VK_KHR/EXT_calibrated_timestamps (GPU idle split in the perf line)
         has_hdr_metadata,                   // VK_EXT_hdr_metadata (vk_hdr.c vk_hdr_metadata)
-        has_mesh_shader;                    // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
+        has_mesh_shader, has_mesh_queries, has_vrs;                    // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
     // Feedback loops (maxwell.md 1.9, vk_exec_draw.c feedback_prepare): a draw samples a target of its open pass that
     // an earlier draw of the pass wrote. NX2NAVI_FEEDBACK=0: VK_FEEDBACK_OFF (sampled in GENERAL without a barrier, the
     // old behaviour); VK_FEEDBACK_LAYOUT with VK_EXT_attachment_feedback_loop_layout and dynamicRenderingLocalRead
@@ -110,7 +110,10 @@ typedef struct {
     uint64_t fence;                     // the submission: the timeline value it signals
     VkFormat color[8], depth;           // attachment formats (VK_FORMAT_UNDEFINED: none)
     const GfxShader *first[2], *last[2];// vertex and fragment shader of the first and last draw; a dispatch: first[0]
+    uint32_t gp;                        // NX2NAVI_GPU_PASSES: the timestamp pair of this mark plus one; 0 none
+    uint32_t layer;                     // NX2NAVI_GPU_PASSES: the first layer of the depth target (a shadow cascade)
 } VkPassMark;
+void vk_gpu_passes_frame(uint64_t frame);   // vk_crumbs.c, each present: NX2NAVI_GPU_PASSES, GPU time per pass and dispatch
 // Pass marks wanted and possible (NX2NAVI_PASS_CRUMBS and the extensions): set by vk_crumbs_init.
 extern int vk_pass_marks_on;
 // vk_device.c create_device, before vkCreateDevice: 1 when NX2NAVI_PASS_CRUMBS asks for NVIDIA checkpoints.

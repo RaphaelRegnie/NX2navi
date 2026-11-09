@@ -1568,13 +1568,14 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                                               .attachmentCount = k->n_color, .pAttachments = cba};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                            .dynamicStateCount = P.n_dyn, .pDynamicStates = P.dyn};
-    VkDynamicState mdyn[sizeof P.dyn / sizeof P.dyn[0]];
+    VkDynamicState mdyn[sizeof P.dyn / sizeof P.dyn[0] + 1];
     if (mesh) {   // a mesh pipeline must not list vertex input, topology or primitive restart as dynamic
         uint32_t n = 0;
         for (uint32_t i = 0; i < P.n_dyn; i++)
             if (P.dyn[i] != VK_DYNAMIC_STATE_VERTEX_INPUT_EXT && P.dyn[i] != VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE &&
                 P.dyn[i] != VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY && P.dyn[i] != VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE)
                 mdyn[n++] = P.dyn[i];
+        if (vk_ctx()->has_vrs) mdyn[n++] = VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR;   // vk_exec_draw.c mesh_shading_rate
         dy.dynamicStateCount = n, dy.pDynamicStates = mdyn;
     }
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .colorAttachmentCount = k->n_color,

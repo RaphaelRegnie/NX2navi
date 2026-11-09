@@ -749,6 +749,9 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
     sp(&b, "    blend: enabled targets %#x; target 0 rgb %u*src %u*dst eq %u, alpha %u*src %u*dst eq %u; channel mask %#x\n",
        (unsigned)s->color.blend_en, (unsigned)bl->src_rgb, (unsigned)bl->dst_rgb, (unsigned)bl->eq_rgb,
        (unsigned)bl->src_a, (unsigned)bl->dst_a, (unsigned)bl->eq_a, (unsigned)s->chmask.mask);
+    sp(&b, "    depth: test %u write %u func %u; alpha func %u; cull %u; a2c %u; samples %u; mesh task %d\n", (unsigned)s->ds.dt,
+       (unsigned)s->ds.dw, (unsigned)s->ds.df, (unsigned)s->color.alpha_func, (unsigned)s->poly.cull, (unsigned)s->ms.a2c,
+       (unsigned)s->samples, s->ts != NULL);
     describe_bindings(&b, ex, info);
     ents[nents++] = (Ent){p, th, 1, b.s};
 out:

@@ -44,6 +44,7 @@ void rec_blend_equation(PFN_vkCmdSetColorBlendEquationEXT fn, VkCommandBuffer cb
 void rec_write_mask(PFN_vkCmdSetColorWriteMaskEXT fn, VkCommandBuffer cb, uint32_t first, uint32_t n,
                     const VkColorComponentFlags *v);
 void rec_draw_mesh(PFN_vkCmdDrawMeshTasksEXT fn, VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z);
+void rec_shading_rate(PFN_vkCmdSetFragmentShadingRateKHR fn, VkCommandBuffer cb, uint32_t size);   // size x size pixels per fragment
 void rec_draw_mesh_ind(PFN_vkCmdDrawMeshTasksIndirectEXT fn, VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, uint32_t n,
                        uint32_t stride);
 // A pass mark (vk_crumbs.c vk_pass_mark_cmd: a buffer marker and a checkpoint), in order with the commands around it.

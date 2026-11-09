@@ -203,11 +203,12 @@ static int movie_cap_hz(void) {
 // frames, so the two never stack. NX2NAVI_RTSS=0 and frame generation (RTSS would count the generated frames) keep it out.
 uint64_t frame_step_cap_ns(void) {
     frame_limit_live();
-    static int rtss = -1;
-    if (rtss < 0) {
+    static int rtss_allowed = -1;
+    if (rtss_allowed < 0) {
         const char *e = cfg_get("NX2NAVI_RTSS");
-        rtss = !(e && !strcmp(e, "0")) && !vk_fg_wanted();
+        rtss_allowed = !(e && !strcmp(e, "0"));
     }
+    int rtss = rtss_allowed && !vk_fg_wanted();
     int movie_hz = movie_cap_hz();
     static int movie_was, movie_logs;
     if (!!movie_hz != movie_was) {

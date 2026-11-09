@@ -71,6 +71,7 @@ static struct {
     PFN_Evaluate evaluate;
     PFN_Release release;
     int tried, loaded, available;
+    int ngx_up;   // vk_dlaa_init brought NGX up: DLSS serves this run
     int wanted;   // -1 not read yet
 } N = {.wanted = -1};
 
@@ -104,23 +105,19 @@ static int p_getp(const NgxParam *p, const char *n, void **v) { return NGX_OK(((
 #define DLSS_MODEL "libnvidia-ngx-dlss.so.<version>"
 #endif
 
-// NGX is brought up only when dlaa is on at start: its device extensions can only be asked for at device creation, and
-// loading the driver's NGX core on every NVIDIA machine would cost start time and change the device with DLAA off. So
-// dlaa applies after a restart; switched off, nothing else of DLAA runs.
+// NGX is brought up only when DLSS is wanted at start: its device extensions can only be asked for at device creation,
+// and loading the driver's NGX core on every NVIDIA machine would cost start time and change the device with DLAA off.
+// So DLSS applies after a restart. FSR 3.1 (amd_fidelityfx_vk.dll, vk_ffx.cpp) asks nothing of the device: NX2NAVI_TAA
+// and dlaa follow the setting at once when NGX is not up, and vk_dlaa_frame loads the library the first time it is used.
 int vk_dlaa_wanted(void) {
-    static int wanted = -1;
-    if (wanted < 0) wanted = cfg_bool("NX2NAVI_DLAA");
-    return wanted;
+    static int at_start = -1;
+    if (at_start < 0) at_start = cfg_bool("NX2NAVI_DLAA");
+    return at_start || (!N.ngx_up && cfg_bool("NX2NAVI_DLAA") && !strcmp(cfg_value("NX2NAVI_TAA"), "fsr3"));
 }
 
-// The temporal upscaler behind dlaa (NX2NAVI_TAA, read once: like dlaa it applies after a restart): NVIDIA DLSS through
-// NGX, or AMD FSR 3.1 through amd_fidelityfx_vk.dll (vk_ffx.cpp), which takes the same inputs and needs no device
-// extensions. The DLSS mode setting (NX2NAVI_DLSS) is the render scale for both.
-static int fsr3(void) {
-    static int on = -1;
-    if (on < 0) on = !strcmp(cfg_value("NX2NAVI_TAA"), "fsr3");
-    return on;
-}
+// The temporal upscaler behind dlaa: NVIDIA DLSS through NGX, once NGX is up, or else AMD FSR 3.1, which takes the same
+// inputs. The DLSS mode setting (NX2NAVI_DLSS) is the render scale for both.
+static int fsr3(void) { return !N.ngx_up && !strcmp(cfg_value("NX2NAVI_TAA"), "fsr3"); }
 int vk_dlaa_fsr3(void) { return vk_dlaa_wanted() && fsr3(); }
 
 static int core_load(void) {
@@ -275,6 +272,7 @@ void vk_dlaa_init(void) {
         p_geti(caps, "SuperSampling.NeedsUpdatedDriver", &driver);
     }
     N.available = avail != 0;
+    N.ngx_up = 1;
     rt_log("dlaa: NGX up; DLSS %s%s", avail ? "available" : "NOT available (is " DLSS_MODEL " next to the executable?)",
            driver ? "; the driver needs an update" : "");
 }
@@ -1481,6 +1479,7 @@ void vk_dlaa_frame(void) {
     vk_dlaa_swap_img = NULL, vk_dlaa_swap_view = VK_NULL_HANDLE;
     dlss_mode();
     preset_check();
+    if (!N.ngx_up) N.available = fsr3() && cfg_bool("NX2NAVI_DLAA") && vk_ffx_load();   // FSR 3.1 follows the setting
     int on = N.available && cfg_bool("NX2NAVI_DLAA");
     if (on != D.on) {
         rt_log("dlaa: %s", on ? "on" : "off");

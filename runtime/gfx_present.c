@@ -21,6 +21,7 @@
 #include "gfx.h"
 #include "gfx_wsys.h"
 #include "nvn_api.h"
+#include "ov.h"
 #include "platform/platform.h"
 #include "ui/menu.h"
 #include "vk.h"
@@ -244,6 +245,8 @@ static void window_settings_live(void) {
         snprintf(present, sizeof present, "%s", e);
         if (started) plat_xchg32(&g_dirty, 1);
     }
+    if (started && vk_fg_wanted() != vk_fg_active()) plat_xchg32(&g_dirty, 1);   // frame generation switched: its own swapchain
+    ov_operation_mode_live();
     if (started) gfx_window_apply_settings();
     started = 1;
 }
@@ -357,6 +360,12 @@ static int create_swapchain(void) {
     // Frame generation (vk_fg.cpp): AMD's swapchain in this one's place. Its swapchain is replaced only after the old
     // one is gone; a first creation that fails leaves the plain swapchain below.
     VkResult r = VK_ERROR_FEATURE_NOT_PRESENT;
+    if (!vk_fg_wanted() && vk_fg_active()) {   // switched off in the menu: AMD's swapchain and contexts go, the plain one follows
+        if (old) vk_fg_destroy_swapchain(old);
+        vk_fg_release();
+        ci.oldSwapchain = VK_NULL_HANDLE;
+        old = g_sc = VK_NULL_HANDLE;
+    }
     if (vk_fg_wanted()) {
         if (old && vk_fg_active()) vk_fg_destroy_swapchain(old);
         else if (old) vkDestroySwapchainKHR(c->device, old, NULL);

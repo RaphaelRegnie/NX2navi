@@ -10,6 +10,7 @@
 // per pass and dispatch, numbers in a ring of 4096, text only at the device loss.
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cfg.h"
@@ -121,6 +122,212 @@ void vk_pass_mark_cmd(VkCommandBuffer cb, uint32_t id, int end) {
     if (set_checkpoint) set_checkpoint(cb, (const void *)(uintptr_t)((uint64_t)id << 1 | (end != 0)));
 }
 
+// ---- NX2NAVI_GPU_PASSES=1 (diagnosis, needs the pass marks): every GP_PERIOD presents the render passes and dispatches
+// of GP_FRAMES frames get GPU timestamps around them. Some presents later the results are summed by what the pass is
+// (targets, shaders) and the most expensive are logged in ms per frame. The timestamps run on the replay's command
+// buffers, through the recorder like the marks.
+#define GP_SLOTS 16384
+#define GP_PERIOD 240
+#define GP_FRAMES 4
+#define GP_LATER 30   // presents after the capture before the results are read: the GPU is done with them by then
+#define GP_TOP 30
+typedef struct { uint8_t kind, used; uint32_t w, h, d, draws, layer; int c0; uint64_t vs, fs; } GpLabel;
+static GpLabel gp_labels[GP_SLOTS];
+static VkQueryPool gp_pool, gp_prims;   // gp_prims: mesh primitives generated per pass (with meshShaderQueries)
+static VkQueryPool gp_stats;            // fragment shader invocations per pass
+static int gp_state, gp_phase, gp_capture;   // state 0 not set up, 1 on, -1 off; phase 0 idle, 1 capturing, 2 waiting
+static uint32_t gp_n;
+static uint64_t gp_start;
+
+static unsigned long long shader_id(const GfxShader *s);
+uint32_t vk_exec_mesh_counts(const uint32_t **out);   // vk_exec_draw.c
+
+// The hash NX2NAVI_SKIP_SHADERS takes and the frame dump prints: FNV-1a over the shader's SPIR-V.
+static uint64_t gp_shader_hash(const GfxShader *s) {
+    static struct { const GfxShader *s; uint64_t h; } memo[1024];
+    if (!s) return 0;
+    uint32_t i = (uint32_t)(((uintptr_t)s * 0x9E3779B97F4A7C15ull) >> 54);
+    if (memo[i].s == s) return memo[i].h;
+    uint64_t words = 0, h = 0xcbf29ce484222325ull;
+    const uint8_t *b = (const uint8_t *)gfx_shader_spirv(s, &words);
+    for (uint64_t k = 0; b && k < words * 4; k++) h = (h ^ b[k]) * 0x100000001b3ull;
+    memo[i].s = s, memo[i].h = h;
+    return h;
+}
+
+static int kind_is_pass(const VkPassMark *m) { return m->kind == VK_MARK_PASS; }
+
+int vk_gpu_passes_capturing(void) { return gp_capture; }
+
+static void gp_begin(VkCommandBuffer cb, VkPassMark *m) {
+    m->gp = 0;
+    if (!gp_capture || gp_n >= GP_SLOTS) return;
+    gp_labels[gp_n].used = 0;
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, gp_pool, gp_n * 2);
+    if (gp_prims && kind_is_pass(m)) vkCmdBeginQuery(cb, gp_prims, gp_n, 0);
+    if (gp_stats && kind_is_pass(m)) vkCmdBeginQuery(cb, gp_stats, gp_n, 0);
+    m->gp = ++gp_n;
+}
+
+static void gp_end(VkCommandBuffer cb, const VkPassMark *m) {
+    if (!m->gp) return;
+    uint32_t i = m->gp - 1;
+    if (gp_prims && kind_is_pass(m)) vkCmdEndQuery(cb, gp_prims, i);
+    if (gp_stats && kind_is_pass(m)) vkCmdEndQuery(cb, gp_stats, i);
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, gp_pool, i * 2 + 1);
+    GpLabel *l = &gp_labels[i];
+    l->kind = m->kind, l->w = m->w, l->h = m->h, l->d = m->d, l->draws = m->draws == UINT32_MAX ? 0 : m->draws;
+    l->layer = m->layer;
+    l->c0 = m->kind == VK_MARK_PASS && m->ncolor ? (int)m->color[0] : 0;
+    l->vs = gp_shader_hash(m->first[0]), l->fs = m->kind == VK_MARK_PASS ? gp_shader_hash(m->first[1]) : 0;
+    l->used = 1;
+}
+
+typedef struct { GpLabel l; double ms; uint32_t n; uint64_t draws, prims, frags; } GpSum;
+
+static int gp_sum_cmp(const void *a, const void *b) {
+    double x = ((const GpSum *)a)->ms, y = ((const GpSum *)b)->ms;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+static void gp_report(uint64_t frame) {
+    enum { MAX_SUMS = 2048 };
+    static GpSum sums[MAX_SUMS];
+    VkCtx *c = vk_ctx();
+    int n = 0;
+    uint32_t read = 0, unread = 0;
+    double tick_ms = c->props.limits.timestampPeriod / 1e6, total = 0;
+    for (uint32_t i = 0; i < gp_n; i++) {
+        const GpLabel *l = &gp_labels[i];
+        uint64_t q[4] = {0};
+        if (!l->used || vkGetQueryPoolResults(c->device, gp_pool, i * 2, 2, sizeof q, q, 2 * sizeof q[0],
+                                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) != VK_SUCCESS ||
+            !q[1] || !q[3]) {
+            unread++;
+            continue;
+        }
+        read++;
+        double ms = (double)(q[2] - q[0]) * tick_ms;
+        total += ms;
+        // a pass of many draws and its neighbours differ in the draw count: the sum is by targets and shaders alone
+        int s = 0;
+        while (s < n && !(sums[s].l.kind == l->kind && sums[s].l.w == l->w && sums[s].l.h == l->h && sums[s].l.c0 == l->c0 && sums[s].l.layer == l->layer &&
+                          sums[s].l.vs == l->vs && sums[s].l.fs == l->fs))
+            s++;
+        if (s == n) {
+            if (n == MAX_SUMS) continue;
+            sums[n++] = (GpSum){*l, 0, 0, 0, 0, 0};
+        }
+        uint64_t pr[2] = {0};
+        if (gp_prims && l->kind == VK_MARK_PASS &&
+            vkGetQueryPoolResults(c->device, gp_prims, i, 1, sizeof pr, pr, sizeof pr,
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) == VK_SUCCESS && pr[1])
+            sums[s].prims += pr[0];
+        uint64_t fr[2] = {0};
+        if (gp_stats && l->kind == VK_MARK_PASS &&
+            vkGetQueryPoolResults(c->device, gp_stats, i, 1, sizeof fr, fr, sizeof fr,
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) == VK_SUCCESS && fr[1])
+            sums[s].frags += fr[0];
+        sums[s].ms += ms, sums[s].n++, sums[s].draws += l->draws;
+    }
+    qsort(sums, (size_t)n, sizeof sums[0], gp_sum_cmp);
+    rt_log("gpu passes: frame %llu: %.2f ms per frame in %u passes and dispatches over %d frames (%u not read, %d kinds)",
+           (unsigned long long)frame, total / GP_FRAMES, read, GP_FRAMES, unread, n);
+    {   // the mesh workgroup counts of the indirect mesh draws (vk_exec_draw.c mesh_ring_entry)
+        const uint32_t *mc;
+        uint32_t mn = vk_exec_mesh_counts(&mc);
+        uint64_t sum = 0;
+        uint32_t top = 0;
+        char list[200];
+        int o = 0;
+        for (uint32_t i = 0; i < mn; i++) {
+            sum += mc[i];
+            if (mc[i] > top) top = mc[i];
+            if (i < 18 && o < 180) o += snprintf(list + o, sizeof list - (size_t)o, " %u", mc[i]);
+        }
+        list[o] = 0;
+        rt_log("gpu passes:   indirect mesh draws: %.1f per frame, %.0f workgroups per frame, largest %u; first:%s", (double)mn / GP_FRAMES,
+               (double)sum / GP_FRAMES, top, list);
+    }
+    for (int s = 0; s < n && s < GP_TOP; s++) {
+        const GpSum *e = &sums[s];
+        if (e->l.kind == VK_MARK_DISPATCH)
+            rt_log("gpu passes:   %7.3f ms  x%-5.1f dispatch %ux%ux%u cs %016llx", e->ms / GP_FRAMES, (double)e->n / GP_FRAMES,
+                   e->l.w, e->l.h, e->l.d, (unsigned long long)e->l.vs);
+        else
+            rt_log("gpu passes:   %7.3f ms  x%-5.1f pass %ux%u layer %u fmt %d, %.1f draws, %.2fM fragments, %.2fM mesh prims, vs %016llx fs %016llx", e->ms / GP_FRAMES,
+                   (double)e->n / GP_FRAMES, e->l.w, e->l.h, e->l.layer, e->l.c0, (double)e->draws / GP_FRAMES, e->frags / 1e6 / GP_FRAMES, e->prims / 1e6 / GP_FRAMES,
+                   (unsigned long long)e->l.vs, (unsigned long long)e->l.fs);
+    }
+}
+
+// NX2NAVI_SET_AT=<frame>:<key>=<value>[;...]: settings changed by a test run while the game plays, as the menu would.
+static void set_at_frame(uint64_t frame) {
+    static char buf[512];
+    static const char *next;
+    static int state;
+    if (!state) {
+        const char *e = cfg_get("NX2NAVI_SET_AT");
+        state = e && *e ? 1 : -1;
+        if (state > 0) snprintf(buf, sizeof buf, "%s", e), next = buf;
+    }
+    while (state > 0 && next && *next && strtoull(next, NULL, 10) <= frame) {
+        char item[128], *eq;
+        const char *colon = strchr(next, ':'), *end = strchr(next, ';');
+        if (!colon) { state = -1; return; }
+        snprintf(item, sizeof item, "%.*s", end ? (int)(end - colon - 1) : (int)strlen(colon + 1), colon + 1);
+        if ((eq = strchr(item, '='))) {
+            *eq = 0;
+            rt_log("set-at: frame %llu: %s = %s", (unsigned long long)frame, item, eq + 1);
+            cfg_set(item, eq + 1);
+        }
+        next = end ? end + 1 : NULL;
+    }
+}
+
+void vk_gpu_passes_frame(uint64_t frame) {
+    set_at_frame(frame);
+    if (gp_state < 0) return;
+    VkCtx *c = vk_ctx();
+    if (!gp_state) {
+        gp_state = -1;
+        const char *e = cfg_get("NX2NAVI_GPU_PASSES");
+        if (!e || !*e || !strcmp(e, "0") || !c) return;
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                                    .queryCount = GP_SLOTS * 2};
+        if (!vk_pass_marks_on || vkCreateQueryPool(c->device, &qi, NULL, &gp_pool) != VK_SUCCESS) {
+            rt_log("gpu passes: not available (needs the pass marks and a timestamp pool)");
+            return;
+        }
+        if (c->has_mesh_queries) {
+            VkQueryPoolCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                        .queryType = VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT, .queryCount = GP_SLOTS};
+            if (vkCreateQueryPool(c->device, &pi, NULL, &gp_prims) != VK_SUCCESS) gp_prims = VK_NULL_HANDLE;
+        }
+        {
+            VkQueryPoolCreateInfo si = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+                                        .queryCount = GP_SLOTS,
+                                        .pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT};
+            if (vkCreateQueryPool(c->device, &si, NULL, &gp_stats) != VK_SUCCESS) gp_stats = VK_NULL_HANDLE;
+        }
+        gp_state = 1;
+        rt_log("gpu passes: timing %d frames every %d presents (NX2NAVI_GPU_PASSES)", GP_FRAMES, GP_PERIOD);
+    }
+    if (gp_phase == 0) {
+        if (frame % GP_PERIOD) return;
+        vkResetQueryPool(c->device, gp_pool, 0, GP_SLOTS * 2);
+        if (gp_prims) vkResetQueryPool(c->device, gp_prims, 0, GP_SLOTS);
+        if (gp_stats) vkResetQueryPool(c->device, gp_stats, 0, GP_SLOTS);
+        gp_n = 0, gp_start = frame, gp_capture = 1, gp_phase = 1;
+    } else if (gp_phase == 1) {
+        if (frame < gp_start + GP_FRAMES) return;
+        gp_capture = 0, gp_phase = 2;
+    } else if (frame >= gp_start + GP_FRAMES + GP_LATER) {
+        gp_report(frame);
+        gp_phase = 0;
+    }
+}
+
 VkPassMark *vk_pass_mark_begin(VkCommandBuffer cb, int kind, uint64_t fence) {
     if (!vk_pass_marks_on || !cb) return NULL;
     uint32_t id = ++seq;
@@ -128,11 +335,14 @@ VkPassMark *vk_pass_mark_begin(VkCommandBuffer cb, int kind, uint64_t fence) {
     VkPassMark *m = &ring[id & (VK_PASS_MARKS - 1)];
     m->id = id, m->kind = (uint8_t)kind, m->fence = fence, m->draws = UINT32_MAX;
     rec_pass_mark(cb, id, 0);
+    gp_begin(cb, m);
     return m;
 }
 
 void vk_pass_mark_end(VkCommandBuffer cb, const VkPassMark *m) {
-    if (m && cb) rec_pass_mark(cb, m->id, 1);
+    if (!m || !cb) return;
+    gp_end(cb, m);
+    rec_pass_mark(cb, m->id, 1);
 }
 
 int vk_pass_marks_read(uint32_t *started, uint32_t *finished) {

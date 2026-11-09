@@ -42,7 +42,7 @@ enum {
     R_SetRasterizerDiscardEnable, R_SetScissorWithCount, R_SetStencilCompareMask, R_SetStencilOp, R_SetStencilReference,
     R_SetStencilTestEnable, R_SetStencilWriteMask, R_SetViewportWithCount, R_WriteTimestamp, R_WriteTimestamp2,
     R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb,
-    R_PassMark, R_DrawMesh, R_DrawMeshInd,
+    R_PassMark, R_DrawMesh, R_DrawMeshInd, R_ShadingRate,
 };
 
 static uint64_t now_ns(void) { return plat_now_ns(); }
@@ -632,6 +632,19 @@ void rec_draw_mesh_ind(PFN_vkCmdDrawMeshTasksIndirectEXT fn, VkCommandBuffer cb,
     pub();
 }
 
+typedef struct { PFN_vkCmdSetFragmentShadingRateKHR fn; uint32_t size; } A_ShadingRate;
+static void shading_rate_call(PFN_vkCmdSetFragmentShadingRateKHR fn, VkCommandBuffer cb, uint32_t size) {
+    VkExtent2D e = {size, size};
+    VkFragmentShadingRateCombinerOpKHR ops[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+    fn(cb, &e, ops);
+}
+void rec_shading_rate(PFN_vkCmdSetFragmentShadingRateKHR fn, VkCommandBuffer cb, uint32_t size) {
+    if (!OWNED(cb)) { shading_rate_call(fn, cb, size); return; }
+    A_ShadingRate *a = put(R_ShadingRate, sizeof *a);
+    *a = (A_ShadingRate){fn, size};
+    pub();
+}
+
 typedef struct { uint32_t id; int end; } A_PassMark;
 void rec_pass_mark(VkCommandBuffer cb, uint32_t id, int end) {
     if (!OWNED(cb)) { vk_pass_mark_cmd(cb, id, end); return; }
@@ -731,6 +744,7 @@ static void exec_packet(uint32_t op, void *p) {
     case R_PassMark: { A_PassMark *a = p; vk_pass_mark_cmd(cb, a->id, a->end); break; }
     case R_DrawMesh: { A_DrawMesh *a = p; a->fn(cb, a->x, a->y, a->z); break; }
     case R_DrawMeshInd: { A_DrawMeshInd *a = p; a->fn(cb, a->b, a->o, a->n, a->stride); break; }
+    case R_ShadingRate: { A_ShadingRate *a = p; shading_rate_call(a->fn, cb, a->size); break; }
     case R_EndCb: {
         A_EndCb *a = p;
         if (a->kind) vk_crumb(cb, a->kind, a->n);

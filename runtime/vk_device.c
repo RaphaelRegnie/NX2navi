@@ -233,6 +233,7 @@ typedef struct {
     VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT fbl;
     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR lr;
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh;
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR vrs;
 } FeatureChain;
 
 static int create_device(void) {
@@ -269,6 +270,8 @@ static int create_device(void) {
                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT);
     // NVN2 task and mesh programs (gameplay geometry) draw through VK_EXT_mesh_shader (vk_exec_draw.c op_draw_mesh)
     OPTIONAL_EXT(has_mesh_shader, VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT);
+    // The foliage's far shadow cascades shade one fragment per 2x2 pixels (vk_exec_draw.c mesh_shading_rate)
+    OPTIONAL_EXT(has_vrs, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, vrs, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR);
     // Feedback loops (vk.h VkCtx.feedback): the layout, and barriers inside dynamic rendering
     int has_fbl = 0, has_lr = 0;
     if (has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME) &&
@@ -281,8 +284,9 @@ static int create_device(void) {
     }
     vk_dlaa_device_exts(ep, ne, ext, &n_ext, 40);   // NGX's; the eight slots after it stay for the eight below
     // FSR 3.1 (vk_ffx.cpp): its Vulkan back end looks vkGetBufferMemoryRequirements2KHR up by that name, which resolves
-    // only with the extension enabled (the core function has no suffix); without it the back end called address 0
-    if ((vk_dlaa_fsr3() || vk_fg_wanted() || vk_dlssg_wanted()) && has_ext(ep, ne, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME))
+    // only with the extension enabled (the core function has no suffix); without it the back end called address 0.
+    // Always asked for: FSR 3.1 can be switched on in the menu during a run
+    if (has_ext(ep, ne, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME))
         ext[n_ext++] = VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME;
     // DLSS Frame Generation (vk_dlssg.c): Streamline's plugins look functions of extensions core in Vulkan 1.3 up by
     // their suffixed names too, which resolve only with the extension itself enabled
@@ -347,10 +351,17 @@ static int create_device(void) {
     else if (!h->textureCompressionBC) miss = "textureCompressionBC";
     if (miss) { rt_log("vk: required feature missing on %s: %s", g_vk.props.deviceName, miss); free(c); return 0; }
     if (!c->fault.deviceFault) g_vk.has_device_fault = 0;
+    if (g_vk.has_vrs) {   // the rate is set per draw; no rate attachment and no per-primitive rates
+        c->vrs.attachmentFragmentShadingRate = c->vrs.primitiveFragmentShadingRate = VK_FALSE;
+        if (!c->vrs.pipelineFragmentShadingRate) g_vk.has_vrs = 0;
+        rt_log("vk: fragment shading rate: %s", g_vk.has_vrs ? "per draw" : "not supported");
+    }
     if (g_vk.has_mesh_shader) {
         // these two need features that are not enabled (multiview, primitive fragment shading rate)
         c->mesh.multiviewMeshShader = c->mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-        c->mesh.meshShaderQueries = VK_FALSE;
+        const char *gp = cfg_get("NX2NAVI_GPU_PASSES");
+        g_vk.has_mesh_queries = c->mesh.meshShaderQueries && gp && *gp && strcmp(gp, "0");   // vk_crumbs.c, diagnosis
+        c->mesh.meshShaderQueries = g_vk.has_mesh_queries ? VK_TRUE : VK_FALSE;
         if (!c->mesh.meshShader || !c->mesh.taskShader) g_vk.has_mesh_shader = 0;
         rt_log("vk: mesh shaders: %s", g_vk.has_mesh_shader ? "VK_EXT_mesh_shader" : "not supported (task/mesh draws are skipped)");
     }   // vkGetDeviceFaultInfoEXT needs the feature, not just the extension
