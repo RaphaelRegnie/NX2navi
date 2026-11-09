@@ -4,8 +4,9 @@
 # '#' and ';' start a comment; [sections] only group lines.
 
 [frame rate]
-# Frame rate limit: 30, 40, 45, 60, 90, 120, 144, any whole rate from 30 to 240, or display (the refresh rate of the
-# window's monitor, at most 240). A higher rate gives 240: above it the game's physics runs out of memory. Above 60
+# Frame rate limit: 30, 40, 45, 60, 90, 120, 144, any whole rate from 30 to 240, display (the refresh rate of the
+# window's monitor, at most 240) or unlimited (as fast as the PC goes, at most 240 frames of the game a second). A
+# higher rate gives 240: far above it the game's own code fails (its quick menu crashed at 700 fps). Above 60
 # is experimental and needs realtime = 1. Changes while the game runs take effect at once.
 # With mailbox or fifo presentation (vk_present, the default) a frame reaches the screen at a vertical blank, so a limit
 # that does not divide the monitor's refresh rate keeps each frame on screen for a different number of refreshes. On a
