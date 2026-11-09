@@ -221,6 +221,8 @@ class Job:
                     self.skip(sid, 'Kept' if sid in ('exefs', 'romfs') else 'Unchanged')
                     if link_step and sid in ('compile', 'compile_changed'):
                         self.skip(link_step, 'Unchanged')
+            elif kind == 'progress' and sid and 'fraction' in ev:   # a step that words its own progress (shaders)
+                self.progress(sid, float(ev.get('fraction') or 0), ev.get('detail', ''))
             elif kind == 'progress' and sid:
                 done, total, unit = ev.get('done', 0), max(ev.get('total', 1), 1), ev.get('unit', '')
                 if unit == 'bytes':

@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from .. import feed, jobs
+from .. import feed, jobs, versions
 
 
 def grab_gdi(x, y, w, h, path):
@@ -69,6 +69,16 @@ def grab(app, path):
         return False
 
 
+def ahead_of(version):
+    """A version a minor step past version: the made-up release must be newer than the launcher drawing it, or the
+    update screens show "Up to Date" instead (a fixed 0.3.11 did from 0.4.0 on)."""
+    try:
+        nums, _ = versions.parse(version)
+    except ValueError:
+        return '99.0.0'
+    return f'{nums[0]}.{nums[1] + 1}.0'
+
+
 def fake_release(version='0.3.11'):
     m = {'format': 1, 'version': version, 'app': {'name': f'NX2navi-app-{version}.zip', 'size': 1, 'sha256': '0'}}
     notes = ('- Each program module comes from the .nup package that holds it whole.\n'
@@ -105,11 +115,11 @@ def states(app):
         app.show('home', 0)
 
     def update_ready():
-        app.release = fake_release()
+        app.release = fake_release(ahead_of(ctx.version))
         app.show('home', 1)
 
     def updating():
-        j = jobs.UpdateDownloadJob(ctx, fake_release())
+        j = jobs.UpdateDownloadJob(ctx, fake_release(ahead_of(ctx.version)))
         for sid, val in (('download', 'Done · 0:06'), ('verify', 'Checksum OK')):
             j.step(sid).state, j.step(sid).value, j.step(sid).fraction = jobs.DONE, val, 1.0
         j.skip('tools_update', 'Unchanged')
@@ -139,6 +149,19 @@ def states(app):
     def uninstall():
         app.show('uninstall', 0)
 
+    def shaders():   # the counts and the wording tools/make_game.py shader_progress sends
+        j = jobs.InstallJob(ctx, s['dump'], s['game_dir'])
+        for sid, val in (('tools', 'Done · 0:48'), ('check', 'Version 1.1.1'), ('exefs', 'Done · 0:04'),
+                         ('romfs', 'Done · 0:31'), ('lift', 'Done · 0:48'), ('compile', 'Done · 4:12')):
+            j.step(sid).state, j.step(sid).value, j.step(sid).fraction = jobs.DONE, val, 1.0
+        j.begin('shaders')
+        j.progress('shaders', 0.5 + 0.5 * 6214 / 20480, 'Built 6,214 of 20,480 shaders for your graphics card')
+        j.started = time.time() - 611
+        for ln in ('  shaders: translated 20480 of 20480, 141 s', '  shaders: built 6214 of 20480, 402 s'):
+            j.lines.append(ln)
+        app.job, app.job_return, app.job_back = j, 'home', 'first_run'
+        app.show('job')
+
     def import_saves():
         app.release, app.message = None, ''
         app.save_message = ('Save imported: 3 files from 0100000000010000. Your old save is in '
@@ -147,7 +170,8 @@ def states(app):
 
     return [('1-first-run', first_run), ('2-installing', installing), ('3-home', home),
             ('4-update-ready', update_ready), ('5-updating', updating), ('6-settings', settings),
-            ('7-build-failed', failed), ('8-uninstall', uninstall), ('9-import-saves', import_saves)]
+            ('7-build-failed', failed), ('8-uninstall', uninstall), ('9-import-saves', import_saves),
+            ('10-shaders', shaders)]
 
 
 def run(app, shots):

@@ -907,6 +907,43 @@ class MakeGameTest(Tmp):
         steps = json.loads((self.out / 'build-cache' / 'state.json').read_text())['steps']
         self.assertEqual(set(steps), {'exefs', 'romfs', 'lift', 'compile'})
 
+    def test_shader_progress_reaches_the_launcher(self):
+        """The shaders step turns nx2navi.exe's counts into progress (translation the first half of the bar, the
+        driver build the second), sends one every few seconds while nothing is printed, says when the counts stop
+        moving, and passes its other lines on to the log."""
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        (kit / 'tools' / 'prepare_shaders.py').write_text(
+            'import time\n'
+            'print("reading the inventory", flush=True)\n'
+            'time.sleep(0.6)\n'
+            'for d in (0, 50, 100):\n'
+            '    print(f"prepare-shaders: progress translate {d} 100", flush=True)\n'
+            '    time.sleep(0.05)\n'
+            'print("prepare-shaders: progress build 10 100", flush=True)\n'
+            'time.sleep(0.6)\n'
+            'print("prepare-shaders: progress build 100 100", flush=True)\n')
+        for name, value in (('KIT', kit), ('EVENTS', True), ('SHADER_BEAT_S', 0.1), ('SHADER_STALL_S', 0.3)):
+            self.addCleanup(setattr, self.mg, name, getattr(self.mg, name))
+            setattr(self.mg, name, value)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.mg.step_shaders(self.out)
+        lines = buf.getvalue().splitlines()
+        events = [json.loads(ln[2:]) for ln in lines if ln.startswith('@@')]
+        self.assertIn('reading the inventory', lines)
+        self.assertFalse([ln for ln in lines if ln.startswith('prepare-shaders: progress')])
+        self.assertTrue(all(e['ev'] == 'progress' and e['step'] == 'shaders' for e in events))
+        fractions = [e['fraction'] for e in events]
+        self.assertEqual(fractions, sorted(fractions))
+        self.assertEqual(fractions[-1], 1.0)
+        details = [e['detail'] for e in events]
+        self.assertTrue(any(d.startswith("Reading the game's shaders") for d in details))
+        self.assertIn('Translated 50 of 100 shaders', details)
+        self.assertGreaterEqual(sum(1 for e in events if e['fraction'] == 0.55), 2)   # heartbeats while the build waits
+        self.assertTrue(any(d.startswith('Built 10 of 100') and 'still running' in d for d in details))
+        self.assertEqual([e['fraction'] for e in events if e['detail'] == 'Translated 50 of 100 shaders'][0], 0.25)
+
     def test_romfs_failure_stops_the_build(self):
         ran, lifting, failed = [], threading.Event(), threading.Event()
 
@@ -1310,7 +1347,7 @@ class WindowTest(Tmp):
         r = subprocess.run([sys.executable, '-m', 'launcher', '--root', str(self.tmp / 'w'), '--selftest'],
                            cwd=ROOT, capture_output=True, text=True, timeout=180)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('9 screens drawn', r.stdout)
+        self.assertIn('10 screens drawn', r.stdout)
 
 
 if __name__ == '__main__':

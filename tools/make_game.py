@@ -983,11 +983,78 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
 
 # ---------------------------------------------------------------- main
 
+SHADER_PROGRESS = re.compile(r'^prepare-shaders: progress (translate|build) (\d+) (\d+)\s*$')
+SHADER_STALL_S = 180   # no count moved for this long: the launcher says so (the step still runs)
+SHADER_BEAT_S = 10     # a progress event at least this often while the step runs
+
+
+def shader_progress(phase, done, total, quiet_s, elapsed_s):
+    """The shaders step's progress event fields: the translation fills the first half of the bar, the build into the
+    driver's cache the second (nx2navi.exe prints both counts, runtime/gfx_shader.c prepare_files and
+    runtime/vk_pipeline.c lb_warm_prepared); before either count, reading the game's shaders. quiet_s: seconds since a
+    count last moved, said once it passes SHADER_STALL_S, so a slow step never looks frozen without a word. The
+    detail ends without a full stop: the launcher adds one (launcher/ui/app.py)."""
+    clock = f'{int(elapsed_s) // 60}:{int(elapsed_s) % 60:02d}'
+    if phase is None:
+        fraction, detail = 0.0, f'Reading the game\'s shaders ({clock} so far)'
+    elif phase == 'translate':
+        fraction, detail = 0.5 * done / max(total, 1), f'Translated {done:,} of {total:,} shaders'
+    else:
+        fraction, detail = 0.5 + 0.5 * done / max(total, 1), f'Built {done:,} of {total:,} shaders for your graphics card'
+    if quiet_s >= SHADER_STALL_S:
+        detail += (f'. No change for {int(quiet_s) // 60} min, but it is still running: one large shader can take '
+                   'a while')
+    return {'step': 'shaders', 'fraction': round(fraction, 4), 'detail': detail}
+
+
 def step_shaders(out):
-    """Every shader of the game files into the game's shader cache and the driver's own cache, before the first start."""
-    cmd = [sys.executable, str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
+    """Every shader of the game files into the game's shader cache and the driver's own cache, before the first start.
+    Its output is read as it comes: the counts nx2navi.exe prints become progress events, the other lines go on to
+    the log, and while nothing moves an event every few seconds keeps saying the step is running and for how long."""
+    cmd = [sys.executable, '-u', str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
            '--exefs', str(out / 'exefs'), '--no-list', '--exe', 'ocarina.exe']
-    if subprocess.run(cmd).returncode:
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                            errors='replace', bufsize=1)
+    t0 = time.monotonic()
+    state = {'phase': None, 'done': 0, 'total': 0, 'moved': t0}
+    lock = threading.Lock()
+    stop = threading.Event()
+
+    def send():
+        now = time.monotonic()
+        emit('progress', **shader_progress(state['phase'], state['done'], state['total'], now - state['moved'],
+                                           now - t0))
+
+    def heartbeat():
+        while not stop.wait(SHADER_BEAT_S):
+            with lock:
+                send()
+
+    beat = threading.Thread(target=heartbeat, daemon=True)
+    beat.start()
+    last_log = 0.0
+    try:
+        for line in proc.stdout:
+            m = SHADER_PROGRESS.match(line)
+            if not m:
+                say(line.rstrip('\n'))
+                continue
+            phase, done, total = m.group(1), int(m.group(2)), int(m.group(3))
+            with lock:
+                if (phase, done) != (state['phase'], state['done']):
+                    state['moved'] = time.monotonic()
+                state.update(phase=phase, done=done, total=total)
+                send()
+            if time.monotonic() - last_log >= 30 or done == total:   # the log gets a count now and then, not each one
+                last_log = time.monotonic()
+                say(f'  shaders: {"translated" if phase == "translate" else "built"} {done} of {total}, '
+                    f'{time.monotonic() - t0:.0f} s')
+    finally:
+        rc = proc.wait()
+        proc.stdout.close()
+        stop.set()
+        beat.join()
+    if rc:
         fail('preparing the shaders failed (the lines above say why); the game still runs, compiling shaders as it '
              'meets them. Run the build again to retry this step')
     for seed in ('seed-programs.bin', 'seed-answers.bin'):   # translated now: the shader cache holds them

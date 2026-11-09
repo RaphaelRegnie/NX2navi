@@ -3570,7 +3570,18 @@ static void lb_warm_prepared(const char *dir) {
     for (int i = 0; i < cpus && i < JR_SLOTS; i++)
         if ((t[k] = plat_thread_new(lb_warm_worker, (void *)(intptr_t)k, "lib warm"))) k++;
     if (!k) lb_warm_worker((void *)(intptr_t)0);
-    for (int i = 0; i < k; i++) plat_thread_join(t[i]);
+    // every 2 s a count on stdout for tools/make_game.py (step_shaders), as gfx_shader.c prepare_files prints for the
+    // translation: a driver building for a long time still shows the step moving
+    for (int i = 0; i < k; i++)
+        while (!plat_thread_join_ns(t[i], 2000000000u)) {
+            plat_mutex_lock(&LB.stat);
+            uint64_t d = LB.done;
+            plat_mutex_unlock(&LB.stat);
+            printf("prepare-shaders: progress build %llu %zu\n", (unsigned long long)d, n);
+            fflush(stdout);
+        }
+    printf("prepare-shaders: progress build %zu %zu\n", n, n);
+    fflush(stdout);
     if (SK.journal) plat_file_close(SK.journal), SK.journal = NULL, plat_file_delete(jp);   // every build returned
     lb_report("preparation done");
     // with gpl off only compute variants are built: say so, rather than count the skipped ones as built

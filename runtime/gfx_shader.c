@@ -2221,10 +2221,18 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
     for (int i = 0; i < threads; i++)
         if ((t[k] = plat_thread_new(prep_worker, &p, "shader prepare"))) k++;
     if (!k) prep_worker(&p);
-    for (int m = 0; m < k; m++)
-        while (!plat_thread_join_ns(t[m], 5000000000u))
-            rt_log("gfx_shader: prepare: %lld of %zu pairs, %llu translated, %.0f ms", (long long)p.done, p.n_ans,
-                   (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
+    // every 2 s a count on stdout for tools/make_game.py (step_shaders reads "prepare-shaders: progress" lines and shows
+    // them in the launcher, which otherwise sat at 0 % for the whole step), and every 10 s one in the log
+    for (int m = 0, polls = 0; m < k; m++)
+        while (!plat_thread_join_ns(t[m], 2000000000u)) {
+            printf("prepare-shaders: progress translate %lld %zu\n", (long long)p.done, p.n_ans);
+            fflush(stdout);
+            if (++polls % 5 == 0)
+                rt_log("gfx_shader: prepare: %lld of %zu pairs, %llu translated, %.0f ms", (long long)p.done, p.n_ans,
+                       (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
+        }
+    printf("prepare-shaders: progress translate %zu %zu\n", p.n_ans, p.n_ans);
+    fflush(stdout);
     svc_set_limit(svc_runtime_limit());
     rt_log("gfx_shader: prepare: %zu %s of %zu programs: %llu translated, %lld failed, %lld without a program, the rest "
            "cached; %lld default variants with refined answers; %.0f ms", p.n_ans, what, p.progs.n,
