@@ -44,6 +44,7 @@ class Step:
         self.id, self.label, self.desc = sid, label.format(ver=ver), desc
         self.state, self.value, self.fraction, self.detail = PENDING, 'Waiting', 0.0, ''
         self.t0, self.seconds = None, 0.0
+        self.pace = collections.deque(maxlen=400)   # (time, fraction) of recent progress, for Job.eta
 
 
 class Job:
@@ -86,11 +87,31 @@ class Job:
         return min(1.0, got / total)
 
     def eta(self):
-        f = self.overall()
-        elapsed = time.time() - self.started
-        if f < 0.08 or elapsed < 20:
+        # The step running now from its recent pace (its progress over the last minute), and the steps still to come
+        # from the seconds per weight of the steps already done. A job-wide fraction does not work: a step can take
+        # far more or less time than its weight says (Compile Changed Files is over half the weight of an update and
+        # can take seconds), and the shader step then read "about 1 minute left" with 20 minutes to go. A step's own
+        # average does not either: Prepare the Shaders fills the first half of its bar with the translation and the
+        # second with the much slower build into the driver's cache.
+        now = time.time()
+        if now - self.started < 20:
             return None
-        return elapsed * (1 - f) / f
+        cur = next((s for s in self.steps if s.state == RUNNING), None)
+        left = 0.0
+        if cur:
+            recent = [p for p in cur.pace if now - p[0] <= 60]
+            if len(recent) < 2 or recent[-1][0] - recent[0][0] < 10 or recent[-1][1] <= recent[0][1]:
+                return None
+            rate = (recent[-1][1] - recent[0][1]) / (recent[-1][0] - recent[0][0])   # fraction per second
+            left = (1 - cur.fraction) / rate
+        done_w = sum(WEIGHTS[s.id] for s in self.steps if s.state == DONE and s.seconds > 0)
+        done_s = sum(s.seconds for s in self.steps if s.state == DONE and s.seconds > 0)
+        todo_w = sum(WEIGHTS[s.id] for s in self.steps if s.state == PENDING)
+        if todo_w:
+            if not done_w:
+                return None
+            left += todo_w * done_s / done_w
+        return left
 
     def elapsed(self):
         return (self.finished or time.time()) - self.started
@@ -108,6 +129,7 @@ class Job:
         s = self.step(sid)
         if s and s.state != RUNNING:
             s.state, s.fraction, s.detail, s.t0, s.value = RUNNING, 0.0, detail, time.time(), '0%'
+            s.pace.clear()
             self._touch()
 
     def progress(self, sid, fraction, detail=''):
@@ -116,6 +138,7 @@ class Job:
             if s.state == PENDING:
                 self.begin(sid)
             s.fraction = max(0.0, min(1.0, fraction))
+            s.pace.append((time.time(), s.fraction))
             s.value = f'{int(s.fraction * 100)}%'
             if detail:
                 s.detail = detail
