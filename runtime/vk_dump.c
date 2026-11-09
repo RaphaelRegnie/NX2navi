@@ -46,7 +46,7 @@ int vk_exec_raw_9e5(VkImage img, VkFormat f);                               // v
 #define MAX_PASSES 400
 #define PNG_CAP (2ull << 30)
 #define INFLIGHT_CAP (3ull << 30)   // host buffers waiting for their submission
-#define MAX_ENTS 48                 // distinct pipeline + texture sets listed per pass
+#define MAX_ENTS 1024               // distinct pipeline + texture sets listed per pass
 #define MAX_LUTS 256                // 3D textures and small sampled 8-bit 2D textures dumped per frame
 #define TEX2D_CAP (1u << 20)        // texels of a sampled 2D texture that is dumped
 
@@ -514,7 +514,7 @@ static uint64_t shader_hash(const GfxShader *s) {
 typedef struct { VkPipeline p; uint64_t th; int draws; char *text; } Ent;
 static Ent ents[MAX_ENTS];
 static int nents, ents_over, pass_draws;
-typedef struct { VkImage image; VkFormat format; uint32_t w, h, d; int id, is2d; } Lut;
+typedef struct { VkImage image; VkFormat format; uint32_t w, h, d; int id, is2d; uint32_t layer, layers; } Lut;
 static Lut luts[MAX_LUTS];          // queued for the next pass end or dispatch
 static int nluts;
 static VkImage luts_done[MAX_LUTS];
@@ -526,8 +526,10 @@ static void queue_lut(const VkTexImage *t, int id) {
         if (luts_done[i] == t->image) return;
     if (nluts_done == MAX_LUTS) return;
     luts_done[nluts_done++] = t->image;
-    luts[nluts++] = (Lut){t->image, t->format, t->width, t->height, t->type == VK_IMAGE_TYPE_3D ? t->depth : 1, id,
-                          t->type != VK_IMAGE_TYPE_3D};
+    uint32_t nl = t->type != VK_IMAGE_TYPE_3D && t->layers > 1 ? t->layers : 1;   // a 2D array: one copy per layer
+    for (uint32_t k = 0; k < nl && nluts < MAX_LUTS; k++)
+        luts[nluts++] = (Lut){t->image, t->format, t->width, t->height, t->type == VK_IMAGE_TYPE_3D ? t->depth : 1, id,
+                              t->type != VK_IMAGE_TYPE_3D, k, nl};
 }
 
 // The uncompressed format of a BC format's block size, UNDEFINED for other formats: a BC texture is dumped as its raw
@@ -544,16 +546,17 @@ static void flush_luts(VkExec *ex, int n) {
     char fn[16];
     for (int i = 0; i < nluts; i++) {
         const Lut *l = &luts[i];
-        char name[160];
+        char name[160], lay[16] = "";
         VkFormat bf = block_format(l->format);
-        snprintf(name, sizeof name, "pass_%04d_%s%d_%ux%ux%u_%d_%s%s", n, l->is2d ? "tex" : "lut", l->id, l->w, l->h, l->d,
-                 (int)l->format, fmt_name(l->format, fn), bf ? "_blocks" : "");
+        if (l->layers > 1) snprintf(lay, sizeof lay, "L%u", l->layer);
+        snprintf(name, sizeof name, "pass_%04d_%s%d%s_%ux%ux%u_%d_%s%s", n, l->is2d ? "tex" : "lut", l->id, lay, l->w, l->h,
+                 l->d, (int)l->format, fmt_name(l->format, fn), bf ? "_blocks" : "");
         // a sampled depth texture copies its depth aspect (the colour aspect of a depth image read as zeros)
         VkImageAspectFlags asp = l->format >= VK_FORMAT_D16_UNORM && l->format <= VK_FORMAT_D32_SFLOAT_S8_UINT
                                      ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-        const char *why = bf ? copy_region(ex, l->image, bf, VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 0,
+        const char *why = bf ? copy_region(ex, l->image, bf, VK_IMAGE_ASPECT_COLOR_BIT, 0, l->layer, 0,
                                            (VkExtent3D){l->w, l->h, l->d}, (l->w + 3) / 4, (l->h + 3) / 4, l->d, name)
-                             : copy_out(ex, l->image, l->format, asp, 0, 0, l->w, l->h, l->d, name);
+                             : copy_out(ex, l->image, l->format, asp, 0, l->layer, l->w, l->h, l->d, name);
         fprintf(passes_f, "  %s tex %d -> %s.png%s%s\n", l->is2d ? "2D" : "3D", l->id, name, why ? " skipped: " : "",
                 why ? why : "");
     }
@@ -1082,6 +1085,13 @@ void vk_dump_movie_frame(int k, uint64_t shown) {
     rt_log("vk_dump: movie %d shows frame %llu: dumping the next present", k, (unsigned long long)shown);
 }
 
+// NX2NAVI_DUMP_FILE=<path> (diagnosis): every 8th present looks for that file (a relative path starts in the game
+// folder); when it is there, the present deletes it and asks for a dump of the next present, so a shell or a test
+// script takes dumps at the moments it chooses, as many as it likes. A number in the file (up to 8) dumps that many
+// consecutive frames, for what a frame hands to the next. Each dump has its own folder, base_dir/f<present>.
+static char dump_file[400];
+static int file_more;   // consecutive frames still to dump after the one named
+
 // passes.txt and images.txt in dir (a new folder per NX2NAVI_DUMP_WHITE attempt)
 static void open_files(void) {
     make_dirs(dir);
@@ -1116,10 +1126,12 @@ void vk_dump_init(void) {
     // Windows even while another window has the focus) dumps the frame after it into NX2NAVI_DUMP_DIR/f<frame>, as often
     // as it is pressed: for a glitch that comes and goes, caught by the player while it is on screen.
     key_mode = e && !strcmp(e, "key");
+    const char *df = cfg_get("NX2NAVI_DUMP_FILE");
+    if (df && *df) snprintf(dump_file, sizeof dump_file, "%s", df);
     if (dump_white || dump_after) {
         dump_frame = UINT64_MAX;
         vk_thumbs_enable(16);
-    } else if (movie_k || key_mode) {
+    } else if (movie_k || key_mode || dump_file[0]) {
         dump_frame = UINT64_MAX;
     } else if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
     const char *lf = cfg_get("NX2NAVI_DUMP_LOG");
@@ -1141,7 +1153,7 @@ void vk_dump_init(void) {
     snprintf(base_dir, sizeof base_dir, "%s", d && *d ? d : "dump");
     snprintf(dir, sizeof dir, "%s", base_dir);
     char path[600];
-    if (!dump_white && !movie_k && !key_mode) open_files();
+    if (!dump_white && !movie_k && !key_mode && !dump_file[0]) open_files();
     const char *bf = cfg_get("NX2NAVI_DUMP_BUF");
     if (bf && *bf) {
         char *q;
@@ -1154,7 +1166,7 @@ void vk_dump_init(void) {
         if (!bd_w || !bd_h) bd_stride = 0;
         snprintf(path, sizeof path, "%s/bufs.txt", dir);
         // a dump named as the run goes opens it with its folder (open_files); a named frame's folder exists already
-        if (bd_size && !dump_white && !movie_k && !key_mode && !(bufs_f = fopen(path, "w"))) bd_size = 0;
+        if (bd_size && !dump_white && !movie_k && !key_mode && !dump_file[0] && !(bufs_f = fopen(path, "w"))) bd_size = 0;
     }
     vk_dump_armed = 1;
     rt_log("vk_dump: frame %llu goes to %s", (unsigned long long)dump_frame, dir);
@@ -1214,6 +1226,18 @@ void vk_dump_present(uint64_t frame) {
         }
         held = now;
     }
+    if (dump_file[0] && dump_frame == UINT64_MAX && frame % 8 == 0 && plat_file_exists(dump_file)) {
+        uint64_t sz = 0;
+        uint8_t *txt = plat_file_read(dump_file, &sz);
+        int n = txt ? atoi((const char *)txt) : 0;
+        free(txt);
+        file_more = n > 8 ? 7 : n > 1 ? n - 1 : 0;
+        plat_file_delete(dump_file);
+        snprintf(dir, sizeof dir, "%s/f%llu", base_dir, (unsigned long long)(frame + 1));
+        open_files();   // before the frame is named: its passes write to them
+        dump_frame = frame + 1;
+        rt_log("vk_dump: %s found: frame %llu goes to %s", dump_file, (unsigned long long)dump_frame, dir);
+    }
     if (frame != dump_frame) return;
     plat_mutex_lock(&rec_lock);
     finished = 1;
@@ -1229,7 +1253,7 @@ void vk_dump_present(uint64_t frame) {
     passes_f = NULL;
     rt_log("vk_dump: frame %llu: %d passes and dispatches, about %llu MB of PNGs in %s", (unsigned long long)frame, seq,
            (unsigned long long)(png_bytes >> 20), dir);
-    if (dump_white || movie_k || key_mode) {   // ready for another dump (vk_dump_present checks a white one's thumbnail 3 presents on)
+    if (dump_white || movie_k || key_mode || dump_file[0]) {   // ready for another dump (vk_dump_present checks a white one's thumbnail 3 presents on)
         if (dump_white) white_last = frame;
         plat_mutex_lock(&rec_lock);
         seq = copied = 0, last_targets = 0, pass_skip = NULL, png_bytes = 0;
@@ -1237,5 +1261,12 @@ void vk_dump_present(uint64_t frame) {
         dump_frame = UINT64_MAX;
         finished = 0;
         plat_mutex_unlock(&rec_lock);
+    }
+    if (file_more > 0) {   // NX2NAVI_DUMP_FILE with a count: the next frame too
+        file_more--;
+        snprintf(dir, sizeof dir, "%s/f%llu", base_dir, (unsigned long long)(frame + 1));
+        open_files();
+        dump_frame = frame + 1;
+        rt_log("vk_dump: frame %llu goes to %s", (unsigned long long)dump_frame, dir);
     }
 }
