@@ -260,6 +260,15 @@ static void make_context(void) {
     g_ctx_ok = 1;
 }
 
+// Dear ImGui's Vulkan back end calls this with each VkResult it gets (it went unchecked before): failures are logged and
+// counted, so a texture whose descriptor set was not allocated is not drawn with (ui/menu_art.cpp upload_rgba).
+static std::atomic<int> g_vk_errors;
+static void menu_vk_check(VkResult r) {
+    if (r == VK_SUCCESS) return;
+    if (g_vk_errors.fetch_add(1) < 8) rt_log("menu: Dear ImGui's Vulkan back end got VkResult %d", (int)r);
+}
+extern "C" int menu_vk_errors(void) { return g_vk_errors.load(); }
+
 static void vk_down(void) {
     if (!g_vk_ok) return;
     menu_art_release();
@@ -283,7 +292,8 @@ static int vk_up(const MenuTarget *t) {
     ii.Device = t->device;
     ii.QueueFamily = t->queue_family;
     ii.Queue = t->queue;
-    ii.DescriptorPoolSize = 16;
+    ii.DescriptorPoolSize = 32;   // the art's sets, and two font atlases while one replaces the other
+    ii.CheckVkResultFn = menu_vk_check;
     ii.MinImageCount = 2;
     ii.ImageCount = 4;   // vertex buffers rotate per recorded frame: more than gfx_present.c's 2 frames in flight
     ii.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
@@ -301,7 +311,7 @@ static int vk_up(const MenuTarget *t) {
 // and Chinese language names merged in from a system font when there is one (each language is named in its own script).
 // A catalog row also holds menu text (Simplified Chinese), so every string of the row goes into the builder: the merged
 // font must cover the whole menu of that language, not only its name. Made again when the window height changes; the old
-// texture goes after the queue is idle (CreateFontsTexture).
+// texture goes after the queue is idle (ui/menu_art.cpp menu_font_upload).
 static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x0400, 0x052F, 0x2010, 0x2027, 0};
 static const struct { const char *lang; UiTextId name; } kCjk[] = {
     {"ja", UI_MENU_LANGNAME_JA}, {"ko", UI_MENU_LANGNAME_KO}, {"zh-Hans", UI_MENU_LANGNAME_ZH_HANS},
@@ -442,12 +452,15 @@ static int fonts_up(float scale) {
     }
     skin_atlas_add(fa);    // the boxes' grain tile (ui/menu_skin.cpp), drawn into the atlas once it is built
     skin_atlas_fill(fa);   // builds the atlas, which the upload below then takes as it is
-    vk_queue_lock();   // the upload submits on the queue and waits for it
-    int ok = ImGui_ImplVulkan_CreateFontsTexture();
+    unsigned char *px = nullptr;
+    int aw = 0, ah = 0;
+    fa->GetTexDataAsRGBA32(&px, &aw, &ah);
+    ImTextureID tex = 0;
+    int ok = menu_font_upload(px, aw, ah, &tex);
+    if (ok) fa->SetTexID(tex);
     // ClarimoUDPE's line (ascent to descent, which is all Dear ImGui spaces lines by) leaves wrapped lines touching: the
     // line height grows by a sixth over the glyphs' size, the glyphs stay as rasterized.
     if (ok && g_game_font && fa->Fonts.Size) fa->Fonts[0]->FontSize *= 1.16f;
-    vk_queue_unlock();
     fa->ClearInputData();   // the glyphs are in the texture: the font files and the pixels are not needed again
     fa->ClearTexData();
     for (uint8_t *d : data) free(d);
@@ -1534,7 +1547,8 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
         ev_n = 0;
         plat_mutex_unlock(&ev_lock);
     }
-    ImGui_ImplVulkan_NewFrame();
+    // no ImGui_ImplVulkan_NewFrame: all it does is upload Dear ImGui's own font atlas when the back end holds none,
+    // which it never does here (fonts_up uploads it, ui/menu_art.cpp menu_font_upload)
     ImGui::NewFrame();
     if (open) layout_menu(t->width, t->height, scale);
     perf_draw(t, scale);
@@ -1592,7 +1606,8 @@ extern "C" int menu_boot_frame(const MenuTarget *t) {
     double dt = g_last_ns ? (now - g_last_ns) / 1e9 : 1 / 60.0;
     io.DeltaTime = (float)(dt < 1e-4 ? 1e-4 : dt > 0.1 ? 0.1 : dt);
     g_last_ns = now;
-    ImGui_ImplVulkan_NewFrame();
+    // no ImGui_ImplVulkan_NewFrame: all it does is upload Dear ImGui's own font atlas when the back end holds none,
+    // which it never does here (fonts_up uploads it, ui/menu_art.cpp menu_font_upload)
     ImGui::NewFrame();
 
     int phase = g_boot_phase.load(std::memory_order_acquire);
