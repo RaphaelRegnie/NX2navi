@@ -235,6 +235,7 @@ static void unlock(void) {
 }
 
 static uint32_t umax(uint32_t a, uint32_t b) { return a > b ? a : b; }
+static uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 static uint32_t mip(uint32_t v, unsigned lv) { return umax(v >> lv, 1); }
 
 static void make_key(const tex_t *t, TexKey *k) {
@@ -1524,15 +1525,24 @@ static int img_block(const Tex *e, int *bw, int *bh) {
     return e->f.vk == e->f.ideal ? b : 0;
 }
 
-// The new entry e can take src's content texel for texel: colour, one sample, the same shape and storage layout, and
-// image formats of one block size.
-static int alias_compatible(const Tex *e, const Tex *src) {
+// The new entry e can take src's content texel for texel: colour, one sample, the same image type and storage layout,
+// and image formats of one block size (0 with a reason in *why when not). Block-compressed images need the same shape;
+// uncompressed ones take the region both cover (alias_copy). Ocarina moves render targets whose size follows an effect
+// on screen, so a descriptor made over a live target's memory is often a few texels larger or smaller than it. The game
+// reads the bytes there as its content (the same memory on the console); started empty instead, the scene went black
+// for a frame about once a second while the camera turned, from 0.6.1 on (issue #253).
+static int alias_compatible(const Tex *e, const Tex *src, const char **why) {
     const VkTexImage *p = &e->pub, *q = &src->pub;
-    if (e->f.depth || e->f.stencil || src->f.depth || src->f.stencil || p->samples > 1 || q->samples > 1) return 0;
-    if (p->type != q->type || p->width != q->width || p->height != q->height || p->depth != q->depth) return 0;
-    if (e->t.L.size != src->t.L.size || nvn_tex_is_linear(&e->t.d) != nvn_tex_is_linear(&src->t.d)) return 0;
+    if (e->f.depth || e->f.stencil || src->f.depth || src->f.stencil || p->samples > 1 || q->samples > 1)
+        return *why = "depth, stencil or multisample", 0;
+    if (p->type != q->type) return *why = "another image type", 0;
+    if (nvn_tex_is_linear(&e->t.d) != nvn_tex_is_linear(&src->t.d)) return *why = "linear and block-linear", 0;
     int ew, eh, sw, sh, eb = img_block(e, &ew, &eh), sb = img_block(src, &sw, &sh);
-    return eb && eb == sb && ew == sw && eh == sh;
+    if (!eb || eb != sb || ew != sw || eh != sh) return *why = "another block size", 0;
+    if (ew == 1 && eh == 1) return 1;
+    if (p->width != q->width || p->height != q->height || p->depth != q->depth || e->t.L.size != src->t.L.size)
+        return *why = "compressed, another shape", 0;
+    return 1;
 }
 
 // src holds content the storage bytes do not: the GPU wrote it and, for a mirrored texture, it was not written back
@@ -1555,12 +1565,18 @@ static int alias_copy(Tex *e, const Tex *src) {
     int bw, bh, bpb = img_block(e, &bw, &bh);
     uint32_t levels = e->pub.levels < src->pub.levels ? e->pub.levels : src->pub.levels;
     uint32_t layers = e->pub.layers < src->pub.layers ? e->pub.layers : src->pub.layers, n = levels * layers, k = 0;
+    // the region both images cover (alias_compatible: the same shape for block-compressed ones); the rest of a larger
+    // new image starts as init_image would leave it
+    int partial = src->pub.width < e->pub.width || src->pub.height < e->pub.height || src->pub.depth < e->pub.depth ||
+                  levels < e->pub.levels || layers < e->pub.layers;
     VkBufferImageCopy *rg = calloc(n, sizeof *rg);
     if (!rg) rt_fatal("vk: out of memory for an alias copy");
     VkDeviceSize total = 0;
     for (uint32_t lv = 0; lv < levels; lv++)
         for (uint32_t ly = 0; ly < layers; ly++, k++) {
-            uint32_t w = mip(e->pub.width, lv), h = mip(e->pub.height, lv), z = mip(e->pub.depth, lv);
+            uint32_t w = umin(mip(e->pub.width, lv), mip(src->pub.width, lv));
+            uint32_t h = umin(mip(e->pub.height, lv), mip(src->pub.height, lv));
+            uint32_t z = umin(mip(e->pub.depth, lv), mip(src->pub.depth, lv));
             rg[k] = (VkBufferImageCopy){.bufferOffset = total, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1},
                                         .imageExtent = {w, h, z}};
             total += ((VkDeviceSize)(w + bw - 1) / bw * ((h + bh - 1) / bh) * z * bpb + 15) & ~15ull;
@@ -1585,6 +1601,13 @@ static int alias_copy(Tex *e, const Tex *src) {
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb,
                            .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ib};
     vkCmdPipelineBarrier2(cb, &di);
+    if (partial && vk_fix_zero() && !e->bound_to && !e->pub.mirrored && !format_compressed(e->f.vk)) {
+        VkClearColorValue zero = {0};
+        VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        vkCmdClearColorImage(cb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
+        barrier(cb, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    }
     vkCmdCopyBufferToImage(cb, buf, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, n, rg);
     barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
     vk_exec_inline_end(reopen);
@@ -1623,6 +1646,8 @@ static void create_failed(const TexKey *k) {
 static void start_at(Tex *e, const TexKey *k, int taken_back) {
     int alias = 0;
     Tex *src = NULL;
+    const char *why = "no live texture with GPU content";   // for the log of an alias left empty
+    const Tex *other = NULL;
     for (Tex *p = nvn_hm_get(&by_addr, &k->addr), *nx; p; p = nx) {
         nx = p->next_at;
         if (p == e) continue;
@@ -1632,9 +1657,11 @@ static void start_at(Tex *e, const TexKey *k, int taken_back) {
             continue;
         }
         alias = 1;
-        if (tex_alias && (!src || (same_but_swizzle(&p->key, k) && !same_but_swizzle(&src->key, k))) &&
-            alias_compatible(e, p) && alias_has_gpu_content(p))
-            src = p;
+        other = p;
+        if (!tex_alias || (src && !(same_but_swizzle(&p->key, k) && !same_but_swizzle(&src->key, k)))) continue;
+        if (!alias_compatible(e, p, &why)) continue;
+        if (!alias_has_gpu_content(p)) { why = "the live texture holds no GPU content"; continue; }
+        src = p;
     }
     if (alias) perf_count(PERF_CNT_TEX_ALIAS);
     if (!tex_alias) {   // create_tex initialised a new entry
@@ -1653,7 +1680,18 @@ static void start_at(Tex *e, const TexKey *k, int taken_back) {
         init_new(e);
         if (alias) {
             if (e->pub.mirrored) n_alias_upload++;
-            else n_alias_uninit++;
+            else {
+                n_alias_uninit++;
+                static int logged;
+                if (logged < 24 && other) {   // what an empty start over live memory was, to tell a black frame's cause
+                    logged++;
+                    rt_log("vk: texture %#llx (%ux%u fmt %#x%s) starts empty over a live one (%ux%u fmt %#x): %s; frame %llu",
+                           (unsigned long long)k->addr, e->pub.width, e->pub.height, e->t.d.format,
+                           taken_back ? ", taken back" : "", other->pub.width, other->pub.height, other->t.d.format,
+                           src ? "no replay recording to copy in" : why,
+                           (unsigned long long)__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED));
+                }
+            }
         }
     }
 }
