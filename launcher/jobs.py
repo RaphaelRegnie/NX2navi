@@ -22,8 +22,8 @@ STEPS = {
     'compile': ('Compile', 'Compiling the translated code and the port into a Windows program.'),
     'compile_changed': ('Compile Changed Files', 'Compiling the files this version changed. Files that did not '
                                                  'change are kept from the last build.'),
-    'shaders': ('Prepare the Shaders', "Translating every shader of the game ahead of time, so play does not stop to "
-                                       'compile them.'),
+    'shaders': ('Prepare the Shaders', "Building the game's known shaders for your graphics card ahead of time, so "
+                                       'play stops for them far less often.'),
     'ready': ('Ready to Play', 'The game is built.'),
     'download': ('Download {ver}', 'Downloading the new version of NX2navi.'),
     'verify': ('Verify the Download', 'Checking the download against its checksum.'),

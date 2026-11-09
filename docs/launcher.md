@@ -88,8 +88,11 @@ A path the Windows ANSI code page cannot hold breaks the MSYS2 tools, so the too
      (it reads UCRT64's headers; `make_game.py` `fast_clang` checks that both report the same version and target).
    - The lifted code is compiled for the processor's own level, x86-64-v3 (AVX2, FMA) or v2 (`cpu_level`): the game
      runs on the PC that builds it, and a generic build would do every fused multiply-add of the game in software.
-3. **Prepare the Shaders**: make_game.py's last step translates every shader of the game into the game's shader
-   cache and the driver's own cache (`tools/prepare_shaders.py`), so play does not stop to compile them. Its bar
+3. **Prepare the Shaders**: make_game.py's last step translates every shader of the game, in its default bind state,
+   into the game's shader cache and builds its stage library or compute pipeline into the driver's own cache
+   (`tools/prepare_shaders.py`), so play stops for them far less often. Variants met in play with another bind state are
+   still translated then, full pipelines are still linked in play (quickly, from the cached parts), and the driver's
+   cache is kept per executable and is lost when the driver clears it. Its bar
    follows the game's own counts, printed every 2 s: the translation fills the first half, the build into the
    driver's cache the second. An update every 10 s keeps the step's text current while nothing is printed, and after
    3 minutes without a count moving it says so, and that the step is still running.

@@ -35,9 +35,10 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
   out of it, for about twice the frame rate on a fast display; in a window of another shape than the picture, frames
   are generated inside the picture only, so the black bars stay clean
 - HDR on HDR displays: the game's own native HDR, or its SDR picture tone mapped to the display's peak, with exposure, highlights, shadows, contrast, saturation and gamma in the menu
-- Every shader prepared when the game is built, and the pipelines met in play built again in the background at each
-  start, so play does not stop to compile them; a draw that must wait for its pipeline has it built on worker
-  threads, never on the game's drawing thread
+- The game's known shaders prepared when the game is built, and the pipelines met in play built again in the
+  background at each start, so play rarely stops to compile them; a shader or pipeline met for the first time can
+  still hold a frame, and a draw that must wait for its pipeline has it built on worker threads, never on the game's
+  drawing thread
 - In-game settings menu (F1, or Minus and Plus together on a gamepad) and performance overlay (F10)
 - Keyboard, mouse and gamepads with remapping, Nintendo or Xbox button layout, rumble and gyro; the game follows
   whichever connected gamepad you press

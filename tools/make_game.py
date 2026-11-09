@@ -16,7 +16,9 @@ Steps, each skipped when a run before finished it for the same inputs (state in 
   5. compile  the lifted C and runtime/ with MSYS2's clang, linked into <out>/ocarina.exe; the MSYS2 DLLs it loads,
               the shader translator and romfs-index.bin beside it
   6. shaders  every shader in the game files (tools/prepare_shaders.py, default bind state) translated, and each one's
-              GPU driver build done once, so play does not stop to compile them (`ocarina.exe --prepare-shaders`)
+              GPU driver build done once into the driver's own cache, so play stops for them far less often
+              (`ocarina.exe --prepare-shaders`); variants met in play with another bind state are still translated
+              then, and the driver cache is per executable and is lost when the driver clears it
 
 The exefs and romfs steps depend only on the game files; lift and compile depend on this kit's code too. A newer kit
 therefore lifts and compiles again but keeps the unpacked game files, and --rebuild needs no game files at all. The
