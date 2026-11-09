@@ -63,6 +63,8 @@ enum { SPV_OP_ENTRY_POINT = 15, SPV_OP_TYPE_INT = 21, SPV_OP_TYPE_FLOAT = 22, SP
 
 // ---- device capabilities and the pipeline cache (set up on first use, under P.lock)
 
+enum { NP_16 = 1, NP_32 = 2, NP_64 = 4 };   // float widths in P.nan_preserve and spirv_nan_preserve
+
 static struct {
     PlatMutex lock;
     volatile int32_t ready;
@@ -82,6 +84,7 @@ static struct {
     int pv_last;                       // provokingVertexLast enabled: NVN's default is the last vertex
     VkShaderStageFlags sg32_stages;    // stages that accept requiredSubgroupSize = 32 (0: not available)
     int reconverge;                    // modules with subgroup ops get MaximallyReconvergesKHR (spirv_reconverge)
+    uint32_t nan_preserve;             // float widths that get SignedZeroInfNanPreserve (spirv_nan_preserve): NP_16|NP_32|NP_64
     VkDynamicState dyn[32];
     uint32_t n_dyn;
     PFN_vkCmdPushDescriptorSetKHR push;
@@ -607,6 +610,29 @@ static void cache_load(VkCtx *c) {
                kept / 1048576.0);
 }
 
+// The float widths spirv_nan_preserve declares on this device (P.nan_preserve), from NX2NAVI_VK_NAN_PRESERVE: 0 off,
+// 1 on every driver; unset, on every driver except NVIDIA's own, on which the game draws right without it. Only widths
+// the driver can preserve (VkPhysicalDeviceFloatControlsProperties) are declared, and nothing without 32-bit floats.
+static void nan_preserve_init(VkCtx *c) {
+    VkPhysicalDeviceDriverProperties drv = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceFloatControlsProperties fc = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES,
+                                                  .pNext = &drv};
+    VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &fc};
+    vkGetPhysicalDeviceProperties2(c->phys, &p2);
+    const char *e = cfg_get("NX2NAVI_VK_NAN_PRESERVE");   // no fixed default: it depends on the driver, see above
+    int set = e && *e, want = set ? strcmp(e, "0") != 0 : drv.driverID != VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+    uint32_t can = (fc.shaderSignedZeroInfNanPreserveFloat16 ? NP_16 : 0) |
+                   (fc.shaderSignedZeroInfNanPreserveFloat32 ? NP_32 : 0) |
+                   (fc.shaderSignedZeroInfNanPreserveFloat64 ? NP_64 : 0);
+    P.nan_preserve = want && (can & NP_32) ? can : 0;
+    if (P.nan_preserve)
+        rt_log("vk_pipeline: game shaders keep NaN, infinity and signed zero (SignedZeroInfNanPreserve for %s32%s-bit "
+               "floats%s)", can & NP_16 ? "16, " : "", can & NP_64 ? ", 64" : "", set ? ", NX2NAVI_VK_NAN_PRESERVE=1" : "");
+    else
+        rt_log("vk_pipeline: game shaders without SignedZeroInfNanPreserve (%s)",
+               !want ? (set ? "NX2NAVI_VK_NAN_PRESERVE=0" : "NVIDIA's driver") : "the driver cannot keep them in 32-bit floats");
+}
+
 static void keys_open(void);
 static void prebuild_start(void);
 
@@ -658,6 +684,7 @@ static int ensure_init(void) {
     P.reconverge = c->has_maximal_reconvergence && rt_knob("VK_RECONVERGE", "1") == 1;
     rt_log("vk_pipeline: maximal reconvergence for shaders with subgroup ops: %s",
            P.reconverge ? "on" : c->has_maximal_reconvergence ? "off (NX2NAVI_VK_RECONVERGE=0)" : "not supported by the driver");
+    nan_preserve_init(c);
     P.f_full_subgroups = v13.computeFullSubgroups;
     P.cache_control = v13.pipelineCreationCacheControl;
     // Pipeline creation feedback is core in Vulkan 1.3; the driver reports per pipeline whether P.cache held it.
@@ -1326,6 +1353,119 @@ static uint32_t *spirv_reconverge(const uint32_t *w, uint64_t n, uint64_t *out_n
     return o;
 }
 
+// Maxwell computes in IEEE 754, and the game's shaders rely on it: its compiler writes an unordered comparison as
+// `x > c || isnan(x)`, a normalisation of a zero-length vector gives an infinity that a later comparison sorts out, and
+// integer masks such as 0xffffffff travel through float moves and selects. The translator's own guards are isnan
+// tests as well (fragment outputs, min, max and clamp). Without the SignedZeroInfNanPreserve execution mode, SPIR-V
+// lets the driver assume that no float is NaN or infinite, and AMD's compilers act on it: on an RX 9070 XT a select
+// between 1 and the bits 0xffffffff, converted to float as a signed integer, gave 2^32 instead of -1 and blew the
+// shadow casters up into huge triangles (issue #156); RX 6000 cards drew Navi, and Link's skin next to her, with black
+// and white blocks (#41, #110); and AMD GPUs drew Navi's sparkles but not her orb, whose light sits at her own centre.
+// NVIDIA's driver keeps the IEEE results without the mode. This adds the capability, the extension (the translator
+// writes SPIR-V 1.3) and the mode for each entry point: 32-bit floats always, 16-bit and 64-bit ones where the module
+// declares Float16 or Float64 and `widths` (NP_*) allows them. NULL: nothing to change (the module has the mode, or no
+// 32-bit width is allowed, or no memory).
+static uint32_t *spirv_nan_preserve(const uint32_t *w, uint64_t n, uint32_t widths, uint64_t *out_n) {
+    enum { OP_EXTENSION = 10, OP_EXECUTION_MODE = 16, OP_CAPABILITY = 17, CAP_FLOAT16 = 9, CAP_FLOAT64 = 10,
+           CAP_PRESERVE = 4466, MODE_PRESERVE = 4461 };
+    static const char ext[] = "SPV_KHR_float_controls";
+    const uint32_t ext_words = (uint32_t)(sizeof ext + 3) / 4;   // the string with its terminating zero, padded
+    if (n < 5 || !(widths & NP_32)) return NULL;
+    uint64_t caps_end = 0, eps_end = 0;
+    uint32_t eps[16], neps = 0, use = NP_32;
+    int has_cap = 0, has_ext = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, l = w[i] >> 16;
+        if (!l || i + l > n) return NULL;
+        if (op == OP_CAPABILITY && l >= 2) {
+            caps_end = i + l;
+            if (w[i + 1] == CAP_FLOAT16) use |= NP_16;
+            else if (w[i + 1] == CAP_FLOAT64) use |= NP_64;
+            else if (w[i + 1] == CAP_PRESERVE) has_cap = 1;
+        } else if (op == OP_EXTENSION && (l - 1) * 4 >= sizeof ext && !memcmp(w + i + 1, ext, sizeof ext)) {
+            has_ext = 1;
+        } else if (op == SPV_OP_ENTRY_POINT && l >= 3) {
+            if (neps == 16) return NULL;
+            eps[neps++] = w[i + 2], eps_end = i + l;
+        } else if (op == OP_EXECUTION_MODE && l >= 3 && w[i + 2] == MODE_PRESERVE) {
+            return NULL;
+        } else if (op == SPV_OP_FUNCTION) {
+            break;
+        }
+        i += l;
+    }
+    if (!caps_end || !neps || eps_end < caps_end) return NULL;
+    use &= widths;
+    uint32_t nw = 0, width[3];
+    if (use & NP_16) width[nw++] = 16;
+    width[nw++] = 32;
+    if (use & NP_64) width[nw++] = 64;
+    uint64_t on = n + (has_cap ? 0 : 2) + (has_ext ? 0 : 1 + ext_words) + 4ull * nw * neps;
+    uint32_t *o = malloc(on * 4);
+    if (!o) return NULL;
+    uint64_t p = 0;
+    memcpy(o, w, caps_end * 4), p = caps_end;
+    if (!has_cap) o[p++] = 2u << 16 | OP_CAPABILITY, o[p++] = CAP_PRESERVE;
+    if (!has_ext) {
+        o[p++] = (1 + ext_words) << 16 | OP_EXTENSION;
+        memset(o + p, 0, ext_words * 4);
+        memcpy(o + p, ext, sizeof ext), p += ext_words;
+    }
+    memcpy(o + p, w + caps_end, (eps_end - caps_end) * 4), p += eps_end - caps_end;
+    for (uint32_t k = 0; k < neps; k++)
+        for (uint32_t j = 0; j < nw; j++)
+            o[p++] = 4u << 16 | OP_EXECUTION_MODE, o[p++] = eps[k], o[p++] = MODE_PRESERVE, o[p++] = width[j];
+    memcpy(o + p, w + eps_end, (n - eps_end) * 4), p += n - eps_end;
+    *out_n = p;
+    return o;
+}
+
+// --selftest (main.c): spirv_nan_preserve on a small fragment module, without a device. Returns the number of failures.
+int vk_pipeline_spirv_selftest(void) {
+    enum { CAP = 2u << 16 | 17, MODE = 4u << 16 | 16 };
+    static const uint32_t head[] = {0x07230203, 0x00010300, 0, 5, 0, CAP, 1, CAP, 10};   // Shader, Float64
+    static const uint32_t body[] = {
+        3u << 16 | 14, 0, 1,                     // OpMemoryModel Logical GLSL450
+        5u << 16 | 15, 4, 1, 0x6e69616d, 0,      // OpEntryPoint Fragment %1 "main"
+        3u << 16 | 16, 1, 7,                     // OpExecutionMode %1 OriginUpperLeft
+        2u << 16 | 19, 2,                        // %2 = OpTypeVoid
+        3u << 16 | 33, 3, 2,                     // %3 = OpTypeFunction %2
+        5u << 16 | 54, 2, 1, 0, 3,               // %1 = OpFunction %2 None %3
+        2u << 16 | 248, 4, 1u << 16 | 253, 1u << 16 | 56};   // OpLabel, OpReturn, OpFunctionEnd
+    enum { NH = sizeof head / 4, NB = sizeof body / 4, EP_END = 8 };   // EP_END: body words up to the entry point's end
+    uint32_t in[NH + NB], want[NH + NB + 32];
+    memcpy(in, head, sizeof head), memcpy(in + NH, body, sizeof body);
+    int failures = 0;
+    // widths: what the device allows; f64: the module declares Float64; w64: a 64-bit mode is expected
+    for (int t = 0; t < 3; t++) {
+        uint32_t widths = t == 0 ? NP_16 | NP_32 | NP_64 : NP_32, n = NH + NB, p = 0;
+        int f64 = t != 2, w64 = t == 0;
+        if (!f64) in[NH - 1] = 0;   // Matrix in place of Float64
+        memcpy(want, in, NH * 4), p = NH;
+        want[p++] = CAP, want[p++] = 4466;
+        want[p++] = 7u << 16 | 10;
+        memset(want + p, 0, 24), memcpy(want + p, "SPV_KHR_float_controls", 23), p += 6;
+        memcpy(want + p, body, EP_END * 4), p += EP_END;
+        want[p++] = MODE, want[p++] = 1, want[p++] = 4461, want[p++] = 32;
+        if (w64) want[p++] = MODE, want[p++] = 1, want[p++] = 4461, want[p++] = 64;
+        memcpy(want + p, body + EP_END, (NB - EP_END) * 4), p += NB - EP_END;
+        uint64_t on = 0, again_n = 0;
+        uint32_t *o = spirv_nan_preserve(in, n, widths, &on);
+        uint32_t *again = o ? spirv_nan_preserve(o, on, widths, &again_n) : NULL;
+        if (!o || on != p || memcmp(o, want, p * 4) || again) {
+            printf("spirv: SignedZeroInfNanPreserve rewrite, case %d: wrong output\n", t);
+            failures++;
+        }
+        free(o), free(again);
+    }
+    if (spirv_nan_preserve(in, NH + NB, NP_16 | NP_64, &(uint64_t){0})) {
+        printf("spirv: SignedZeroInfNanPreserve rewrite: a module changed without the 32-bit width\n");
+        failures++;
+    }
+    printf("spirv: SignedZeroInfNanPreserve rewrite: %s\n", failures ? "FAIL" : "ok");
+    return failures;
+}
+
 // Chain {size 32} into a stage create info when the stage uses subgroup ops and the driver allows the pin.
 static void pin_subgroup32(VkPipelineShaderStageCreateInfo *st, VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *rq,
                            const uint32_t *w, uint64_t words) {
@@ -1416,6 +1556,12 @@ static VkShaderModule make_module(const uint32_t *w, uint64_t words) {
     if (rc) {
         free(fixed);
         w = fixed = rc, words = rc_n;
+    }
+    uint64_t np_n = 0;
+    uint32_t *np = P.nan_preserve ? spirv_nan_preserve(w, words, P.nan_preserve, &np_n) : NULL;
+    if (np) {
+        free(fixed);
+        w = fixed = np, words = np_n;
     }
     if (P.feedback >= 2) mm_hash = fnv(FNV0, w, (size_t)words * 4);
     VkShaderModuleCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = (size_t)words * 4, .pCode = w};
