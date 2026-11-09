@@ -75,7 +75,7 @@
 # Build shader stage libraries in the background ahead of time, and the threads for it (1 to 16; default 2). More
 # threads mostly wait on the graphics driver's lock: 16 on NVIDIA spent about 8 cores spinning in the driver.
 # lib_prebuild = 1
-# lib_prebuild_threads = 4
+# lib_prebuild_threads = 2
 # 1: very large compute shaders that no cache holds are built on one background thread after the start. 0: each is
 # built when the game first uses it, which can hold that frame for a second or two.
 # lib_prebuild_big_bg = 1
