@@ -64,6 +64,7 @@ typedef struct PoolRec {
     uint32_t acc_sub;                  // replay: the last submission that synced the mirror (mirror_sync)
     uint32_t wb_sub;                   // replay: the last submission that wrote mirror bytes back to guest memory
     uint32_t retry_sub;                // replay: a mirror refused for the VRAM budget is asked again from here, 0 never
+    uint8_t asked_room;                // replay: its refusal already asked the textures for room (once until it gets one)
     uint32_t vd_wrote_sub, vd_use_sub; // verify mode: the last submission that bound it written / used its mirror
     uint64_t vd_wrote_n;               // verify mode: written bindings of it so far
     uint32_t mgen;                     // gen_lock: every page write stamped up to this generation is in the mirror
@@ -1401,9 +1402,10 @@ static void refuse(PoolRec *r, int why, const char *what) {
 // A pool whose mirror would not fit the VRAM budget stayed imported for good, however hot, while mirrors nothing had
 // used for minutes kept their VRAM; draws that read an imported pool over PCIe bring a discrete GPU down to a few
 // frames per second. Now a new mirror that does not fit takes the room of mirrors no submission synced for MIRROR_IDLE
-// submissions, least recently synced first (mirror_evict); when that is not enough, idle textures are asked to make
-// the rest (vk_texture_want_room) and the pool asks again RETRY_SOON submissions later; any other pool refused for the
-// budget asks again after RETRY_SUBS submissions (vk_mem_use). Mirrors never go to make room for textures: evicted
+// submissions, least recently synced first (mirror_evict), and only when they free enough; when they cannot, idle
+// textures are asked to make the rest (vk_texture_want_room) and the pool asks again RETRY_SOON submissions later, once
+// per refusal series; after that, and for any other pool refused for the budget, every RETRY_SUBS submissions
+// (vk_mem_use). Asked every RETRY_SOON submissions without end, 113 refused pools made 1,795 retries in 6,000 frames. Mirrors never go to make room for textures: evicted
 // under VRAM pressure during a menu, 395 of them were refused again when the world came back and the game ran at 4 fps.
 // The budget counts the free space inside VMA's blocks as room (vk_mem_vram_live).
 // A victim was neither synced, used nor written back in the submission being recorded (it has nothing in the copy,
@@ -1434,7 +1436,7 @@ static uint64_t evict_room(void) {
 }
 
 // Replay thread: evicts mirrors idle for at least min_idle submissions, least recently synced first, until need bytes
-// are freed. Returns the bytes freed.
+// are freed; none when the candidates cannot free that much. Returns the bytes freed.
 static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) {
     enum { MAXV = 64 };
     PoolRec *v[MAXV];
@@ -1451,6 +1453,9 @@ static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) 
         memmove(v + at + 1, v + at, sizeof *v * (size_t)(nv - 1 - at));
         v[at] = r;
     }
+    uint64_t can = 0;   // what all the candidates would free: short of need, none goes (no mirror lost for nothing)
+    for (int i = 0; i < nv; i++) can += v[i]->import_hi - v[i]->import_lo;
+    if (can < need) nv = 0;
     uint64_t freed = 0;
     uint32_t idle_for[MAXV];
     VkBuffer dead[MAXV];
@@ -1521,9 +1526,10 @@ static void mirror_create(PoolRec *r) {
             snprintf(why, sizeof why, "its %.1f MiB mirror does not fit the VRAM budget (%.0f of %.0f MiB in use)",
                      n / 1048576.0, used / 1048576.0, budget / 1048576.0);
             refuse(r, MR_BUDGET, why);
-            if (evict) {   // idle textures make the rest; asked again once they had the time
+            if (evict && !r->asked_room) {   // idle textures make the rest; asked again once they had the time
                 vk_texture_want_room(used + n + budget / 8 - budget);
                 r->retry_sub = msub + RETRY_SOON ? msub + RETRY_SOON : 1;
+                r->asked_room = 1;   // later refusals wait RETRY_SUBS: the textures had nothing to give
             }
             return;
         }
@@ -1556,6 +1562,7 @@ static void mirror_create(PoolRec *r) {
     plat_mutex_unlock(&pool_lock);
     r->acc_sub = msub;
     r->mstate = MS_ON;
+    r->asked_room = 0;
     // The device address table names the mirror from now on: the GPU's writes go there, and the sync copies the CPU's.
     if (r->gpa_rec) r->gpa_rec = vk_gpa_remap(r->import_lo, r->import_hi, r->gpa_rec, r->mbuf, r->import_lo);
     range_add(&pend, &npend, &cpend, r, 0, n);
