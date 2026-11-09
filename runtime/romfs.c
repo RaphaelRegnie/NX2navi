@@ -898,7 +898,6 @@ static void overlay_init(void) {
                                                                   "(tools/make_romfs_patches.py --prompts pc --aspect)"
                                                              : "the game resolution takes its own UI layout")
                : prompts_off == ROMFS_PROMPTS_PATCHES ? "NX2NAVI_ROMFS_PATCHES is set"
-               : pick == PROMPTS_PC                   ? "their folder has no manifest.tsv (run the setup again)"
                                                       : "their folder has no manifest.tsv (tools/pad_prompts.py writes it)");
     }
     size_t prompts_end = noverlay;

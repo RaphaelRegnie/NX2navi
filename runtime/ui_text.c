@@ -251,16 +251,18 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A bottom)", [UI_MENU_PAD_LAYOUT_PLAYSTATION] = "PlayStation (A bottom)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "in use: %s",
     [UI_MENU_PROMPTS] = "Button prompts",
-    [UI_MENU_PROMPTS_DESC] = "Which controller's buttons the game's prompts show, in text, in the action prompt and on "
-                             "the ocarina's notes. Nintendo: the game's own. Xbox and PlayStation: that pad's buttons "
-                             "(LB, RB, LT, RT, Menu, View; L1, R1, L2, R2, Options, Create), and A, B, X and Y as the "
+    [UI_MENU_PROMPTS_DESC] = "Which buttons the game's prompts show, in text, in the action prompt and on the "
+                             "ocarina's notes. Nintendo: the game's own. Xbox and PlayStation: that pad's buttons (LB, "
+                             "RB, LT, RT, Menu, View; L1, R1, L2, R2, Options, Create), and A, B, X and Y as the "
                              "button the layout above presses (with Nintendo (A right) the right button does A, so the "
-                             "prompts for A show B, or circle). The prompt files are made from button art with "
-                             "tools/pad_prompts.py. The game reads its prompts at start, so they change after a "
-                             "restart. They are part of the game's files, so a button you remap in Controls keeps its "
-                             "old prompt on screen.",
+                             "prompts for A show B, or circle). Keyboard and mouse: the key each button has (E, Ctrl, "
+                             "Space, left click...), WASD for moving and the mouse for the camera. The prompt files "
+                             "are made from button art with tools/pad_prompts.py, the keys as nx2navi.ini binds them "
+                             "when it runs. The game reads its prompts at start, so they change after a restart. They "
+                             "are part of the game's files, so a button you remap in Controls keeps its old prompt on "
+                             "screen until the files are made again.",
     [UI_MENU_PROMPTS_NINTENDO] = "Nintendo", [UI_MENU_PROMPTS_XBOX] = "Xbox",
-    [UI_MENU_PROMPTS_PLAYSTATION] = "PlayStation", [UI_MENU_PROMPTS_PC] = "PC",
+    [UI_MENU_PROMPTS_PLAYSTATION] = "PlayStation", [UI_MENU_PROMPTS_PC] = "Keyboard and mouse",
     [UI_MENU_PROMPTS_MISSING] = "prompt files missing: tools/pad_prompts.py makes them",
     [UI_MENU_PROMPTS_FAILED] = "prompt files damaged: make them again with tools/pad_prompts.py",
     [UI_MENU_PROMPTS_RESTART] = "prompts change after restart",
@@ -748,16 +750,18 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A снизу)", [UI_MENU_PAD_LAYOUT_PLAYSTATION] = "PlayStation (A снизу)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "сейчас: %s",
     [UI_MENU_PROMPTS] = "Подсказки кнопок",
-    [UI_MENU_PROMPTS_DESC] = "Кнопки какого контроллера показывают подсказки игры: в тексте, в подсказке действия и на "
-                             "нотах окарины. Nintendo: как в самой игре. Xbox и PlayStation: кнопки этого контроллера "
-                             "(LB, RB, LT, RT, Menu, View; L1, R1, L2, R2, Options, Create), а A, B, X и Y показаны "
-                             "той кнопкой, которую нажимает раскладка выше (в Nintendo (A справа) A делает правая "
-                             "кнопка, и подсказки A показывают B или круг). Файлы подсказок создаются из картинок "
-                             "кнопок программой tools/pad_prompts.py. Игра читает подсказки при запуске, так что они "
-                             "меняются после перезапуска. Подсказки записаны в файлах игры, поэтому у кнопки, "
-                             "переназначенной на вкладке управления, на экране остаётся прежняя подсказка.",
+    [UI_MENU_PROMPTS_DESC] = "Какие кнопки показывают подсказки игры: в тексте, в подсказке действия и на нотах "
+                             "окарины. Nintendo: как в самой игре. Xbox и PlayStation: кнопки этого контроллера (LB, "
+                             "RB, LT, RT, Menu, View; L1, R1, L2, R2, Options, Create), а A, B, X и Y показаны той "
+                             "кнопкой, которую нажимает раскладка выше (в Nintendo (A справа) A делает правая кнопка, "
+                             "и подсказки A показывают B или круг). Клавиатура и мышь: клавиша каждой кнопки (E, Ctrl, "
+                             "пробел, левый клик...), WASD для движения и мышь для камеры. Файлы подсказок создаются "
+                             "из картинок кнопок программой tools/pad_prompts.py, клавиши берутся из nx2navi.ini на "
+                             "момент её запуска. Игра читает подсказки при запуске, так что они меняются после "
+                             "перезапуска. Подсказки записаны в файлах игры, поэтому у кнопки, переназначенной на "
+                             "вкладке управления, на экране остаётся прежняя подсказка, пока файлы не созданы заново.",
     [UI_MENU_PROMPTS_NINTENDO] = "Nintendo", [UI_MENU_PROMPTS_XBOX] = "Xbox",
-    [UI_MENU_PROMPTS_PLAYSTATION] = "PlayStation", [UI_MENU_PROMPTS_PC] = "PC",
+    [UI_MENU_PROMPTS_PLAYSTATION] = "PlayStation", [UI_MENU_PROMPTS_PC] = "Клавиатура и мышь",
     [UI_MENU_PROMPTS_MISSING] = "нет файлов подсказок: их создаёт tools/pad_prompts.py",
     [UI_MENU_PROMPTS_FAILED] = "файлы подсказок повреждены: создайте их снова tools/pad_prompts.py",
     [UI_MENU_PROMPTS_RESTART] = "подсказки сменятся после перезапуска",
@@ -1382,18 +1386,21 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_HDR_UI] = "Brilho do HUD e do menu",
     [UI_MENU_HDR_UI_DESC] = "Brilho da interface e deste menu, em nits.",
     [UI_MENU_PROMPTS] = "Ícones de botões",
-    [UI_MENU_PROMPTS_DESC] = "Os botões de qual controle os ícones do jogo mostram: no texto, no ícone de ação e nas "
-                             "notas da ocarina. Nintendo: os do próprio jogo. Xbox e PlayStation: os botões desse "
-                             "controle (LB, RB, LT, RT, Menu, Exibir; L1, R1, L2, R2, Options, Create), e A, B, X e Y "
-                             "aparecem como o botão que o layout acima aperta (com Nintendo (A à direita) o botão da "
-                             "direita faz A, então os ícones de A mostram B, ou círculo). Os arquivos dos ícones são "
-                             "feitos a partir de imagens de botões com tools/pad_prompts.py. O jogo lê os ícones ao "
-                             "iniciar, então eles mudam depois de reiniciar. Eles fazem parte dos arquivos do jogo, "
-                             "então um botão remapeado em Controles continua com o ícone antigo na tela.",
+    [UI_MENU_PROMPTS_DESC] = "Quais botões os ícones do jogo mostram: no texto, no ícone de ação e nas notas da "
+                             "ocarina. Nintendo: os do próprio jogo. Xbox e PlayStation: os botões desse controle (LB, "
+                             "RB, LT, RT, Menu, Exibir; L1, R1, L2, R2, Options, Create), e A, B, X e Y aparecem como "
+                             "o botão que o layout acima aperta (com Nintendo (A à direita) o botão da direita faz A, "
+                             "então os ícones de A mostram B, ou círculo). Teclado e mouse: a tecla de cada botão (E, "
+                             "Ctrl, Espaço, clique esquerdo...), WASD para andar e o mouse para a câmera. Os arquivos "
+                             "dos ícones são feitos a partir de imagens de botões com tools/pad_prompts.py, com as "
+                             "teclas como o nx2navi.ini as define quando ele roda. O jogo lê os ícones ao iniciar, "
+                             "então eles mudam depois de reiniciar. Eles fazem parte dos arquivos do jogo, então um "
+                             "botão remapeado em Controles continua com o ícone antigo na tela até os arquivos serem "
+                             "feitos de novo.",
     [UI_MENU_PROMPTS_NINTENDO] = "Nintendo",
     [UI_MENU_PROMPTS_XBOX] = "Xbox",
     [UI_MENU_PROMPTS_PLAYSTATION] = "PlayStation",
-    [UI_MENU_PROMPTS_PC] = "PC",
+    [UI_MENU_PROMPTS_PC] = "Teclado e mouse",
     [UI_MENU_MOUSE_MODE] = "Câmera com o mouse",
     [UI_MENU_MOUSE_MODE_DESC] = "Direta: a câmera gira o quanto o mouse se move, como num jogo de PC, sem zona morta nem curva do analógico (jogo 1.4.3; as outras versões usam a emulação do analógico). Emulação do analógico: o mouse age como o analógico direito.",
     [UI_MENU_MOUSE_STICK] = "Emulação do analógico",
@@ -2004,15 +2011,17 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_HDR_UI] = "HUD 和菜单亮度",
     [UI_MENU_HDR_UI_DESC] = "界面和本菜单的亮度（尼特）。",
     [UI_MENU_PROMPTS] = "按键提示",
-    [UI_MENU_PROMPTS_DESC] = "游戏的按键提示显示哪种手柄的按键：包括文字、动作提示和陶笛的音符。Nintendo：游戏原有的提示。Xbox 和 Pla"
-                             "yStation：该手柄的按键（LB、RB、LT、RT、Menu、View；L1、R1、L2、R2、Options、Cr"
-                             "eate），A、B、X、Y 显示为上方布局所按下的按键（使用 Nintendo（A 在右）时由右侧按键执行 A，因此 A"
-                             " 的提示显示 B 或圆圈）。提示文件由 tools/pad_prompts.py 根据按键图片生成。游戏在启动时读取按键"
-                             "提示，因此重启后才会改变。提示属于游戏文件，在“操作”中重新映射的按键在屏幕上仍显示原来的提示。",
+    [UI_MENU_PROMPTS_DESC] = "游戏的按键提示显示哪种按键：包括文字、动作提示和陶笛的音符。Nintendo：游戏原有的提示。"
+                             "Xbox 和 PlayStation：该手柄的按键（LB、RB、LT、RT、Menu、View；L1、R1、L2、R2、Options、Create），"
+                             "A、B、X、Y 显示为上方布局所按下的按键（使用 Nintendo（A 在右）时由右侧按键执行 A，因此 A 的提示显示 B 或圆圈）。"
+                             "键盘和鼠标：每个按键对应的键（E、Ctrl、空格、左键……），WASD 移动，鼠标控制镜头。"
+                             "提示文件由 tools/pad_prompts.py 根据按键图片生成，键位以生成时 nx2navi.ini 中的设置为准。"
+                             "游戏在启动时读取按键提示，因此重启后才会改变。"
+                             "提示属于游戏文件，在“操作”中重新映射的按键在重新生成文件之前仍显示原来的提示。",
     [UI_MENU_PROMPTS_NINTENDO] = "Nintendo",
     [UI_MENU_PROMPTS_XBOX] = "Xbox",
     [UI_MENU_PROMPTS_PLAYSTATION] = "PlayStation",
-    [UI_MENU_PROMPTS_PC] = "PC",
+    [UI_MENU_PROMPTS_PC] = "键盘和鼠标",
     [UI_MENU_MOUSE_MODE] = "鼠标视角",
     [UI_MENU_MOUSE_MODE_DESC] = "直接：镜头按鼠标移动的距离转动，与电脑游戏相同，没有摇杆死区和响应曲线（游戏 1.4.3；其他版本使用摇杆模拟）。摇杆模拟：鼠标相当于右摇杆。",
     [UI_MENU_MOUSE_STICK] = "摇杆模拟",

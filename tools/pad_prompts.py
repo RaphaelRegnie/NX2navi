@@ -1,23 +1,29 @@
-"""Xbox and PlayStation button prompts for Ocarina of Time (Switch 2), drawn from button art on the player's machine.
+"""Xbox, PlayStation and keyboard-and-mouse button prompts for Ocarina of Time (Switch 2), drawn from button art on the
+player's machine.
 
-    python tools/pad_prompts.py --art FOLDER --game FOLDER [--style xbox|playstation] [--layout position|label]
+    python tools/pad_prompts.py --art FOLDER --game FOLDER [--style xbox|playstation|pc] [--layout position|label]
+                                [--binds nx2navi.ini]
 
---art is a folder of button art with the file names of STYLES below: the Source folder of a button prompt art pack,
-which holds XGamepad/Default, XGamepad/Light, P5Gamepad/Default and P5Gamepad/Light (128x128 PNGs: a dark button with
-a white letter or symbol, or a light button with a coloured one). The art is read where it lies and never enters the
-repository.
+--art is a folder of button art with the file names of STYLES and KEY_ART below: the Source folder of a button prompt
+art pack, which holds XGamepad/Default, XGamepad/Light, P5Gamepad/Default, P5Gamepad/Light, Keyboard_Mouse/Dark and
+Keyboard_Mouse/White (128x128 PNGs: a dark button or key with a white label, or a light one with a dark or coloured
+label). The art is read where it lies and never enters the repository.
 --game is the folder of the port's exe and romfs-index.bin. The RomFS is read from its romfs folder (index.json and
-romfs.bin, as the setup writes them); --romfs names another, which may also be a folder of extracted files. Each
+romfs.bin, as the setup writes them); --romfs names another, which may also be a folder of extracted files. Each pad
 style and layout becomes the overlay folder <game>/romfs-patches-<style> (layout position) or
-<game>/romfs-patches-<style>-label (layout label), with a manifest.tsv: runtime/romfs.c overlay_init loads it in place
-of the game's files when nx2navi.ini has prompts = xbox or playstation (runtime/input_map.c input_prompts_folder).
-Without --style or --layout, every style or layout. --out writes a single style and layout elsewhere.
+<game>/romfs-patches-<style>-label (layout label), and the keyboard and mouse <game>/romfs-patches-pc, each with a
+manifest.tsv: runtime/romfs.c overlay_init loads it in place of the game's files when nx2navi.ini has prompts = xbox,
+playstation or pc (runtime/input_map.c input_prompts_folder). Without --style or --layout, every style or layout.
+--out writes a single style and layout elsewhere.
 
-The two layouts follow pad_layout (runtime/input_map.c). position, for pad_layout = nintendo: a pad is played by
+The two pad layouts follow pad_layout (runtime/input_map.c). position, for pad_layout = nintendo: a pad is played by
 position, so Switch A is the right face button, labelled B on an Xbox pad and circle on a PlayStation pad; the prompts
 for A show that button (A as B or circle, B as A or cross, X as Y or triangle, Y as X or square). label, for
-pad_layout = xbox and auto: Switch A is the bottom face button, so A shows A or cross, B shows B or circle, X shows X
-or square and Y shows Y or triangle.
+pad_layout = xbox, playstation and auto: Switch A is the bottom face button, so A shows A or cross, B shows B or
+circle, X shows X or square and Y shows Y or triangle.
+pc shows the first key each button has (PC_KEYS, Ocarina's defaults, with the bind_ lines of --binds over them; by
+default <game>/nx2navi.ini), the mouse buttons as a mouse, and for the right stick the mouse moving. A key bound
+later shows after the tool runs again.
 
 What changes, the rest of each file staying as it is:
 - Font2/Scalable/External.Nin_Ounce_NVN2.bfotf.zs, the button font every prompt in text uses (dialogue, the button
@@ -44,7 +50,7 @@ import sys
 from pathlib import Path
 
 import zstandard
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
 
@@ -123,6 +129,92 @@ NOTES = {'OcarinaButtonA_00': 'A', 'OcarinaButtonB_00': 'B', 'OcarinaButtonX_00'
          'OcarinaButtonL_00': 'L', 'OcarinaButtonR_00': 'R'}
 
 
+def pad_pictures(style, layout):
+    """(glyph, note) for a pad style: Switch button -> picture, the face buttons through FACE."""
+    s = STYLES[style]
+    glyph = {b: s['glyph'][FACE[layout].get(b, b)] for b in set(GLYPHS.values())}
+    note = {b: s['note'][FACE[layout].get(b, b)] for b in NOTES.values()}
+    return glyph, note
+
+
+# ---- keyboard and mouse (prompts = pc): every button shows the first key its bindings give it. The defaults are
+# runtime/input_map.c DEFAULT_KEYS; --binds takes the bind_ lines of a nx2navi.ini over them. The right stick is the
+# camera, which the mouse turns, so its prompts show the mouse moving (its arrow keys, a second source, do not show).
+PC_KEYS = {'A': 'e', 'B': 'lctrl', 'X': 'space', 'Y': 'mouse_l', 'L': 'q', 'R': 'r', 'ZL': 'mouse_r', 'ZR': 'f',
+           'PLUS': 'tab', 'MINUS': 'm', 'LEFT': '1', 'UP': '2', 'RIGHT': '3', 'DOWN': '4', 'LCLICK': 'v', 'RCLICK': 'c',
+           'LSTICK_UP': 'w', 'LSTICK_LEFT': 'a', 'LSTICK_DOWN': 's', 'LSTICK_RIGHT': 'd'}
+# The art's name of each key (nx2navi.ini names, runtime/input_map.c key_names); letters, digits and F keys are their
+# own. The art spells Ctrl as Crtl.
+KEY_ART = {'space': 'Space', 'tab': 'Tab', 'lshift': 'Shift', 'rshift': 'Shift', 'lctrl': 'Crtl', 'rctrl': 'Crtl',
+           'lalt': 'Alt', 'up': 'Up', 'down': 'Down', 'left': 'Left', 'right': 'Right', 'enter': 'Enter',
+           'backspace': 'BackSpace', 'capslock': 'CapsLock', 'insert': 'Ins', 'delete': 'Del', 'home': 'Home',
+           'end': 'End', 'pageup': 'PageUp', 'pagedown': 'PageDown', 'minus': 'Minus', 'num_sub': 'Minus',
+           'num_add': 'Plus', 'num_mul': 'Asterisk', 'num_div': 'Slash', 'lbracket': 'Brackets_L',
+           'rbracket': 'Brackets_R', 'semicolon': 'Semicolon', 'apostrophe': 'Quotation', 'slash': 'Slash',
+           'grave': 'Tilde', 'mouse_l': 'Mouse_Left', 'mouse_r': 'Mouse_Right', 'mouse_m': 'Mouse_Middle'}
+# What a blank key shows for a key the art has no picture of (label_art); any other shows its name.
+KEY_LABELS = {'comma': ',', 'period': '.', 'equals': '=', 'num_decimal': '.', 'backslash': '\\', 'mouse_x1': 'M4',
+              'mouse_x2': 'M5'}
+KM = 'Keyboard_Mouse/'
+
+
+def pc_keys(ini_text=None):
+    """PC_KEYS with the first key of each bind_<button> line of a nx2navi.ini text over it. A line without a key
+    entry, or with key:default first, keeps the default (the prompt then shows a key the line took away)."""
+    keys = dict(PC_KEYS)
+    for line in (ini_text or '').splitlines():
+        line = line.split('#')[0].split(';')[0].strip()
+        if not line.lower().startswith('bind_') or '=' not in line:
+            continue
+        button, value = (s.strip() for s in line.split('=', 1))
+        entries = [e.strip()[4:].strip().lower() for e in value.split(',') if e.strip().lower().startswith('key:')]
+        if entries and entries[0] != 'default' and button[5:].upper() in keys:
+            keys[button[5:].upper()] = entries[0]
+    return keys
+
+
+def key_picture(art, key, shade):
+    """The art of a key or mouse button in shade (Dark: a dark key with a white label; White: the other way round), or
+    a blank key with its name drawn on it when the art has none. The art names its dark 4 key T_3_Key_Dark-1."""
+    stem = KEY_ART.get(key)
+    if not stem:
+        digit = key[3:] if key.startswith('num') and key[3:].isdigit() else key
+        stem = digit.upper() if len(digit) == 1 or (digit[0] == 'f' and digit[1:].isdigit()) else None
+    for name in ([f'T_{stem}_Key_{shade}.png'] + ([f'T_3_Key_{shade}-1.png'] if stem == '4' else [])) if stem else []:
+        if (art / KM / shade / name).is_file():
+            return f'{KM}{shade}/{name}'
+    return ('label', key, shade)
+
+
+def pc_pictures(art, keys):
+    """(glyph, note) for the keyboard and mouse: Switch button -> picture, by the key each button has. A d-pad or a
+    stick with several directions shows their keys in a grid, as they sit on the keyboard."""
+    def k(button, shade='Dark'):
+        return key_picture(art, keys[button], shade)
+
+    def grid(*cells):
+        return ('grid', tuple(cells))
+
+    def mouse(axes):
+        return f'{KM}Dark/T_Mouse_{axes}_Key_Dark.png'
+    glyph = {b: k(b) for b in ('A', 'B', 'X', 'Y', 'L', 'R', 'ZL', 'ZR', 'PLUS', 'MINUS')}
+    glyph.update({
+        'LSTICK_PRESS': k('LCLICK'), 'RSTICK_PRESS': k('RCLICK'),
+        'DPAD': grid((k('UP'), 1, 0), (k('LEFT'), 0, 1), (k('DOWN'), 1, 1), (k('RIGHT'), 2, 1)),
+        'DPAD_UP': k('UP'), 'DPAD_DOWN': k('DOWN'), 'DPAD_LEFT': k('LEFT'), 'DPAD_RIGHT': k('RIGHT'),
+        'DPAD_UPDOWN': grid((k('UP'), 0, 0), (k('DOWN'), 0, 1)), 'DPAD_LEFTRIGHT': grid((k('LEFT'), 0, 0), (k('RIGHT'), 1, 0)),
+        'LSTICK': grid((k('LSTICK_UP'), 1, 0), (k('LSTICK_LEFT'), 0, 1), (k('LSTICK_DOWN'), 1, 1),
+                       (k('LSTICK_RIGHT'), 2, 1)),
+        'LSTICK_UP': k('LSTICK_UP'), 'LSTICK_DOWN': k('LSTICK_DOWN'), 'LSTICK_LEFT': k('LSTICK_LEFT'),
+        'LSTICK_RIGHT': k('LSTICK_RIGHT'), 'LSTICK_UPDOWN': grid((k('LSTICK_UP'), 0, 0), (k('LSTICK_DOWN'), 0, 1)),
+        'LSTICK_LEFTRIGHT': grid((k('LSTICK_LEFT'), 0, 0), (k('LSTICK_RIGHT'), 1, 0)),
+        'RSTICK': mouse('XY'), 'RSTICK_ROTATE': mouse('XY'), 'RSTICK_UP': mouse('Y'), 'RSTICK_DOWN': mouse('Y'),
+        'RSTICK_UPDOWN': mouse('Y'), 'RSTICK_LEFT': mouse('X'), 'RSTICK_RIGHT': mouse('X'), 'RSTICK_LEFTRIGHT': mouse('X'),
+    })
+    note = {b: k(b, 'White') for b in NOTES.values()}
+    return glyph, note
+
+
 # ---- the RomFS: index.json and romfs.bin (each file's offset and size), or a folder of extracted files
 class Romfs:
     def __init__(self, root):
@@ -189,12 +281,51 @@ def compress(contents, dictionary, level):
 
 # ---- art: a button as coverage, traced into outlines
 def load_art(art, rel):
+    """A picture as RGBA: a file under art, or one drawn from several (OPTIONS, ('grid', cells), ('label', key, shade))."""
     if rel == OPTIONS:
         return options_art(art)
+    if isinstance(rel, tuple) and rel[0] == 'grid':
+        return grid_art(art, rel[1])
+    if isinstance(rel, tuple) and rel[0] == 'label':
+        return label_art(art, *rel[1:])
     path = art / rel
     if not path.is_file():
         sys.exit(f'{path} missing: --art is the art pack\'s Source folder')
     return Image.open(path).convert('RGBA')
+
+
+def opaque(img):
+    return img.crop(img.getchannel('A').point(lambda a: 255 if a > 8 else 0).getbbox())
+
+
+def grid_art(art, cells):
+    """Keys side by side: cells are (picture, column, row), row 0 on top, each centred in a cell as large as the
+    largest key, with a small gap between cells."""
+    pics = [(opaque(load_art(art, rel)), c, r) for rel, c, r in cells]
+    cw, ch, gap, pad = max(p.width for p, _, _ in pics), max(p.height for p, _, _ in pics), 6, 4
+    cols, rows = max(c for _, c, _ in pics) + 1, max(r for _, _, r in pics) + 1
+    canvas = Image.new('RGBA', (cols * cw + (cols - 1) * gap + 2 * pad, rows * ch + (rows - 1) * gap + 2 * pad))
+    for p, c, r in pics:
+        canvas.alpha_composite(p, (pad + c * (cw + gap) + (cw - p.width) // 2, pad + r * (ch + gap) + (ch - p.height) // 2))
+    return canvas
+
+
+def label_art(art, key, shade):
+    """A key the art has no picture of: its blank key with the key's name written on it."""
+    blank = load_art(art, f'{KM}Blanks/T_Blank_{"Black" if shade == "Dark" else "White"}_Normal.png')
+    name = KEY_LABELS.get(key, key.upper())
+    d = ImageDraw.Draw(blank)
+    x0, y0, x1, y1 = blank.getchannel('A').point(lambda a: 255 if a > 127 else 0).getbbox()
+    size = 48
+    while size > 10:
+        font = ImageFont.load_default(size)
+        l, t, r, b = d.textbbox((0, 0), name, font=font)
+        if r - l <= (x1 - x0) * 0.7 and b - t <= (y1 - y0) * 0.5:
+            break
+        size -= 2
+    d.text(((x0 + x1 - (r - l)) / 2 - l, (y0 + y1 - (b - t)) / 2 - t), name, font=font,
+           fill=(255, 255, 255, 255) if shade == 'Dark' else (40, 40, 40, 255))
+    return blank
 
 
 def options_art(art):
@@ -402,35 +533,37 @@ def bounds(outlines):
 
 
 # ---- the button font
-def draw_font(otf, style, layout, art, traced):
-    """The button font with the glyphs of GLYPHS drawn from the style's art. Every picture is scaled as the face button
-    of the art is to the game's A (both fill their square the same way), centred in its advance and placed at the
-    height of the art's own square, so the arrows of a stick reach out as they do in the art. A wider picture widens
-    its glyph."""
+def draw_font(otf, glyph, traced, lit_dpad):
+    """The button font with the glyphs of GLYPHS drawn from glyph (Switch button -> picture). Every picture is scaled
+    as A's picture is to the game's A (both fill their square the same way), centred in its advance and placed at the
+    height of the art's own square, so the arrows of a stick reach out as they do in the art. A grid of keys is made
+    no taller than the game's A and centred on it. A wider picture widens its glyph. lit_dpad: the d-pad directions
+    are lit pad pictures (ink lit)."""
     font = TTFont(io.BytesIO(otf))
     glyphs, cmap, hmtx = font.getGlyphSet(), font.getBestCmap(), font['hmtx']
     box = BoundsPen(glyphs)
     glyphs[cmap[0xE040]].draw(box)
     gx0, gy0, gx1, gy1 = box.bounds   # the game's A: a round button
-    names = STYLES[style]['glyph']
-    ref = traced(names['south'])
-    rx0, ry0, rx1, ry1 = bounds(ref)
+    rx0, ry0, rx1, ry1 = bounds(traced(glyph['A']))
     scale = (gy1 - gy0) / (ry1 - ry0)
     mid_y_px, mid_y = (ry0 + ry1) / 2, (gy0 + gy1) / 2
     side = gx0   # the game's A has this much room on either side
     drawn = {}
     for cp, button in GLYPHS.items():
-        key = FACE[layout][button] if button in FACE[layout] else button
-        outlines = traced(names[key], button.startswith('DPAD_'))
-        x0, _, x1, _ = bounds(outlines)
-        advance = max(hmtx[cmap[cp]][0], round((x1 - x0) * scale + 2 * side))
-        ox = advance / 2 - (x0 + x1) / 2 * scale
+        pic = glyph[button]
+        outlines = traced(pic, lit_dpad and button.startswith('DPAD_'))
+        x0, y0, x1, y1 = bounds(outlines)
+        s, cy = scale, mid_y_px
+        if isinstance(pic, tuple) and pic[0] == 'grid':
+            s, cy = min(scale, (gy1 - gy0) / (y1 - y0)), (y0 + y1) / 2
+        advance = max(hmtx[cmap[cp]][0], round((x1 - x0) * s + 2 * side))
+        ox = advance / 2 - (x0 + x1) / 2 * s
 
-        def draw(pen, outlines=outlines, ox=ox):
+        def draw(pen, outlines=outlines, ox=ox, s=s, cy=cy):
             for o in outlines:
-                pen.moveTo((ox + o[0][0] * scale, mid_y - (o[0][1] - mid_y_px) * scale))
+                pen.moveTo((ox + o[0][0] * s, mid_y - (o[0][1] - cy) * s))
                 for x, y in o[1:]:
-                    pen.lineTo((ox + x * scale, mid_y - (y - mid_y_px) * scale))
+                    pen.lineTo((ox + x * s, mid_y - (y - cy) * s))
                 pen.closePath()
         drawn[cp] = (advance, draw)
     return button_icons.redraw_font(otf, drawn)
@@ -623,25 +756,35 @@ def bleed(img):
     return img
 
 
-def draw_textures(data, style, layout, art, cache):
-    """Paints the action prompt's letters and the ocarina's note buttons of the style into the BNTX data (a bytearray)
-    in place. A new letter takes the height and centre of the game's own letter in that mask (a wider symbol may use a
-    little more width); a note button fills NOTE_BOXES."""
+def mask_of(img, rel):
+    """The action prompt's mask of a dark picture: the white letter or symbol inside it, or for a mouse, whose white is
+    the pressed button rather than a label, the mouse itself with that button cut out."""
+    if '/T_Mouse_' not in str(rel):
+        return symbol(img)
+    field = ink(img)
+    out = Image.new('L', img.size)
+    out.putdata([round(255 * min(1.0, v)) for row in field for v in row])
+    return out
+
+
+def draw_textures(data, glyph, note, art, cache):
+    """Paints the action prompt's letters (from glyph) and the ocarina's note buttons (from note; both Switch button ->
+    picture) into the BNTX data (a bytearray) in place. A new letter takes the height and centre of the game's own
+    letter in that mask (a wider one may use a little more width); a note button fills NOTE_BOXES."""
     textures = bntx_textures(data)
-    names = STYLES[style]
     for name, button in {**MASKS, **NOTES}.items():
         assert name in textures, f'no {name} in {TEXTURES}'
         t = textures[name]
         assert t['mips'] == 1, f'{name}: {t["mips"]} levels'
         wb, hb = (t['w'] + 3) // 4, (t['h'] + 3) // 4
-        key = FACE[layout].get(button, button)
         if name in MASKS:
             assert t['fmt'] == BC4_UNORM, f'{name}: format {t["fmt"]:#x}'
             old = bc4_decode(read_level(data, t, wb * 8, hb), t['w'], t['h'])
             box = old.point(lambda v: 255 if v > 64 else 0).getbbox()
             # the old letter's height; a wider new symbol may use a little more width
             cx, cy, half = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, (box[3] - box[1]) / 2
-            sym = cache(('symbol', names['glyph'][key]), lambda: symbol(load_art(art, names['glyph'][key])))
+            rel = glyph[button]
+            sym = cache(('mask', rel), lambda: mask_of(load_art(art, rel), rel))
             rgba = Image.merge('RGBA', (sym.point(lambda v: 255),) * 3 + (sym,))
             mask = fit(rgba, (cx - half * 1.15, cy - half, cx + half * 1.15, cy + half), (t['w'], t['h']))
             write_level(data, t, bc4_encode(mask.getchannel('A')), wb * 8, hb)
@@ -649,7 +792,7 @@ def draw_textures(data, style, layout, art, cache):
             assert t['fmt'] == ASTC_4X4_SRGB and (t['w'], t['h']) == (93, 93), f'{name}: format {t["fmt"]:#x}, ' \
                 f'{t["w"]}x{t["h"]}'
             box = NOTE_BOXES['shoulder' if button in 'LR' else 'disc']
-            pic = fit(load_art(art, names['note'][key]), box, (t['w'], t['h']))
+            pic = fit(load_art(art, note[button]), box, (t['w'], t['h']))
             write_level(data, t, astc_encode(bleed(pic)), wb * 16, hb)
 
 
@@ -676,18 +819,23 @@ def write_overlay(out, outputs, originals):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--art', type=Path, required=True, help='the art pack\'s Source folder (XGamepad, P5Gamepad)')
+    ap.add_argument('--art', type=Path, required=True,
+                    help='the art pack\'s Source folder (XGamepad, P5Gamepad, Keyboard_Mouse)')
     ap.add_argument('--game', type=Path, help='the folder of the exe and romfs-index.bin; the overlays go there')
     ap.add_argument('--romfs', type=Path, help='default <game>/romfs')
-    ap.add_argument('--style', choices=sorted(STYLES), help='default: both')
-    ap.add_argument('--layout', choices=sorted(FACE), help='default: both')
+    ap.add_argument('--style', choices=sorted(STYLES) + ['pc'], help='default: every one')
+    ap.add_argument('--layout', choices=sorted(FACE), help='default: both (pc has one)')
+    ap.add_argument('--binds', type=Path, help='pc: a nx2navi.ini whose bind_ lines the keys follow '
+                                               '(default <game>/nx2navi.ini when there is one)')
     ap.add_argument('--out', type=Path, help='the overlay folder, for one --style and --layout')
     ap.add_argument('--level', type=int, default=9, help='zstd level of the written files')
     args = ap.parse_args()
     if not args.game and not (args.out and args.romfs):
         ap.error('--game, or --out with --romfs')
-    if args.out and not (args.style and args.layout):
+    if args.out and not (args.style and (args.layout or args.style == 'pc')):
         ap.error('--out writes one folder: give --style and --layout')
+    binds = args.binds or (args.game / 'nx2navi.ini' if args.game and (args.game / 'nx2navi.ini').is_file() else None)
+    keys = pc_keys(binds.read_text(encoding='utf-8', errors='replace') if binds else None)
     romfs = Romfs(args.romfs or args.game / 'romfs')
     restbl = max((p for p in romfs.paths() if p.startswith('System/Resource/ResourceSizeTable.') and p.endswith('.zs')),
                  key=lambda p: int(p.split('.')[2]) if p.split('.')[2].isdigit() else 0, default=None)
@@ -708,13 +856,15 @@ def main():
         return cache(('outlines', rel, lit), lambda: outlines_of(load_art(args.art, rel), lit))
 
     report = []
-    for style in [args.style] if args.style else sorted(STYLES):
-        for layout in [args.layout] if args.layout else sorted(FACE):
+    for style in [args.style] if args.style else sorted(STYLES) + ['pc']:
+        # the keyboard follows no pad layout: one folder, romfs-patches-pc
+        for layout in [None] if style == 'pc' else [args.layout] if args.layout else sorted(FACE):
             out = args.out or args.game / f'romfs-patches-{style}{"-label" if layout == "label" else ""}'
-            new_otf = draw_font(otf, style, layout, args.art, traced)
+            glyph, note = pc_pictures(args.art, keys) if style == 'pc' else pad_pictures(style, layout)
+            new_otf = draw_font(otf, glyph, traced, style != 'pc')
             blob = button_icons.bfotf_encode(new_otf, key, font_blob)
             data = bytearray(textures)
-            draw_textures(data, style, layout, args.art, cache)
+            draw_textures(data, glyph, note, args.art, cache)
             assert len(data) == len(textures)
             outputs = {FONT: compress(blob, font_dict, 19), TEXTURES: compress(bytes(data), textures_dict, args.level)}
             if len(blob) > len(font_blob):
