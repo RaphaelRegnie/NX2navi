@@ -1740,7 +1740,21 @@ static int nchunks, cchunks;
 // thread. Chunk sizes are powers of two so that one fits the next request; what the pool cannot hold is destroyed.
 #define SNAP_LIST_MIN (64u << 10)
 #define SNAP_POOL_N 64
-#define SNAP_POOL_BYTES (256ull << 20)   // room for merges of multi-MiB ranges across the submissions in flight
+// The pool holds up to 1/64 of the VRAM budget, between 64 and 256 MiB: room for merges of multi-MiB ranges across the
+// submissions in flight. Its chunks prefer device memory and are not evictable, so a small card keeps less of them.
+static uint64_t snap_pool_cap(void) {
+    static uint64_t cap;
+    if (!cap) {
+        uint64_t used = 0, budget = 0;
+        int exact = 0;
+        uint64_t c = vk_mem_vram(&used, &budget, &exact) && budget ? budget / 64 : (64ull << 20);
+        if (c < (64ull << 20)) c = 64ull << 20;
+        if (c > (256ull << 20)) c = 256ull << 20;
+        cap = c;
+        rt_log("mem: write-back snapshot pool keeps up to %llu MiB", (unsigned long long)(cap >> 20));
+    }
+    return cap;
+}
 static PlatMutex snap_pool_lock = PLAT_MUTEX_INIT;
 static SnapChunk snap_pool[SNAP_POOL_N];
 static int nsnap_pool;
@@ -1930,7 +1944,7 @@ static void snap_free(void *arg) {   // completion thread: the submission is don
     plat_mutex_lock(&snap_pool_lock);
     for (int i = 0; i < f->n; i++) {
         SnapChunk *ch = &f->c[i];
-        if (nsnap_pool == SNAP_POOL_N || snap_pool_bytes + ch->size > SNAP_POOL_BYTES) continue;
+        if (nsnap_pool == SNAP_POOL_N || snap_pool_bytes + ch->size > snap_pool_cap()) continue;
         snap_pool[nsnap_pool++] = *ch;
         snap_pool_bytes += ch->size;
         ch->buf = VK_NULL_HANDLE;
