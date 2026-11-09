@@ -60,11 +60,12 @@ static uint32_t max1(uint32_t v) { return v ? v : 1; }
 
 // ---- completion callbacks (completion thread)
 
-typedef struct { uint64_t addr, size; } Range;
+typedef struct { uint64_t addr, size; int back; } Range;   // back: written into a VRAM mirror (vk_mem_mirrored)
 
 static void guest_written_cb(void *arg) {
     Range *r = arg;
-    vk_gpu_written(r->addr, r->size);
+    if (r->back) vk_gpu_written_back(r->addr, r->size);
+    else vk_gpu_written(r->addr, r->size);
     free(r);
 }
 
@@ -74,7 +75,7 @@ static void note_gpu_write(VkExec *ex, uint64_t addr, uint64_t size) {
     if (nvn_gpu_only(addr)) return;
     Range *r = malloc(sizeof *r);
     if (!r) rt_fatal("vk: out of memory");
-    *r = (Range){addr, size};
+    *r = (Range){addr, size, vk_mem_mirrored(addr, size)};
     vk_mem_gpu_pending(addr, size);
     vk_completion_add(ex->fence, guest_written_cb, r);
 }

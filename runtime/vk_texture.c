@@ -34,6 +34,10 @@ typedef struct {
     uint8_t has_layout, layout[8], pad[7];
 } TexKey;
 
+// What makes two images interchangeable: the parameters create_tex makes them with (img_key_of). Image reuse and the
+// memory requirement cache match on it.
+typedef struct { uint32_t flags, type, format, w, h, d, levels, layers, samples, usage; } ImgKey;
+
 typedef struct Tex {
     VkTexImage pub;               // first: vk_texture_get hands out &pub
     TexKey key;
@@ -66,6 +70,14 @@ typedef struct Tex {
     uint64_t chash;               // content_hash of the storage at its last upload (small textures, CHASH_MAX)
     uint8_t chash_ok;             // chash holds it
     struct Tex *rel_prev, *rel_next;   // while released: the list of released entries, oldest first
+    ImgKey ik;                    // the image's creation parameters
+    uint8_t reusable;             // its image may go to a new texture once it is released (own memory, GPU-only content)
+    uint8_t reused;               // its image may still be in use from before (a released entry's, or its own restarted by
+                                  // start_at): the first barrier waits for all earlier work
+    uint8_t ru_on;                // in the reuse list of ik
+    uint8_t superseded;           // released, and another descriptor's entry was made at its address since (start_at)
+    uint32_t rel_epoch;           // submit_epoch when it was released
+    struct Tex *ru_prev, *ru_next;   // the reuse list of ik, newest release first
 } Tex;
 
 // A slot keeps what vk_texture_by_id resolved for it, so a draw binding skips the key lookup and the address chain: the
@@ -301,19 +313,67 @@ static int format_compressed(VkFormat f) {   // vkCmdClearColorImage takes no bl
            (f >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK && f <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK);
 }
 
+// Image reuse (NX2NAVI_TEX_REUSE, default on): a GPU-only texture that needs an image of its own takes the image of a
+// released entry made with the same parameters (ImgKey) instead of a new one, which then starts over as a new image
+// would (init_image: undefined content, cleared). Ocarina places its per-frame render targets with a linear allocator
+// behind small targets whose size follows an effect on screen (77x77 to 97x97), so every few frames the targets after
+// them move to new addresses, new descriptors whose images were made again: vkCreateImage, the memory requirements and
+// the binding of a dedicated allocation cost 8% of the replay in Kokiri Forest. The released entries of each parameter
+// set are kept in a list, newest release first; create_tex takes the one nearest in address of those released at least
+// two frames earlier, never during the current submission's replay, whose later parts may still use it.
+static nvn_hmap reuse = {.klen = sizeof(ImgKey)};   // ImgKey -> the newest released reusable entry
+static int tex_reuse = -1;
+static uint64_t n_reused, n_reuse_new;   // since the last perf line: images taken from a released entry, made anew
+static uint64_t n_restarts;              // superseded entries taken back (start_at)
+
+static int tex_reuse_on(void) {
+    if (tex_reuse < 0) {
+        tex_reuse = cfg_bool("NX2NAVI_TEX_REUSE");
+        rt_log("vk: texture image reuse %s (NX2NAVI_TEX_REUSE)", tex_reuse ? "on" : "off");
+    }
+    return tex_reuse;
+}
+
+static void destroy_tex(Tex *e);
+
+// Whether an image with these requirements can lie in the pool memory at e's address (*sp: that memory).
+static int pool_fits(VkCtx *c, const Tex *e, const VkMemoryRequirements *req, uint64_t guest_size, VkMemSpan *sp) {
+    if ((e->f.depth || e->f.stencil) && req->size > guest_size) return 0;
+    if (!req->size) return 0;   // an image the device could not lay out (image_size)
+    if (!vk_mem_resolve(e->pub.addr, req->size, sp) || !sp->alloc || sp->alloc_offset % req->alignment) return 0;
+    VmaAllocationInfo info;
+    vmaGetAllocationInfo(c->vma, sp->alloc, &info);
+    return req->memoryTypeBits >> info.memoryType & 1;
+}
+
+// The memory requirements of each parameter set (ImgKey) an image was made with; images made with the same parameters
+// have the same requirements. With them create_tex makes no image that pool_fits would turn down: Ocarina's moving
+// render targets mostly miss the device's alignment, and making the image only to read its requirements
+// (vkGetImageMemoryRequirements does most of the driver's layout work) cost 5% of the replay in Kokiri Forest.
+static nvn_hmap img_reqs = {.klen = sizeof(ImgKey)};   // ImgKey -> VkMemoryRequirements (malloc'd)
+static uint64_t n_bind_skips;   // since the last perf line
+
 static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img, uint64_t guest_size) {
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(c->device, img, &req);
-    if ((e->f.depth || e->f.stencil) && req.size > guest_size) return 0;
+    if (!nvn_hm_get(&img_reqs, &e->ik)) {
+        VkMemoryRequirements *q = malloc(sizeof *q);
+        if (!q) rt_fatal("vk: out of memory");
+        *q = req;
+        nvn_hm_put(&img_reqs, &e->ik, q);
+    }
     VkMemSpan sp;
-    if (!req.size) return 0;   // an image the device could not lay out (image_size)
-    if (!vk_mem_resolve(e->pub.addr, req.size, &sp) || !sp.alloc || sp.alloc_offset % req.alignment) return 0;
-    VmaAllocationInfo info;
-    vmaGetAllocationInfo(c->vma, sp.alloc, &info);
-    if (!(req.memoryTypeBits >> info.memoryType & 1)) return 0;
+    if (!pool_fits(c, e, &req, guest_size, &sp)) return 0;
     if (vmaBindImageMemory2(c->vma, sp.alloc, sp.alloc_offset, img, NULL) != VK_SUCCESS) return 0;
     e->bound_to = sp.alloc;
     return 1;
+}
+
+static void img_key_of(const VkImageCreateInfo *ci, ImgKey *k) {
+    memset(k, 0, sizeof *k);
+    k->flags = ci->flags, k->type = ci->imageType, k->format = ci->format, k->w = ci->extent.width;
+    k->h = ci->extent.height, k->d = ci->extent.depth, k->levels = ci->mipLevels, k->layers = ci->arrayLayers;
+    k->samples = ci->samples, k->usage = ci->usage;
 }
 
 // agl's BC4 encoder draws a BC texture's blocks through an RGBA16UI view, one texel per 8-byte block.
@@ -346,8 +406,12 @@ static VkDeviceSize image_size(const VkImageCreateInfo *ci) {
 
 // UNDEFINED -> GENERAL; new depth / stencil images start cleared (LAS textures.c: the game copies depth
 // without stencil, and the stencil of those images must not be whatever the memory held).
+// A reused image (create_tex) was another texture's: the transition waits for every earlier command, which may still
+// read or write it.
 static void init_image(Tex *e, VkCommandBuffer cb) {
-    VkImageMemoryBarrier2 ib = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+    VkImageMemoryBarrier2 ib = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .srcStageMask = e->reused ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,
+                                .srcAccessMask = e->reused ? VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
                                 .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                 .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
                                 .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
@@ -369,6 +433,22 @@ static void init_image(Tex *e, VkCommandBuffer cb) {
         vkCmdClearColorImage(cb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &rg);
         barrier(cb, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
     }
+}
+
+// A new entry's first transition. A reused image goes through it at the replay's current position: earlier commands
+// of the part being recorded may still use the image as the texture it was, and the upload batch runs before the part.
+static void init_new(Tex *e) {
+    if (e->reused) {
+        int reopen;
+        VkCommandBuffer cb = vk_exec_inline_begin(&reopen);
+        if (cb) {
+            init_image(e, cb);
+            vk_exec_inline_end(reopen);
+            return;
+        }
+    }
+    init_image(e, vk_upload_begin());
+    vk_upload_end();
 }
 
 // NX2NAVI_SHADOW_SCALE (1 to 4): the game's shadow maps are made this many times larger on each side. NX2navi renders its
@@ -540,9 +620,16 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     e->t = *t;
     e->f = f;
     e->pub.addr = k->addr;
+    img_key_of(&ci, &e->ik);
     VkImage img = VK_NULL_HANDLE;
     if (scale == 1 && nvn_gpu_only(k->addr)) {   // storage in a physical or virtual pool: alias the pool memory (section 3.2)
-        if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS && !bind_pool_memory(c, e, img, L.size)) {
+        const VkMemoryRequirements *q = nvn_hm_get(&img_reqs, &e->ik);
+        VkMemSpan sp;
+        if (q && !pool_fits(c, e, q, L.size, &sp)) {   // it would not bind there (img_reqs)
+            n_bind_skips++;
+            log_limited(&n_unbound, "texture %#llx (%ux%u fmt %#x) cannot alias its pool memory; own memory instead",
+                        (unsigned long long)k->addr, w, h, d->format);
+        } else if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS && !bind_pool_memory(c, e, img, L.size)) {
             vkDestroyImage(c->device, img, NULL);
             img = VK_NULL_HANDLE;
             log_limited(&n_unbound, "texture %#llx (%ux%u fmt %#x) cannot alias its pool memory; own memory instead",
@@ -578,7 +665,33 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
             img = VK_NULL_HANDLE;
         }
     }
+    int gpu_only = !tex_mirrored(t);
+    if (!img && gpu_only && tex_reuse_on()) {   // the image of a released entry with these parameters (reuse, above)
+        // Not one released in this frame or the one before: Ocarina releases its render targets and registers them
+        // again every frame, and DLSS's scene target (2560x1440 at a fixed address in Kokiri Forest) lost its image
+        // to a moving target of the same size in between, and DLSS its history (vk_dlaa.c evaluate), several times a
+        // second. Not one at this address either: its own descriptor comes back for it (start_at). Of the others the
+        // one nearest in address, so a target the allocator moves keeps the image it had.
+        uint64_t now = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+        Tex *a = NULL;
+        uint64_t best = UINT64_MAX;
+        int n = 0;
+        for (Tex *q = nvn_hm_get(&reuse, &e->ik); q && n < 128; q = q->ru_next, n++) {
+            if (q->rel_epoch == submit_epoch || now - q->rel_frame < 2 || q->key.addr == k->addr) continue;
+            uint64_t dist = q->key.addr > k->addr ? q->key.addr - k->addr : k->addr - q->key.addr;
+            if (dist < best) best = dist, a = q;
+        }
+        if (a) {
+            img = a->pub.image, e->alloc = a->alloc;
+            vk_exec_image_gone(img);   // the views and records of the texture it was
+            a->pub.image = VK_NULL_HANDLE, a->alloc = NULL;
+            destroy_tex(a);
+            e->reused = 1;
+            n_reused++;
+        }
+    }
     if (!img) {
+        if (gpu_only) n_reuse_new++;
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
         VkResult r = vmaCreateImage(c->vma, &ci, &ai, &img, &e->alloc, NULL);
         if (r != VK_SUCCESS) {
@@ -593,6 +706,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
         vmaGetAllocationInfo(c->vma, e->alloc, &own);
         e->bytes = own.size;
     }
+    e->reusable = e->alloc && gpu_only;
     VkTexImage *p = &e->pub;
     p->image = img;
     p->format = f.vk;
@@ -619,10 +733,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     p->fb_usage = (uint8_t)fb_usage;
     p->scale = (uint8_t)scale;
 
-    if (!defer_init) {
-        init_image(e, vk_upload_begin());
-        vk_upload_end();
-    }
+    if (!defer_init) init_new(e);
     return e;
 }
 
@@ -667,6 +778,24 @@ static void own_remove(Tex *e) {
 
 static uint64_t rel_bytes;   // own memory of the released entries (Tex.bytes)
 
+static void ru_link(Tex *e) {
+    Tex *head = nvn_hm_get(&reuse, &e->ik);
+    e->ru_prev = NULL, e->ru_next = head;
+    if (head) head->ru_prev = e;
+    nvn_hm_put(&reuse, &e->ik, e);
+    e->ru_on = 1;
+}
+
+static void ru_unlink(Tex *e) {
+    if (!e->ru_on) return;
+    if (e->ru_prev) e->ru_prev->ru_next = e->ru_next;
+    else if (e->ru_next) nvn_hm_put(&reuse, &e->ik, e->ru_next);
+    else nvn_hm_del(&reuse, &e->ik);
+    if (e->ru_next) e->ru_next->ru_prev = e->ru_prev;
+    e->ru_prev = e->ru_next = NULL;
+    e->ru_on = 0;
+}
+
 static void rel_append(Tex *e) {
     e->rel_next = NULL;
     e->rel_prev = rel_tail;
@@ -674,9 +803,11 @@ static void rel_append(Tex *e) {
     else rel_head = e;
     rel_tail = e;
     rel_bytes += e->bytes;
+    if (e->reusable && tex_reuse_on()) ru_link(e);
 }
 
 static void rel_unlink(Tex *e) {
+    ru_unlink(e);
     rel_bytes -= e->bytes;
     if (e->rel_prev) e->rel_prev->rel_next = e->rel_next;
     else rel_head = e->rel_next;
@@ -699,7 +830,7 @@ static void destroy_tex(Tex *e) {
             if (p->next_at == e) { p->next_at = e->next_at; break; }
     }
     if (e->released) nreleased--, rel_unlink(e);
-    vk_exec_image_gone(e->pub.image);
+    if (e->pub.image) vk_exec_image_gone(e->pub.image);   // none when another texture took it (create_tex, reuse)
     vk_defer_image(e->pub.image, e->alloc);
     free(e->snap);
     free(e);
@@ -1467,6 +1598,51 @@ static void create_failed(const TexKey *k) {
     failed_hold[i].k = *k, failed_hold[i].until_ns = plat_now_ns() + 2000000000ull;
 }
 
+// The start of e's content at its address, for a new entry and for a superseded one taken back (taken_back): another
+// descriptor's released entry there is superseded, and a live one holding GPU-written content is the alias source,
+// preferring the one that differs only in swizzle (same_but_swizzle). A superseded entry is kept for its own
+// descriptor, which takes it back and starts over here as a new entry would (alias copy or init_image): Ocarina
+// alternates descriptors at some addresses every frame (a 2560x1440 target and a 480x270 one in Kokiri Forest), and
+// destroying the released one made both images again each frame. Released mirrored entries are still destroyed: their
+// content is the storage's, uploaded when an entry is made.
+static void start_at(Tex *e, const TexKey *k, int taken_back) {
+    int alias = 0;
+    Tex *src = NULL;
+    for (Tex *p = nvn_hm_get(&by_addr, &k->addr), *nx; p; p = nx) {
+        nx = p->next_at;
+        if (p == e) continue;
+        if (p->released) {
+            if (p->pub.mirrored) destroy_tex(p);
+            else p->superseded = 1;
+            continue;
+        }
+        alias = 1;
+        if (tex_alias && (!src || (same_but_swizzle(&p->key, k) && !same_but_swizzle(&src->key, k))) &&
+            alias_compatible(e, p) && alias_has_gpu_content(p))
+            src = p;
+    }
+    if (alias) perf_count(PERF_CNT_TEX_ALIAS);
+    if (!tex_alias) {   // create_tex initialised a new entry
+        if (taken_back) init_new(e);
+        return;
+    }
+    if (src && alias_copy(e, src)) {
+        n_alias_copied++;
+        if (e->pub.mirrored) {   // the content is src's GPU render, newer than the storage bytes
+            vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
+            e->uploaded = 1;
+            e->pub.gpu_owned = 1;
+        }
+        e->chash_ok = 0;
+    } else {
+        init_new(e);
+        if (alias) {
+            if (e->pub.mirrored) n_alias_upload++;
+            else n_alias_uninit++;
+        }
+    }
+}
+
 static Tex *entry_of(const tex_t *t) {
     TexKey k;
     make_key(t, &k);
@@ -1480,37 +1656,7 @@ static Tex *entry_of(const tex_t *t) {
         }
         if (!(e = create_tex(t, &k, tex_alias))) return create_failed(&k), NULL;
         perf_count(PERF_CNT_TEX_NEW);
-        // released entries of another descriptor at this address are replaced by the new one; a live one holding
-        // GPU-written content is the alias source, preferring the one that differs only in swizzle (same_but_swizzle)
-        int alias = 0;
-        Tex *src = NULL;
-        for (Tex *p = nvn_hm_get(&by_addr, &k.addr), *nx; p; p = nx) {
-            nx = p->next_at;
-            if (p->released) { destroy_tex(p); continue; }
-            alias = 1;
-            if (tex_alias && (!src || (same_but_swizzle(&p->key, &k) && !same_but_swizzle(&src->key, &k))) &&
-                alias_compatible(e, p) && alias_has_gpu_content(p))
-                src = p;
-        }
-        if (alias) perf_count(PERF_CNT_TEX_ALIAS);
-        if (tex_alias) {
-            if (src && alias_copy(e, src)) {
-                n_alias_copied++;
-                if (e->pub.mirrored) {   // the content is src's GPU render, newer than the storage bytes
-                    vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
-                    e->uploaded = 1;
-                    e->pub.gpu_owned = 1;
-                }
-                e->chash_ok = 0;
-            } else {
-                init_image(e, vk_upload_begin());
-                vk_upload_end();
-                if (alias) {
-                    if (e->pub.mirrored) n_alias_upload++;
-                    else n_alias_uninit++;
-                }
-            }
-        }
+        start_at(e, &k, 0);
         e->next_at = nvn_hm_get(&by_addr, &k.addr);
         nvn_hm_put(&by_addr, &k.addr, e);
         nvn_hm_put(&by_key, &k, e);
@@ -1518,7 +1664,14 @@ static Tex *entry_of(const tex_t *t) {
         tex_gen_bump(k.addr);
         vk_texstat_time(VK_TS_CREATE, c0);
     }
-    if (e->released) e->released = 0, nreleased--, rel_unlink(e), n_site[2]++, tex_gen_bump(k.addr);
+    if (e->released) {
+        e->released = 0, nreleased--, rel_unlink(e), n_site[2]++, tex_gen_bump(k.addr);
+        if (e->superseded) {   // its image may still be in use: the first barrier waits for all earlier work
+            e->superseded = 0, e->reused = 1;
+            n_restarts++;
+            start_at(e, &k, 1);
+        }
+    }
     e->t = *t;
     touch(e);
     return e;
@@ -1611,6 +1764,7 @@ void vk_texture_release(const tex_t *t) {
     Tex *e = nvn_hm_get(&by_key, &k);
     if (e && !e->released) {
         e->released = 1;
+        e->rel_epoch = submit_epoch;
         e->rel_serial = reg_serial;
         e->rel_frame = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
         nreleased++;
@@ -1745,7 +1899,7 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
         // access violation in tex_bl_copy from the pool refresh, Kokiri Forest). It resolves to nothing; a slot
         // registered again after the release is live and revives the entry.
         if (!e && any) e = any;
-        else if (!e && !cpu_slot) e = own;
+        else if (!e && !cpu_slot) e = own && own->superseded ? NULL : own;   // a superseded one: entry_of takes it back
         else if (!e && own && (uint32_t)(sinfo[s - tslots] >> 16) <= own->rel_serial) stale = 1;
     }
     if (!e && s->t.mem && !stale) {
@@ -1894,11 +2048,14 @@ void vk_texture_new_submit(void) {
                (unsigned long long)untr);
         n_checks = 0;
         rt_log("perf: frame %llu: released textures kept %d (%.0f MiB of own memory), dropped past the size limit %llu, "
-               "under VRAM pressure %llu, under commit pressure %llu; idle live textures evicted %llu (%.1f MiB)",
+               "under VRAM pressure %llu, under commit pressure %llu; idle live textures evicted %llu (%.1f MiB); images "
+               "reused %llu, made %llu, pool bindings not tried %llu, superseded taken back %llu",
                (unsigned long long)f * 60, nreleased, rel_bytes / 1048576.0, (unsigned long long)n_cap_drops,
                (unsigned long long)n_pressure_drops, (unsigned long long)n_commit_drops, (unsigned long long)n_evict,
-               n_evict_bytes / 1048576.0);
+               n_evict_bytes / 1048576.0, (unsigned long long)n_reused, (unsigned long long)n_reuse_new,
+               (unsigned long long)n_bind_skips, (unsigned long long)n_restarts);
         n_cap_drops = n_pressure_drops = n_commit_drops = n_evict = n_evict_bytes = 0;
+        n_reused = n_reuse_new = n_bind_skips = n_restarts = 0;
     }
     unlock();
 }
@@ -2707,6 +2864,10 @@ void vk_texture_shutdown(void) {
     free(by_key.keys), free(by_key.vals), free(by_addr.keys), free(by_addr.vals), free(samplers.keys), free(samplers.vals);
     by_key = (nvn_hmap){.klen = sizeof(TexKey)};
     by_addr = (nvn_hmap){.klen = 8};
+    for (uint32_t i = 0; i < img_reqs.cap; i++) free(img_reqs.vals[i]);
+    free(img_reqs.keys), free(img_reqs.vals), free(reuse.keys), free(reuse.vals);   // reuse: emptied by destroy_tex
+    img_reqs = (nvn_hmap){.klen = sizeof(ImgKey)};
+    reuse = (nvn_hmap){.klen = sizeof(ImgKey)};
     samplers = (nvn_hmap){.klen = sizeof(samp_par)};
     free(tslots), free(sslots);
     tslots = NULL, sslots = NULL, ntslots = nsslots = 0, nreleased = 0, pool_slots = 0;

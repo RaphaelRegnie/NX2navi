@@ -9,6 +9,7 @@
 // until they change and skips clears while rendering is disabled. A pass has GENERAL-layout attachments, LOAD/STORE and
 // a render area from the smallest attachment, with a full barrier before it.
 // Contains code Copyright (c) 2026 jhaizhou, Copyright (c) 2026 Peiikai (MIT; see THIRD_PARTY_NOTICES.md).
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -872,9 +873,25 @@ static void set_rt(VkExec *ex, const p_set_rt *r) {
 // A part also spans at least NX2NAVI_SPLIT_US (1000) of replay time: a split costs about 40 us of the render thread
 // (vkQueueSubmit2, a command buffer, the mirror prologue), and a fight frame of 2,000 draws made 15 parts on the 7900X;
 // a millisecond of recording is a fraction of a millisecond of GPU work, so the GPU still starts early.
-static int split_n = -1, split_draws, part_start;
+// Neither limit holds the first part of a submission back while the GPU has run everything submitted (NX2NAVI_SPLIT_IDLE,
+// on): it goes at the first pass boundary after a draw or dispatch. Each frame the game's thread waits for the GPU to run
+// the frame's first submission (nvn_api_core.c nvnQueueSubmitCommands, NX2NAVI_SUBMIT_FINISH), so the GPU is idle
+// when the next one replays, and waited for the first 64 draws and 1 ms of it in Kokiri Forest (2026-11-09).
+// Both limits also split inside a pass (NX2NAVI_SPLIT_IN_PASS, on): the pass ends there and the next draw begins it
+// again in the new part, as after a barrier (attachments load and store; occlusion queries continue in a new segment).
+// Kokiri Forest's two scene passes of ~500 draws take 2-4 ms each to replay and most of the frame's GPU time; split only
+// between passes, the GPU waited for each whole pass, idle up to 3.6 ms a frame (2026-11-09).
+// After the time limit held a part back, the clock is read again only 8 draws later (split_at): read after every
+// command, it was 4% of the replay in Kokiri Forest.
+static int split_n = -1, split_idle, split_in_pass, split_draws, split_at, part_start;
 static uint64_t split_ns, part_t0;
-static uint64_t n_parts, n_subs;
+static uint64_t n_parts, n_subs, n_idle_parts, n_pass_splits;
+
+static int split_wanted(void) {
+    if (split_draws >= split_at) return 1;
+    // the first part only: later parts of the submission run on the GPU, while done and issued stay as they were
+    return split_idle && split_draws && !part_start && vk_sync_fence_done() >= vk_sync_issued();
+}
 
 static void maybe_split(VkExec *ex) {
     if (split_n < 0) {
@@ -882,13 +899,29 @@ static void maybe_split(VkExec *ex) {
         if (split_n < 0) split_n = 0;
         int us = cfg_int("NX2NAVI_SPLIT_US");
         split_ns = us > 0 ? (uint64_t)us * 1000 : 0;
-        rt_log("vk: replay command buffer split every %d draws between passes, parts of at least %d us%s", split_n,
-               us > 0 ? us : 0, split_n ? "" : " (off)");
+        split_idle = split_n && cfg_bool("NX2NAVI_SPLIT_IDLE");
+        split_in_pass = split_n && cfg_bool("NX2NAVI_SPLIT_IN_PASS");
+        rt_log("vk: replay command buffer split every %d draws %s, parts of at least %d us%s%s", split_n,
+               split_in_pass ? "(inside passes too)" : "between passes", us > 0 ? us : 0, split_n ? "" : " (off)",
+               split_idle ? "; a first part at once while the GPU is idle" : "");
+        split_at = split_n ? split_n : INT_MAX;
     }
-    if (!split_n || ex->in_pass || split_draws < split_n) return;
-    if (split_ns && kern_now_ns() - part_t0 < split_ns) return;   // split_draws stays: the next draw asks again
+    if (!split_n) return;
+    // the first part while the GPU is idle: at a pass boundary only, where a split costs no pass restart
+    int idle = !ex->in_pass && split_idle && split_draws && !part_start && vk_sync_fence_done() >= vk_sync_issued();
+    if (!idle) {
+        if (ex->in_pass && !split_in_pass) return;
+        if (split_draws < split_n) return;
+        if (split_ns && kern_now_ns() - part_t0 < split_ns) {   // split_draws stays: a later draw asks again
+            split_at = split_draws + 8;
+            return;
+        }
+    }
     split_draws = 0;
+    split_at = split_n;
+    if (idle && ex->recorded != part_start) n_idle_parts++;
     if (ex->recorded == part_start) return;
+    if (ex->in_pass) vk_exec_pass_end(ex), n_pass_splits++;   // the next draw begins the pass again, in the new part
     ex->cb = vk_sync_split();
     part_start = ex->recorded;
     part_t0 = kern_now_ns();
@@ -1182,7 +1215,7 @@ static const op_hdr *walk(VkExec *ex, const op_hdr *h, int depth) {
         default: rt_fatal("vk: op %s has no replay handler", nvn_op_name(h->op));
         }
         if (vk_exec_signalled && depth == 0 && !evo_in) evo_resume(ex);
-        if (split_draws >= split_n) maybe_split(ex);
+        if (split_draws && split_wanted()) maybe_split(ex);
         h = nvn_op_next(h);
     }
 }
@@ -1243,6 +1276,7 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     vk_exec_frame.submits++;
     vk_exec_submit_seq++;
     split_draws = part_start = 0;
+    split_at = split_n < 0 ? 0 : split_n ? split_n : INT_MAX;   // 0 until maybe_split reads the settings
     part_t0 = kern_now_ns();
     x_here = 1;
     int evo = evo_enabled() && gfx_submit_queue;
@@ -1296,12 +1330,13 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     ex->cb = VK_NULL_HANDLE;
     if (n) n_subs++;
     if ((rt_trace & RT_TRACE_PERF) && n_subs >= 240) {
-        rt_log("perf: replay command buffer parts per submission %.2f; event order: held %llu, resumed %llu (%llu "
-               "without their signal), switches %llu, held now %d", (double)(n_subs + n_parts) / (double)n_subs,
-               (unsigned long long)evo_held, (unsigned long long)evo_resumed, (unsigned long long)evo_forced,
-               (unsigned long long)evo_switches, evo_pending);
+        rt_log("perf: replay command buffer parts per submission %.2f (%.2f first parts sent while the GPU was idle, %.2f "
+               "splits inside a pass); event order: held %llu, resumed %llu (%llu without their signal), switches %llu, "
+               "held now %d", (double)(n_subs + n_parts) / (double)n_subs, (double)n_idle_parts / (double)n_subs,
+               (double)n_pass_splits / (double)n_subs, (unsigned long long)evo_held, (unsigned long long)evo_resumed,
+               (unsigned long long)evo_forced, (unsigned long long)evo_switches, evo_pending);
         evo_held = evo_resumed = evo_forced = evo_switches = 0;
-        n_subs = n_parts = 0;
+        n_subs = n_parts = n_idle_parts = n_pass_splits = 0;
     }
     return ex->recorded - part_start;   // what the last part holds
 }

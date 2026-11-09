@@ -1355,9 +1355,10 @@ def main():
     for pip_name, mod in packages.items():
         try:
             __import__(mod)
-        except ImportError:
+        except ImportError as e:   # its own message too: an installed package can fail to load (a DLL, a clash)
             extra = ' fonttools pillow' if prompt_art_dir() else ''
-            fail(f'the Python package {pip_name} is missing: pip install numpy lz4 zstandard zbic{extra}')
+            fail(f'the Python package {pip_name} is missing or does not load ({e}): '
+                 f'pip install numpy lz4 zstandard zbic{extra}')
     cache.mkdir(parents=True, exist_ok=True)
     reset = state.get('version') != STATE_VERSION or state.get('input') != src.identity
     if reset:

@@ -133,6 +133,9 @@
 # With astc = gpu: 1 stages a texture's ASTC blocks in the shared staging ranges instead of a buffer of their own
 # (0 = a buffer each; off until a play test measures it).
 # astc_arena = 0
+# A render target that needs an image of its own takes the image of a released one of the same size and format
+# instead of making a new one (0 = always a new image).
+# tex_reuse = 1
 # Host zstd decoder in place of the game's (0 = the game's), and a check that decodes every call both ways and logs
 # the differences (1 = on; slow).
 # zstd_native = 1
@@ -164,8 +167,14 @@
 # dyn_delta = 1
 # Submit GPU work in parts every N draws between passes so the GPU starts earlier (0 to 1000; 0 = off), each part at
 # least split_us microseconds long (0 to 20000).
+# Submit GPU work in parts every N draws so the GPU starts earlier (0 to 1000; 0 = off), each part at least split_us
+# microseconds long (0 to 20000). split_in_pass = 1 also splits inside a long pass (it ends there and begins again in the
+# next part); 0 splits between passes only. split_idle = 1 sends a submission's first part at the first pass boundary
+# while the GPU has nothing else to run.
 # split_draws = 64
 # split_us = 1000
+# split_in_pass = 1
+# split_idle = 1
 
 # Vulkan.
 # Vulkan validation layer: checks every call and slows the game down a lot. Needs the layer installed (Vulkan SDK).
@@ -511,11 +520,15 @@
 # the next refresh and show their stand-in until then. Lower spreads streaming over more frames (smaller hitches, a
 # frame or two of pop-in); higher loads sooner.
 # pool_create_budget = 16
-# Written storage-buffer ranges up to this size in MiB (1 to 16) go back to game memory as a merge: copied within video
-# memory and only the words that changed written over PCIe. Larger ones are copied back whole at the end of every
-# submission. Raising it from 4 to 16 took a 5.5 MiB range off the plain copies (about 46 MiB a frame in the field).
-# wb_merge_max = 16
-# 1: pages of a VRAM-mirrored pool that the GPU wrote and copied back to game memory are not copied up to the mirror
-# again for that write, which already holds them (a write by the game still is). Outdoors this removed about 57 MiB of
-# copies a frame. Default: 0.
-# wb_no_reup = 0
+# Written storage-buffer ranges up to this size in MiB (1 to 256) go back to game memory as a merge, in 4 MiB pieces:
+# copied within video memory and only the words that changed written over PCIe. Larger ones are copied back whole at
+# the end of every submission. Raising it from 4 to 16 took a 5.5 MiB range off the plain copies (about 46 MiB a frame
+# in the field), and 32 the 4-15 MiB ranges of Kokiri Forest.
+# wb_merge_max = 32
+# 1: pages a VRAM mirror wrote back to game memory are not copied up into it again, as it already holds them (a write by
+# the game still is). Outdoors this removed about 57 MiB of copies a frame. 0: they are copied up again.
+# wb_no_reup = 1
+# 1: the game's flushes of mirrored memory are copied into the mirrors even where the write watch already sees every
+# page the game wrote; 0 (default) copies only the written pages there, which saved 47-57 MiB of copies a frame in
+# Kokiri Forest.
+# flush_upload = 0

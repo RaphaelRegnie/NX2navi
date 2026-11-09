@@ -319,7 +319,7 @@ class App:
 
     def poll_gamepad(self):
         try:
-            for b in self.gamepad.poll():
+            for b in self.gamepad.poll(winsys.in_front(self.root)):
                 {'up': lambda: self.move(-1), 'down': lambda: self.move(1), 'left': lambda: self.side(-1),
                  'right': lambda: self.side(1), 'a': self.activate, 'b': self.back,
                  'y': lambda: self.check_now(force=True)}.get(b, lambda: None)()
@@ -792,6 +792,10 @@ class App:
             self.render()
             return
         if self.game_proc and self.game_proc.poll() is None:
+            return
+        if saves.game_running(gd):   # a copy this launcher did not start (another launcher, a shortcut, a test run)
+            self.message = 'The game is already running.'
+            self.render()
             return
         try:
             self.game_proc = winsys.start_game(exe)

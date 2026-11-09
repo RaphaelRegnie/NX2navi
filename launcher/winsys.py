@@ -273,9 +273,32 @@ BUTTONS = {0x0001: 'up', 0x0002: 'down', 0x0004: 'left', 0x0008: 'right', 0x1000
            0x4000: 'x', 0x0010: 'start'}
 
 
+def in_front(root):
+    """Whether the window the user is typing into belongs to this process. XInput reads the pad whichever window is in
+    front, so without this check the launcher, left open behind the game, took the presses meant for the game: A
+    activated its focused row (it started the game five times in five minutes and tried a rebuild), the stick moved
+    its focus and Y checked for updates. True where it cannot tell."""
+    if os.name != 'nt':
+        return True
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        user32.GetWindowThreadProcessId.restype = ctypes.c_uint
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False   # no window in front (the desktop is switching, a lock screen): nothing is meant for us
+        pid = ctypes.c_uint(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except (AttributeError, OSError):
+        return True
+
+
 class Gamepad:
     """Polls the first XInput pad; poll() returns the buttons pressed since the last call (edges), the left stick
-    counted as the d-pad."""
+    counted as the d-pad. poll(False) still reads the pad but returns nothing: a button held while another window was
+    in front does not count as pressed when this one comes back."""
 
     def __init__(self):
         self.dll = None
@@ -288,7 +311,7 @@ class Gamepad:
                 except (AttributeError, OSError):
                     continue
 
-    def poll(self):
+    def poll(self, active=True):
         if not self.dll:
             return set()
         st = _XInputState()
@@ -309,7 +332,7 @@ class Gamepad:
                     break
             except OSError:
                 return set()
-        pressed = down - self.held
+        pressed = down - self.held if active else set()
         self.held = down
         return pressed
 

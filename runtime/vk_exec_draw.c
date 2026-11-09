@@ -115,7 +115,7 @@ typedef struct {
     uint32_t aspect, level0, levels, layer0, layers, swz;
 } ViewKey;
 _Static_assert(sizeof(ViewKey) == 40, "ViewKey is hashed as bytes: no padding");
-typedef struct { uint64_t addr, size; } Range;
+typedef struct { uint64_t addr, size; int back; } Range;   // back: written into a VRAM mirror (vk_mem_mirrored)
 typedef struct {
     Chunk *chunks;
     int nchunks, cchunks;
@@ -222,7 +222,9 @@ static uint64_t bind_gen = 1;            // bumped by every bind op that writes 
 static void cb_done(void *arg) {   // completion thread
     CbRes *r = arg;
     VkCtx *c = vk_ctx();
-    for (int i = 0; i < r->nwritten; i++) vk_gpu_written(r->written[i].addr, r->written[i].size);
+    for (int i = 0; i < r->nwritten; i++)
+        if (r->written[i].back) vk_gpu_written_back(r->written[i].addr, r->written[i].size);
+        else vk_gpu_written(r->written[i].addr, r->written[i].size);
     for (int i = 0; i < r->npools; i++) {
         vkResetDescriptorPool(c->device, r->pools[i], 0);
         plat_mutex_lock(&spare_lock);
@@ -319,7 +321,7 @@ static void note_written(VkExec *ex, uint64_t addr, uint64_t size) {
     for (int i = 0; i < r->nwritten; i++)
         if (r->written[i].addr == addr && r->written[i].size == size) return;
     if (r->nwritten == r->cwritten) r->written = grow(r->written, &r->cwritten, sizeof *r->written);
-    r->written[r->nwritten++] = (Range){addr, size};
+    r->written[r->nwritten++] = (Range){addr, size, vk_mem_mirrored(addr, size)};
     vk_mem_gpu_pending(addr, size);
 }
 

@@ -315,6 +315,11 @@ void vk_mem_mirror_prologue(VkCommandBuffer cb);
 void vk_mem_shadow_sync(void);
 void vk_mem_gpu_pending(uint64_t addr, uint64_t size);
 void vk_gpu_written(uint64_t addr, uint64_t size);
+// The same for a GPU write into a VRAM mirror, which went back to guest memory with the submission: the texture checks
+// see it, the mirror's next sync does not copy it back up. vk_mem_mirrored at record time, right after the write's
+// buffer was picked (VK_MEM_USE / VK_MEM_PICK): 1 when [addr, addr+size) lies in one pool whose mirror is on.
+void vk_gpu_written_back(uint64_t addr, uint64_t size);
+int vk_mem_mirrored(uint64_t addr, uint64_t size);
 int vk_mem_flush_add_probe(void);        // --probe-vkexec: the flush range list; 0 or the number of the failed check
 uint64_t vk_mem_mirror_uploaded(void);   // --probe-vkexec: bytes copied into mirrors since the last summary line
 int vk_mem_mirror_probe(uint64_t addr);   // --probe-vkexec: the pool at addr gets its mirror as on a first buffer use;
