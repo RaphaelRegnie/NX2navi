@@ -182,9 +182,9 @@ static const CfgMeta metas[] = {
     {"WALK_KEY", "none", NULL, LIVE}, {"WALK_SCALE", "0.51", "0.2..0.9", LIVE},
     {"MENU_LANG", "", "en|ru|pt-BR|zh-Hans", LIVE},
     {"AMIIBO_DIR", "", NULL, LIVE},
-    // Discord Rich Presence (discord_rpc.c): off by default, the Game tab of the settings menu and the launcher's
-    // Settings switch it. The application's id and art key default to discord_app.h's NX2NAVI_DISCORD_*_DEFAULT.
-    {"DISCORD_RPC", "0", "0|1", LIVE},
+    // Discord Rich Presence (discord_rpc.c): on by default (it only talks to a Discord client running on this PC, and
+    // does nothing without one); the Game tab of the settings menu and the launcher's Settings switch it. The application's id and art key default to discord_app.h's NX2NAVI_DISCORD_*_DEFAULT.
+    {"DISCORD_RPC", "1", "0|1", LIVE},
     {"DISCORD_APP_ID", NX2NAVI_DISCORD_APP_ID_DEFAULT, NULL, LIVE},
     {"DISCORD_IMAGE", NX2NAVI_DISCORD_IMAGE_DEFAULT, NULL, LIVE},
     // Advanced: scheduling

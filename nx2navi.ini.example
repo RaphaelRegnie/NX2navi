@@ -334,9 +334,9 @@
 
 [discord]
 # Rich Presence: "Playing NX2navi" with the play time in your Discord status while the game runs, through the
-# local IPC of a running Discord client. 1 = on; the Game tab of the settings menu (F1) and the launcher's Settings
-# switch it too, and a change in the menu reaches the presence thread at once.
-# discord_rpc = 0
+# local IPC of a running Discord client; without one it does nothing. 0 = off. The Game tab of the settings menu (F1)
+# and the launcher's Settings switch it too, and a change in the menu reaches the presence thread at once.
+# discord_rpc = 1
 # The Discord application whose name ("Playing <name>") and artwork the status shows: its Application ID from
 # discord.com/developers/applications (General Information), digits only. Default: the NX2navi application, built
 # in from runtime/discord_app.h (NX2NAVI_DISCORD_APP_ID_DEFAULT). Register your own application to choose another
