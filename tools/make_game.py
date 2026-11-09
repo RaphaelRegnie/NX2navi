@@ -693,36 +693,115 @@ class ObjectCache:
     def forget(self, obj):
         self.entries.pop(obj.name, None)
 
+    def adopt(self, obj, key, old_keys, old_kits=()):
+        """Records obj under key when its entry has one of old_keys, the keys an earlier version gave the same compile,
+        its object is there and every file it was compiled from reads as it did. A file in an earlier kit's folder
+        (old_kits, app/<version>) is read at the same place in this kit, as the object must match this kit's headers:
+        that folder may be gone. 1 when taken over."""
+        e = self.entries.get(obj.name)
+        if not e or e.get('key') not in old_keys or not obj.is_file():
+            return 0
+        kit = self.roots.get('<kit>')
+        kits = [os.path.normcase(os.path.abspath(k)) for k in old_kits]
+        deps = {}
+        for p, rec in e.get('deps', {}).items():
+            path = self.real(p)
+            a = os.path.normcase(os.path.abspath(path))
+            for k in kits:
+                if kit and a.startswith(k + os.sep):
+                    path = kit + a[len(k):]
+                    break
+            digest = rec if isinstance(rec, str) else rec[0]
+            if not digest or self.file_sha(path) != digest:
+                return 0
+            st = os.stat(path)
+            deps[self.norm(path)] = [digest, st.st_size, st.st_mtime_ns]
+        self.entries[obj.name] = {'key': key, 'deps': deps}
+        return 1
+
     def save(self):
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(json.dumps(self.entries), encoding='utf-8')
         tmp.replace(self.path)
 
 
-def compiler_id(clang, env):
+def compiler_ids(clang, env):
+    """(id, id up to 0.6.0): what names the compiler in the object cache's keys. The id is its --version text and its
+    size. The keys up to 0.6.0 held the file's modification time too, so a tool update that put the same compiler back
+    made every object stale, a full compile of the game for nothing; that form is still made, to take those objects
+    over (object_alts)."""
     p = subprocess.run([str(clang), '--version'], capture_output=True, text=True, env=env)
     st = os.stat(clang)
-    return sha256_bytes(f'{p.stdout}\n{st.st_size}\n{int(st.st_mtime)}'.encode())
+    return (sha256_bytes(f'{p.stdout}\n{st.st_size}'.encode()),
+            sha256_bytes(f'{p.stdout}\n{st.st_size}\n{int(st.st_mtime)}'.encode()))
 
 
-def compile_all(srcs, cmd_for, cache, jobs, env, progress=None, salt='', stop=None):
+def compiler_id(clang, env):
+    return compiler_ids(clang, env)[0]
+
+
+def object_key(cmd, src, dst, cache, salt, sysroot=False):
+    """The cache key of compiling src into dst with cmd: the compiler's id (salt), the command's flags with the cache's
+    roots standing for their paths, and the source's sha256. --sysroot is left out: only fast_clang's compiler gets it,
+    and its objects are the UCRT64 compiler's byte for byte, so the object of either serves (sysroot=True keeps it: the
+    keys up to 0.6.0)."""
+    flags = [c for c in cmd[1:] if c not in (str(src), str(dst)) and (sysroot or not c.startswith('--sysroot='))]
+    for name, root in cache.roots.items():
+        flags = [name + os.path.normcase(f)[len(root):].replace(os.sep, '/') if os.path.normcase(f).startswith(root)
+                 else f for f in flags]
+    return sha256_bytes(json.dumps([salt, [os.path.basename(cmd[0])] + flags, cache.file_sha(src)]).encode())
+
+
+def legacy_key(src, dst, cache, salt, clang, clangxx, kit, lift, gen, vma):
+    """The key 0.5.0 and earlier gave compiling src into dst: their whole command with its paths as they were, the
+    kit's own folder (app/<version>) among them, and the compiler's id up to 0.6.0 (salt)."""
+    rt = Path(kit) / 'runtime'
+    cpp = src.suffix in ('.cpp', '.cxx')
+    guest = dst.name.startswith(('main_', 'sdk_', 'subsdk0_'))
+    cmd = [str(clangxx if cpp else clang), '-c', '-std=gnu++17' if cpp else '-std=gnu11', '-O1' if guest else '-O2',
+           '-fno-strict-aliasing', '-w', '-I', str(rt), '-I', str(lift), '-I', str(gen),
+           '-I', str(rt / 'third_party' / 'imgui'), '-I', str(vma), '-o', str(dst), str(src)]
+    flags = [c for c in cmd if c not in (str(src), str(dst))]
+    return sha256_bytes(json.dumps([salt, flags, cache.file_sha(src)]).encode())
+
+
+def earlier_kits():
+    """The folders of the launcher's earlier versions beside this kit's (app/<version>), by path, whether there or not:
+    the keys of their objects name them, and the launcher keeps only the previous one (app/previous.txt)."""
+    app = KIT.parent
+    if app.name != 'app':
+        return []
+    kits = {p for p in app.iterdir() if p.is_dir() and p != KIT and (p / 'runtime').is_dir()}
+    try:
+        prev = (app / 'previous.txt').read_text(encoding='utf-8').strip()
+        if prev and app / prev != KIT:
+            kits.add(app / prev)
+    except OSError:
+        pass
+    return sorted(kits)
+
+
+def compile_all(srcs, cmd_for, cache, jobs, env, progress=None, salt='', stop=None, alts=None):
     """Compile each (source, object) whose object is not current in cache. cmd_for(src, dst) -> argv without the
     dependency-file options; salt identifies the compiler. Returns (compiled, reused, failures) with failures as
     (src, stderr tail). The cache's roots stand for their paths in the flags too. The largest sources start first:
     compile time grows with size, and a big file that started last would run on alone after the others finished.
-    stop() true makes the compiles not yet started end at once, unrecorded (a step beside this one failed)."""
+    stop() true makes the compiles not yet started end at once, unrecorded (a step beside this one failed).
+    alts(src, dst) -> (keys, kits): the keys earlier versions gave the same compile, and the folders of their kits; an
+    object recorded under one of them is taken over (ObjectCache.adopt) instead of compiled again."""
     todo, keys = [], {}
+    adopted = 0
     for src, dst in srcs:
-        cmd = cmd_for(src, dst)
-        flags = [c for c in cmd[1:] if c not in (str(src), str(dst))]
-        for name, root in cache.roots.items():
-            flags = [name + os.path.normcase(f)[len(root):].replace(os.sep, '/') if os.path.normcase(f).startswith(root)
-                     else f for f in flags]
-        flags = [os.path.basename(cmd[0])] + flags
-        keys[dst] = sha256_bytes(json.dumps([salt, flags, cache.file_sha(src)]).encode())
-        if not cache.current(dst, keys[dst]):
-            todo.append((src, dst))
+        keys[dst] = object_key(cmd_for(src, dst), src, dst, cache, salt)
+        if cache.current(dst, keys[dst]):
+            continue
+        if alts and cache.adopt(dst, keys[dst], *alts(src, dst)):
+            adopted += 1
+            continue
+        todo.append((src, dst))
     reused = len(srcs) - len(todo)
+    if adopted:
+        say(f'  {adopted} objects an earlier version compiled are kept: the same compile of the same sources')
     todo.sort(key=lambda job: job[0].stat().st_size, reverse=True)
 
     def cc(job):
@@ -979,9 +1058,35 @@ def xlate_source():
     fail(f'{XLATE_NAME} is missing: build it with tools/build_xlate.py')
 
 
-def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
+# The x86-64 level the lifted code was compiled for, beside the objects (lifted_level).
+LIFTED_BUILD = 'lifted-build.json'
+
+
+def lifted_level(obj, now, update):
+    """The x86-64 level to compile the lifted code for. A build from the game files takes this processor's (now). An
+    update keeps the level the objects were compiled for, so that it compiles only what changed: the one recorded
+    (LIFTED_BUILD), else 0 (generic x86-64) when the cache is one of 0.5.0 or earlier, which compiled for no level and
+    whose entries name their files by sha256 alone. Never above this processor's: a game folder moved to an older PC is
+    compiled again for it."""
+    if not update:
+        return now
+    try:
+        rec = json.loads((obj / LIFTED_BUILD).read_text(encoding='utf-8'))
+        return min(int(rec['level']), now)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        entries = json.loads((obj / 'objects.json').read_text(encoding='utf-8'))
+        old = any(isinstance(rec, str) for e in entries.values() for rec in e.get('deps', {}).values())
+    except (OSError, ValueError, AttributeError):
+        old = False
+    return 0 if old else now
+
+
+def step_compile(out, cache_dir, msys, jobs, romfs_job=None, update=False):
     """romfs_job: the RomFS step still running beside this one (a first build). Everything that does not include
-    romfs_config.h compiles meanwhile; the RomFS index and the few files that include it follow once it is done."""
+    romfs_config.h compiles meanwhile; the RomFS index and the few files that include it follow once it is done.
+    update: a rebuild after a kit update (lifted_level)."""
     lift, gen, obj = cache_dir / 'lift', cache_dir / 'gen', cache_dir / 'obj'
     gen.mkdir(parents=True, exist_ok=True)
     obj.mkdir(parents=True, exist_ok=True)
@@ -1000,15 +1105,31 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
     if WIN:
         srcs.append((gen / 'shim.c', obj / 'shim.o'))
     inc = ['-I', str(rt), '-I', str(lift), '-I', str(gen), '-I', str(rt / 'third_party' / 'imgui'), '-I', str(vma)]
-    cid = compiler_id(clang, env)
-    level = cpu_level(clang, env)
-    say(f'  the lifted code is built for x86-64-v{level}, this processor\'s level' if level else
-        '  the lifted code is built for generic x86-64: the processor\'s level could not be read')
+    cid, cid_old = compiler_ids(clang, env)   # fast_clang's compiler writes the same objects: not part of the key
+    now = cpu_level(clang, env)
+    level = lifted_level(obj, now, update)
+    if level == now:
+        say(f'  the lifted code is built for x86-64-v{level}, this processor\'s level' if level else
+            '  the lifted code is built for generic x86-64: the processor\'s level could not be read')
+    else:
+        say(f'  the lifted code is built for {f"x86-64-v{level}" if level else "generic x86-64"}, as the objects kept '
+            f'from before this update were (Rebuild the Game compiles it for this processor\'s level)')
     fast = fast_clang(msys, clang, env)
     if fast:
-        cid += compiler_id(fast, env)
         say(f'  the lifted code compiles with {fast}')
     cmd_for = runtime_cmd(clang, clangxx, inc, level, fast, msys)
+    # The keys earlier versions gave the same compiles (compile_all alts): 0.6.0's, with the compiler's file time and,
+    # with the fast compiler, its id and --sysroot; 0.5.0's and earlier's, with their kit's folder in the paths.
+    plain = runtime_cmd(clang, clangxx, inc, level, None, msys)
+    fast_old = (cid_old + compiler_ids(fast, env)[1]) if fast else None
+    kits = earlier_kits()
+
+    def alts(src, dst):
+        keys = [object_key(plain(src, dst), src, dst, cache, cid_old, sysroot=True)]
+        if fast:
+            keys.append(object_key(cmd_for(src, dst), src, dst, cache, fast_old, sysroot=True))
+        keys += [legacy_key(src, dst, cache, cid_old, clang, clangxx, k, lift, gen, vma) for k in kits]
+        return keys, kits
 
     t0 = time.time()
     last = [0.0]
@@ -1030,7 +1151,7 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
         say(f'  {len(late)} files wait for the RomFS index: {", ".join(s.name for s, _ in late)}')
     early = [j for j in srcs if j not in late]
     compiled, reused, bad = compile_all(early, cmd_for, cache, jobs, env, lambda d, t: progress(d, len(srcs)),
-                                        salt=cid, stop=romfs_job.failed if romfs_job else None)
+                                        salt=cid, stop=romfs_job.failed if romfs_job else None, alts=alts)
     if romfs_job:
         if romfs_job.thread.is_alive():
             say('  waiting for the RomFS image')
@@ -1038,13 +1159,14 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
         if not bad:
             romfs_index(out, gen)
             c2, r2, bad = compile_all(late, cmd_for, cache, jobs, env,
-                                      lambda d, t: progress(len(early) + d, len(srcs)), salt=cid)
+                                      lambda d, t: progress(len(early) + d, len(srcs)), salt=cid, alts=alts)
             compiled, reused = compiled + c2, reused + r2
     say(f'  {compiled} compiled, {reused} unchanged since the last build')
     if bad:
         for src, err in bad[:3]:
             print(f'--- {src}\n{err}', file=sys.stderr)
         fail(f'{len(bad)} files did not compile')
+    (obj / LIFTED_BUILD).write_text(json.dumps({'level': level}), encoding='utf-8')   # lifted_level reads it next update
 
     objs = [o for _, o in srcs] + ([compile_resources(msys, rt, obj, env)] if WIN else [])
     exe = out / EXE_NAME
@@ -1125,10 +1247,28 @@ def shader_progress(phase, done, total, quiet_s, elapsed_s):
     return {'step': 'shaders', 'fraction': round(fraction, 4), 'detail': detail}
 
 
-def step_shaders(out):
+def shader_carry(out):
+    """Whether the game carries the shaders prepared before an update over (runtime/gfx_shader.c, NX2NAVI_SHADER_CARRY,
+    on unless the environment or nx2navi.ini sets it to 0) and there are some: shader-prepared.bin is written by a
+    finished preparation."""
+    if os.environ.get('NX2NAVI_SHADER_CARRY', '').strip() == '0':
+        return False
+    try:
+        for line in (out / 'nx2navi.ini').read_text(encoding='utf-8-sig', errors='replace').splitlines():
+            k, eq, v = line.strip().partition('=')
+            if eq and k.strip().upper().removeprefix('NX2NAVI_') == 'SHADER_CARRY' and v.strip().strip('"') == '0':
+                return False
+    except OSError:
+        pass
+    return (out / 'shader-prepared.bin').is_file()
+
+
+def step_shaders(out, update=False):
     """Every shader of the game files into the game's shader cache and the driver's own cache, before the first start.
     Its output is read as it comes: the counts nx2navi.exe prints become progress events, the other lines go on to
-    the log, and while nothing moves an event every few seconds keeps saying the step is running and for how long."""
+    the log, and while nothing moves an event every few seconds keeps saying the step is running and for how long.
+    update: after a kit update the shaders prepared before stay in use and the game translates them again in the
+    background (shader_carry), so the update does not wait the minutes a full preparation takes."""
     # The game translates with the copy beside it. The compile step refreshes that copy, but a kit that changes only
     # the translator runs this step again alone (step_key), which would then prepare with the old one. Only a kit that
     # has one: the compile step, which always runs first, stops a build without it.
@@ -1137,6 +1277,9 @@ def step_shaders(out):
             for name in (XLATE_NAME, 'nx2navi_xlate.id'):
                 copy_if_changed(d / name, out / name)
             break
+    if update and shader_carry(out):
+        say('  the shaders prepared before this update stay in use; the game translates them again in the background')
+        return
     cmd = [sys.executable, '-u', str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
            '--exefs', str(out / 'exefs'), '--no-list', '--exe', EXE_NAME]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
@@ -1307,6 +1450,9 @@ def main():
     ap.add_argument('--romfs', help='the game\'s romfs folder')
     ap.add_argument('--rebuild', action='store_true',
                     help='build again from the game files the last run unpacked into --out (after a kit update)')
+    ap.add_argument('--retune', action='store_true',
+                    help="with --rebuild: compile the lifted code for this processor's level even when the objects "
+                         'kept from before an update were compiled for another (Rebuild the Game)')
     ap.add_argument('--out', help='the folder for the finished game')
     ap.add_argument('--check', action='store_true', help='only check the game\'s version; builds nothing')
     ap.add_argument('--msys', default=r'C:\msys64\ucrt64',
@@ -1368,8 +1514,9 @@ def main():
     t0 = time.time()
     romfs_job = None
     runs = {'exefs': lambda: step_exefs(src, out), 'romfs': lambda: step_romfs(src, out, min(a.jobs, 8)),
-            'lift': lambda: step_lift(out, cache), 'compile': lambda: step_compile(out, cache, msys, a.jobs, romfs_job),
-            'shaders': lambda: step_shaders(out), 'prompts': lambda: step_prompts(out)}
+            'lift': lambda: step_lift(out, cache),
+            'compile': lambda: step_compile(out, cache, msys, a.jobs, romfs_job, a.rebuild and not a.retune),
+            'shaders': lambda: step_shaders(out, a.rebuild), 'prompts': lambda: step_prompts(out)}
     state_lock = threading.Lock()   # the RomFS step records itself from its own thread
 
     def save():

@@ -1068,7 +1068,7 @@ class MakeGameTest(Tmp):
         def lift(out, cache):
             seen['lift_beside_romfs'] = not (out / 'romfs' / 'index.json').exists()
 
-        def compile_(out, cache, msys, jobs, romfs_job=None):
+        def compile_(out, cache, msys, jobs, romfs_job=None, update=False):
             seen['job'] = romfs_job is not None
             romfs_job.join()
             seen['image_after_join'] = (out / 'romfs' / 'romfs.bin').is_file()
@@ -1129,7 +1129,7 @@ class MakeGameTest(Tmp):
             time.sleep(0.1)
             ran.append('lift')
 
-        def compile_(out, cache, msys, jobs, romfs_job=None):
+        def compile_(out, cache, msys, jobs, romfs_job=None, update=False):
             ran.append('compile')
         self.assertEqual(self.main_with(romfs, lift, compile_), 1)
         self.assertEqual(ran, ['lift'])
@@ -1305,6 +1305,73 @@ class MakeGameTest(Tmp):
         (self.tmp / 'n.txt').write_text(dlss_pin.notice_text(), encoding='utf-8')
         self.assertEqual(self.mg.notice_sha256(self.tmp / 'n.txt'), dlss_pin.SHA256)
         self.assertEqual((dlss_pin.NAME, dlss_pin.NOTICE), (self.mg.DLSS_DLL, self.mg.DLSS_NOTICE))
+
+    def test_compile_key_ignores_file_time_and_sysroot(self):
+        """The compiler's id leaves its file time out (a tool update that puts the same compiler back keeps every
+        object), and the key leaves --sysroot out (the fast compiler's objects are the UCRT64 compiler's)."""
+        exe = self.tmp / 'cc.exe'
+        shutil.copy2(sys.executable, exe)
+        a = self.mg.compiler_ids(exe, dict(os.environ))
+        os.utime(exe, (1_700_000_000, 1_700_000_000))
+        b = self.mg.compiler_ids(exe, dict(os.environ))
+        self.assertEqual(a[0], b[0])
+        self.assertNotEqual(a[1], b[1])   # the form up to 0.6.0 had it
+        src, dst = self.tmp / 'a.c', self.tmp / 'a.o'
+        src.write_text('int a;')
+        cache = self.mg.ObjectCache(self.tmp / 'objects.json', {'<kit>': self.tmp / 'kit'})
+        plain = ['clang.exe', '-c', '-O1', '-o', str(dst), str(src)]
+        fast = ['clang.exe', '--sysroot=C:/msys64/ucrt64', '-c', '-O1', '-o', str(dst), str(src)]
+        self.assertEqual(self.mg.object_key(plain, src, dst, cache, 'id'), self.mg.object_key(fast, src, dst, cache, 'id'))
+        self.assertNotEqual(self.mg.object_key(plain, src, dst, cache, 'id', sysroot=True),
+                            self.mg.object_key(fast, src, dst, cache, 'id', sysroot=True))
+
+    def test_objects_of_an_earlier_version_are_taken_over(self):
+        """An entry under a key an earlier version gave the same compile is re-recorded under the new key when its
+        files read as they did; a header in the earlier kit's folder is read in this kit's (that folder may be gone)."""
+        old, new, lift, obj = self.tmp / 'app' / '0.5.0', self.tmp / 'app' / '0.6.1', self.tmp / 'lift', self.tmp / 'obj'
+        for d in (new / 'runtime', lift, obj):
+            d.mkdir(parents=True)
+        (new / 'runtime' / 'cpu.h').write_text('#define CPU 1\n')
+        src, dst = lift / 'main_0000.c', obj / 'main_main_0000.o'
+        src.write_text('int f(void) { return 1; }\n')
+        dst.write_bytes(b'object')
+        sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+        legacy = {'key': 'old-key', 'deps': {str(src).replace('\\', '/'): sha(src),
+                                             str(old / 'runtime' / 'cpu.h').replace('\\', '/'): sha(new / 'runtime' / 'cpu.h')}}
+        (obj / 'objects.json').write_text(json.dumps({dst.name: legacy}))
+        cache = self.mg.ObjectCache(obj / 'objects.json', {'<kit>': new})
+        self.assertEqual(cache.adopt(dst, 'new-key', ['other-key'], [old]), 0)   # not a key it knows
+        self.assertEqual(cache.adopt(dst, 'new-key', ['old-key'], [old]), 1)
+        e = cache.entries[dst.name]
+        self.assertEqual(e['key'], 'new-key')
+        self.assertIn('<kit>/runtime/cpu.h', e['deps'])
+        self.assertTrue(cache.current(dst, 'new-key'))
+        # a header that changed since: compiled again
+        (obj / 'objects.json').write_text(json.dumps({dst.name: legacy}))
+        (new / 'runtime' / 'cpu.h').write_text('#define CPU 2\n')
+        cache = self.mg.ObjectCache(obj / 'objects.json', {'<kit>': new})
+        self.assertEqual(cache.adopt(dst, 'new-key', ['old-key'], [old]), 0)
+
+    def test_lifted_level_kept_on_updates(self):
+        obj = self.tmp / 'obj'
+        obj.mkdir()
+        self.assertEqual(self.mg.lifted_level(obj, 3, update=False), 3)   # a build from the game files
+        self.assertEqual(self.mg.lifted_level(obj, 3, update=True), 3)    # nothing recorded, no old cache
+        (obj / 'objects.json').write_text(json.dumps({'main_main_0000.o': {'key': 'k', 'deps': {'a.c': 'ab'}}}))
+        self.assertEqual(self.mg.lifted_level(obj, 3, update=True), 0)    # 0.5.0's cache: compiled for no level
+        (obj / self.mg.LIFTED_BUILD).write_text(json.dumps({'level': 2}))
+        self.assertEqual(self.mg.lifted_level(obj, 3, update=True), 2)    # as recorded
+        self.assertEqual(self.mg.lifted_level(obj, 1, update=True), 1)    # never above this processor's
+        self.assertEqual(self.mg.lifted_level(obj, 3, update=False), 3)
+
+    def test_updates_skip_shader_preparation(self):
+        out = self.tmp / 'game'
+        out.mkdir()
+        self.assertFalse(self.mg.shader_carry(out))   # nothing prepared yet: the update prepares
+        (out / 'shader-prepared.bin').write_bytes(b'x')
+        self.assertTrue(self.mg.shader_carry(out))
+        (out / 'nx2navi.ini').write_text('[performance]\nNX2NAVI_SHADER_CARRY = "0"\n')
+        self.assertFalse(self.mg.shader_carry(out))
 
     def test_dlssg_beside_the_game(self):
         """DLSS Frame Generation's files go beside the game only as a whole set, with the licence texts; the release
