@@ -624,7 +624,21 @@ void vk_mem_census(uint64_t frame) {
     window_start = frame;
 }
 
-int vk_mem_vram(uint64_t *used, uint64_t *budget, int *exact) {
+// NX2NAVI_VRAM_BUDGET_MB (test; unset or 0: the device's): the device-local budget every decision here and in
+// vk_texture.c compares with is at most this many MiB, so a large card behaves as a small one does under pressure
+// (mirrors refused or evicted, textures dropped). The heap lines still log what the driver reports.
+static uint64_t budget_cap(void) {
+    static int64_t mb = -1;
+    if (mb < 0) {
+        const char *s = cfg_get("NX2NAVI_VRAM_BUDGET_MB");
+        int64_t v = s && *s ? atoll(s) : 0;
+        if (v > 0) rt_log("mem: the VRAM budget is taken as at most %lld MiB (NX2NAVI_VRAM_BUDGET_MB, a test)", (long long)v);
+        mb = v > 0 ? v : 0;
+    }
+    return (uint64_t)mb << 20;
+}
+
+static int vram_query(uint64_t *used, uint64_t *budget, int *exact) {
     VkCtx *c = vk_ctx();
     *used = *budget = 0, *exact = 0;
     if (!c) return 0;
@@ -645,6 +659,13 @@ int vk_mem_vram(uint64_t *used, uint64_t *budget, int *exact) {
         if (mp->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
             *used += vb[h].statistics.blockBytes, *budget += mp->memoryHeaps[h].size;
     return *budget != 0;
+}
+
+int vk_mem_vram(uint64_t *used, uint64_t *budget, int *exact) {
+    int ok = vram_query(used, budget, exact);
+    uint64_t cap = budget_cap();
+    if (ok && cap && *budget > cap) *budget = cap;
+    return ok;
 }
 
 // ---------------------------------------------------------------- page write generations
