@@ -366,6 +366,9 @@
 # devices and the game plays on the system default. With audio_channels = auto, the channel count is the chosen device's.
 # The command line `--audio-device <value>` overrides this for one run. Takes effect at the next start.
 # audio_device = default
+# The game's microphone input (the Ocarina can be played into one): 1 lets it read the default recording device,
+# 0 refuses it, as earlier versions did.
+# microphone = 1
 
 [input]
 # Gamepad motion controls (0 = off) and vibration (0 = off).
