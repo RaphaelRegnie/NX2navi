@@ -395,6 +395,7 @@ static void boot_wait(PlatThread *warm, uint64_t cap_ms) {
 
 void rt_boot(void) {
     check_npdm();
+    fs_host_lock_profile();   // a second copy of the game stops here, before the prewarm below
     if (!rt_config()->shot) vk_pipeline_async_enable();   // a --shot image must not depend on build timing
     // Shaders and pipelines recorded in earlier runs are made ready while the modules load; the guest waits for them.
     PlatThread *warm = plat_thread_new(prewarm_main, NULL, "prewarm");
