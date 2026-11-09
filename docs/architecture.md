@@ -101,6 +101,11 @@ keeps per-core data without locks and relies on that, so the host models it (`ru
   translates, translates every stored program again for the next start, then deletes the old translations (a pruned
   copy of `shader-cache.pack` replaces the pack at the next start). A program the new translator refuses keeps its
   old translation. `--prepare-shaders` still translates everything with the current translator.
+- Shader disk reads in play: a draw's shader that is in the disk cache but not in memory is read on the render thread
+  within a budget of 1/8 of the wall time (2 ms at once), and past it by three loader threads while its draws are
+  skipped as for a translation (`runtime/gfx_shader.c` `load_budget`). Opening a loose file is what costs (5.6 ms a
+  pair the first time on Windows), so an update that carries the shaders over packs the cache once it holds 1,000
+  loose translations (`tools/make_game.py` `PACK_LOOSE_MIN`).
 - Mesh and task shaders run as `VK_EXT_mesh_shader`; indirect mesh draws read NVN's `{count, first}` record through a
   ring of Vulkan `{x, y, z}` records filled on the GPU.
 - Pipelines: `VK_EXT_graphics_pipeline_library` where the driver has it: stage libraries compiled ahead, a fast link

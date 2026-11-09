@@ -520,6 +520,7 @@ typedef struct { uint64_t live, released, own_live, own_released, bytes_live, by
 void vk_texture_census(VkTexCensus *s);
 void vk_texture_census_log(uint64_t frame);         // vk_memory.c vram_log: the live entries' memory by kind and format
 void vk_texture_want_room(uint64_t bytes);          // a VRAM mirror that did not fit: idle textures make that much room
+int vk_texture_commit_low(void);                    // the system's commit was low at the last check (vk_texture.c)
 // vk_mem_vram's device-local use less the free space inside VMA's blocks (vk_memory.c), for the evictions
 int vk_mem_vram_live(uint64_t *used, uint64_t *budget);
 void vk_texture_shutdown(void);                     // vk_mem_shutdown calls it

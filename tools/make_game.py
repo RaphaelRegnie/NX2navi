@@ -1367,6 +1367,8 @@ def step_shaders(out, update=False):
             break
     if update and shader_carry(out):
         say('  the shaders prepared before this update stay in use; the game translates them again in the background')
+        if loose_shaders(out) >= PACK_LOOSE_MIN:
+            pack_shader_cache(out)
         return
     cmd = [sys.executable, '-u', str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
            '--exefs', str(out / 'exefs'), '--no-list', '--exe', EXE_NAME]
@@ -1416,6 +1418,42 @@ def step_shaders(out, update=False):
              'meets them. Run the build again to retry this step')
     for seed in ('seed-programs.bin', 'seed-answers.bin'):   # translated now: the shader cache holds them
         (out / seed).unlink(missing_ok=True)
+    pack_shader_cache(out)
+
+
+# An update that carries the shaders over packs the cache when it has this many loose translations: the game writes
+# each translation it makes in play, and those of its background pass after a translator change (about 42,000), as loose
+# files, and reading one the first time cost 5.6 ms on Windows against a fraction of a millisecond from the pack.
+PACK_LOOSE_MIN = 1000
+
+
+def loose_shaders(out):
+    """The loose translations (<key>.spv) in the game's shader cache."""
+    try:
+        with os.scandir(out / 'shader-cache') as it:
+            return sum(1 for e in it if e.name.endswith('.spv'))
+    except OSError:
+        return 0
+
+
+def pack_shader_cache(out):
+    """The prepared shader cache folded into shader-cache/shader-cache.pack (tools/pack_shader_cache.py): the
+    preparation leaves four files per shader, about 175,000 for the whole game, which the game looks up one by one at
+    every start (gfx_shader.c gfx_shader_prewarm, the use masks read after it) and which are slow to scan, copy and
+    back up. The game reads the pack first and the loose files after it, so a cache left unpacked still works: a
+    failure here is said and the build goes on."""
+    tool = KIT / 'tools' / 'pack_shader_cache.py'
+    if not tool.is_file() or not (out / 'shader-cache').is_dir():
+        return
+    t0 = time.monotonic()
+    r = subprocess.run([sys.executable, '-u', str(tool), str(out / 'shader-cache')], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+    for line in r.stdout.splitlines():
+        say('  ' + line)
+    if r.returncode:
+        say(f'  packing the shader cache failed (code {r.returncode}); the game reads the loose files instead')
+    else:
+        say(f'  shader cache packed in {time.monotonic() - t0:.0f} s')
 
 
 def prompt_art_dir():
@@ -1554,8 +1592,10 @@ def step_key(step, identity, out=None):
                    f'|cpu {cpu_tag()}')
     if step == 'compile':
         return compile_key
-    # shaders: the built game and the translator that prepared them
-    return f'shaders-1|{compile_key}|{sha256_file(KIT / "tools" / "prepare_shaders.py")}|{sha256_file(KIT / "bin" / "nx2navi_xlate.id")}'
+    # shaders: the built game and the translator that prepared them, the one xlate_source finds (the kit's bin/, or a
+    # source checkout's build/xlate/)
+    return (f'shaders-1|{compile_key}|{sha256_file(KIT / "tools" / "prepare_shaders.py")}'
+            f'|{sha256_file(xlate_source() / "nx2navi_xlate.id")}')
 
 
 def main():

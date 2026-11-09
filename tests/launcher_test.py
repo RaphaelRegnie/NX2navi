@@ -14,7 +14,8 @@ Run: python tests/launcher_test.py   (Python 3.14 for the zstd tests; the window
 - gamefiles: the .bfotf font wrapping and zstd dictionaries, on a font of this system made into a fake RomFS
 - the button art of a release: the files tools/prompt_art.py copies, and the packages and tools the prompts need
 - make_game.py: a synthetic .nup through the check, exefs and romfs steps with --events, skipped steps on a second
-  run, --rebuild without the game files, the prompts step with a stand-in prompt tool, the object cache of the compile
+  run, --rebuild without the game files, the shaders key following the translator the build uses (the kit's bin/ or
+  a source checkout's build/xlate/), the prompts step with a stand-in prompt tool, the object cache of the compile
   step with the system's C compiler, and its windres call under folders with spaces (a script in windres's place)
 - jobs: an install driven by a fake make_game.py, with and without the prompts row
 - the window: --selftest draws every screen (skipped without a display)
@@ -1368,6 +1369,53 @@ class MakeGameTest(Tmp):
         self.assertTrue(any(d.startswith('Built 10 of 100') and 'still running' in d for d in details))
         self.assertEqual([e['fraction'] for e in events if e['detail'] == 'Translated 50 of 100 shaders'][0], 0.25)
 
+    def test_shaders_step_packs_the_cache(self):
+        """After the preparation the shaders step folds the loose files of the shader cache into shader-cache.pack
+        (tools/pack_shader_cache.py), as the installer did; a kit without the tool leaves the cache as it is."""
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        (kit / 'tools' / 'prepare_shaders.py').write_text('print("prepare-shaders: progress build 1 1", flush=True)\n')
+        cache = self.out / 'shader-cache'
+        (cache / 'in').mkdir(parents=True)
+        (cache / ('ab' * 32 + '.spv')).write_bytes(b'\x03\x02\x23\x07' * 8)
+        (cache / 'in' / ('cd' * 32 + '.in')).write_bytes(b'TKSI' * 4)
+        self.addCleanup(setattr, self.mg, 'KIT', self.mg.KIT)
+        self.mg.KIT = kit
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.mg.step_shaders(self.out)
+        self.assertFalse((cache / 'shader-cache.pack').exists())   # no tool in the kit
+        shutil.copy(ROOT / 'tools' / 'pack_shader_cache.py', kit / 'tools')
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.mg.step_shaders(self.out)
+        self.assertTrue((cache / 'shader-cache.pack').is_file())
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), ['shader-cache.pack'])
+        self.assertIn('shader cache packed', buf.getvalue())
+
+    def test_carried_update_packs_many_loose_shaders(self):
+        """An update that carries the shaders over packs the cache once it holds PACK_LOOSE_MIN loose translations,
+        and leaves fewer loose."""
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        shutil.copy(ROOT / 'tools' / 'pack_shader_cache.py', kit / 'tools')
+        cache = self.out / 'shader-cache'
+        cache.mkdir(parents=True)
+        for i in range(3):
+            (cache / (f'{i:02x}' * 32 + '.spv')).write_bytes(b'\x03\x02\x23\x07' * 8)
+        for name, value in (('KIT', kit), ('PACK_LOOSE_MIN', 4), ('shader_carry', lambda out: True)):
+            self.addCleanup(setattr, self.mg, name, getattr(self.mg, name))
+            setattr(self.mg, name, value)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.mg.step_shaders(self.out, update=True)
+        self.assertFalse((cache / 'shader-cache.pack').exists())   # 3 loose, under the minimum
+        (cache / ('03' * 32 + '.spv')).write_bytes(b'\x03\x02\x23\x07' * 8)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.mg.step_shaders(self.out, update=True)
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), ['shader-cache.pack'])
+        self.assertIn('stay in use', buf.getvalue())
+        self.assertIn('shader cache packed', buf.getvalue())
+
     def test_romfs_failure_stops_the_build(self):
         ran, lifting, failed = [], threading.Event(), threading.Event()
 
@@ -1389,6 +1437,37 @@ class MakeGameTest(Tmp):
         steps = json.loads((self.out / 'build-cache' / 'state.json').read_text())['steps']
         self.assertNotIn('romfs', steps)
 
+    def test_shaders_key_names_the_translator_the_build_uses(self):
+        """A source checkout has its translator in build/xlate/ (tools/build_xlate.py), not in the kit's bin/: the
+        shaders key follows its identity, so a rebuilt translator prepares the shaders again. A kit's bin/ comes first
+        when both exist, and a kit with no translator is refused with the way to build one."""
+        from unittest import mock
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        (kit / 'tools' / 'prepare_shaders.py').write_text('')
+        xlate = kit / 'build' / 'xlate'
+        xlate.mkdir(parents=True)
+        (xlate / self.mg.XLATE_NAME).write_bytes(b'')
+        (xlate / 'nx2navi_xlate.id').write_text('xlate 1\n')
+
+        def key():
+            return self.mg.step_key('shaders', 'game', self.out)
+        with mock.patch.object(self.mg, 'KIT', kit):
+            first = key()
+            (xlate / 'nx2navi_xlate.id').write_text('xlate 2\n')
+            self.assertNotEqual(key(), first)
+            (kit / 'bin').mkdir()
+            (kit / 'bin' / self.mg.XLATE_NAME).write_bytes(b'')
+            (kit / 'bin' / 'nx2navi_xlate.id').write_text('xlate 3\n')
+            from_bin = key()
+            (xlate / 'nx2navi_xlate.id').write_text('xlate 4\n')
+            self.assertEqual(key(), from_bin)
+            shutil.rmtree(kit / 'bin')
+            shutil.rmtree(xlate)
+            with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+                key()
+            self.assertIn('tools/build_xlate.py', err.getvalue())
+
     def test_prompts_step(self):
         """With button art in the kit, the last step draws the button prompts (a fake tools/pad_prompts.py), one
         progress event per folder. It runs again only when the art, the bind_ lines or a folder changed, and then no
@@ -1397,6 +1476,7 @@ class MakeGameTest(Tmp):
         kit = self.tmp / 'kit'
         (kit / 'tools').mkdir(parents=True)
         (kit / 'bin').mkdir()
+        (kit / 'bin' / self.mg.XLATE_NAME).write_bytes(b'')   # the translator the shaders key names (xlate_source)
         (kit / 'bin' / 'nx2navi_xlate.id').write_text('xlate 1\n')
         (kit / 'tools' / 'prepare_shaders.py').write_text('')
         for name in ('prompt_art.py', 'button_icons.py'):

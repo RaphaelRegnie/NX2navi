@@ -86,11 +86,13 @@ def free_gb(path):
         return 0.0
 
 
-# Exit codes that end the game without a line of its own in its log, and what they mean. The game's crash report exits
-# with 71 after writing its FATAL lines (runtime/main.c crash_handler); the others come from Windows when something
-# ends the process before or around that report.
+# Exit codes that end the game, and what they mean. The game exits with 70 after a FATAL line of its own: an error it
+# cannot go on from, most often an allocation that failed because the memory ran out (runtime/dispatch.c rt_fatal), or
+# a failed re-run of itself (runtime/platform/win32.c plat_reexec). Its crash report exits with 71 after writing its
+# FATAL lines (runtime/main.c crash_handler). The others come from Windows when something ends the process before or
+# around that report.
 EXIT_CODES = {
-    70: 'the game could not start itself again',
+    70: 'a fatal error: the FATAL line near the end of its log says which, often memory that ran out',
     71: 'the crash report ended the game',
     0xC0000005: 'access violation',
     0xC00000FD: 'stack overflow',

@@ -133,8 +133,12 @@ static double shown_hz(double hz) { return hz <= 0 ? 60 : hz < LIMIT_MIN_HZ ? LI
 // A build without the fps60 and realtime patch sets (Ocarina) steps its game by the clock itself: walked by the same
 // frame-numbered input script, Link covered half the distance at 120 fps that he covers at 60. There the pacer holds
 // frames to the limit alone (nvn_api_obj.c present_period), the game's own 60 Hz interval aside, and the limit may be
-// any rate or none (LIMIT_FREE_MAX_HZ, "unlimited"); LIMIT_MAX_HZ is for builds whose physics fail past it, Ocarina has no such floor.
-#define LIMIT_FREE_MAX_HZ 1000
+// any rate up to LIMIT_FREE_MAX_HZ, or "unlimited", which paces the game at that rate too. Ocarina's code does fail
+// past some rate: on the quick menu, where a frame costs the GPU almost nothing, it ran at 640 to 700 fps and after
+// about two seconds read address 0 in its own draw code (main+0x175b2a0, the same call stack twice), while 92 to 255
+// fps ran on. 240 keeps every common monitor's rate; with frame generation it counts the game's own frames, so the
+// screen still shows the generated ones above it.
+#define LIMIT_FREE_MAX_HZ 240
 int frame_free_running(void) { return rt_patch_set("fps60") < 0 && rt_patch_set("realtime") < 0; }
 int frame_limit_adjustable(void) { return 1; }
 static unsigned limit_seen;
@@ -175,7 +179,8 @@ static void frame_limit_live(void) {
     if (hz == limit_hz) return;
     limit_hz = hz;
     if (frame_free_running()) {
-        if (hz == -2) rt_log("frame rate: unlimited (the game steps by the clock)");
+        if (hz == -2) rt_log("frame rate: unlimited (the game steps by the clock), at most %d game frames a second",
+                             LIMIT_FREE_MAX_HZ);
         else if (hz) rt_log("frame rate: limit %d fps (the game steps by the clock)", hz);
         else rt_log("frame rate: limit at the monitor's refresh rate (the game steps by the clock)");
         return;
@@ -243,11 +248,12 @@ uint64_t frame_step_cap_ns(void) {
             else rt_log("frame rate: the movie ended: the frame limit again");
         }
     }
-    if (limit_hz == -2 && !movie_hz) {   // unlimited: the pacer does not hold frames, and RTSS's limit is cleared
-        rtss_limit_want(rtss ? 0 : -1);
+    if (limit_hz == -2 && !movie_hz && !frame_free_running()) {   // unlimited: the pacer does not hold frames, and
+        rtss_limit_want(rtss ? 0 : -1);                              // RTSS's limit is cleared
         return 0;
     }
-    // unlimited during a movie: the movie's rate, times frame generation's factor for the division below
+    // unlimited in a build that steps by the clock: LIMIT_FREE_MAX_HZ game frames; during a movie, the movie's rate.
+    // Both times frame generation's factor for the division below.
     int follow = frame_limit_follows_display(), limit = follow ? 0 : limit_hz;
     static int follow_was, follow_logs;
     if (follow != follow_was) {
@@ -257,8 +263,10 @@ uint64_t frame_step_cap_ns(void) {
             else rt_log("frame rate: limit %d fps again", limit_hz);
         }
     }
-    double hz = limit == -2 ? movie_hz * gen : shown_hz(limit ? limit : gfx_window_refresh_hz());
+    double hz = limit == -2 ? (double)(movie_hz ? movie_hz : LIMIT_FREE_MAX_HZ) * gen
+                            : shown_hz(limit ? limit : gfx_window_refresh_hz());
     double max = frame_free_running() ? LIMIT_FREE_MAX_HZ : LIMIT_MAX_HZ;
+    if (limit == -2) max *= gen;   // the cap is on the game's frames there, not the ones shown
     if (hz > max) hz = max;
     // Frame generation presents one to three generated frames between each two of the game's: the game is paced at the
     // limit over that factor (half, a third, a quarter), so the screen shows the limit. With VSync and the limit at the

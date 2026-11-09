@@ -619,19 +619,27 @@ static uint32_t save_commit(void) {
 }
 
 // ---- storage roots
-static void storage_init(void *param) {
-    (void)param;
+// One game per profile: a second one's start would take the first one's commit in progress for an interrupted one
+// and delete it, and both would write into one working copy (save-tx/work), losing or mixing their saves. rt_boot
+// takes the lock before the shader prewarm, so a second copy ends at once instead of after the prewarm's seconds of
+// work on every core and the gigabytes of memory it commits; storage_init takes it again (plat_lock_file keeps one
+// handle per path, so the second call holds it already).
+void fs_host_lock_profile(void) {
     if (!*profile)
         need(snprintf(profile, sizeof profile, "%s", rt_config()->profile) < (int)sizeof profile, "profile path");
-    uint64_t uid[2];
     char p[PATH_CAP];
     make_dirs(profile);
-    // One game per profile: a second one's start would take the first one's commit in progress for an interrupted
-    // one and delete it, and both would write into one working copy (save-tx/work), losing or mixing their saves.
     snprintf(p, sizeof p, "%s/instance.lock", profile);
     int held = plat_lock_file(p);
     if (!held) rt_fatal("fs: another copy of the game is running with the profile %s; close it first", profile);
     if (held < 0) rt_log("fs: cannot make %s; a second copy of the game would not be stopped", p);
+}
+
+static void storage_init(void *param) {
+    (void)param;
+    uint64_t uid[2];
+    char p[PATH_CAP];
+    fs_host_lock_profile();
     account_uid(uid);
     snprintf(p, sizeof p, "%s/save", profile);
     make_dirs(p);

@@ -65,6 +65,7 @@ typedef struct PoolRec {
     uint32_t wb_sub;                   // replay: the last submission that wrote mirror bytes back to guest memory
     uint32_t retry_sub;                // replay: a mirror refused for the VRAM budget is asked again from here, 0 never
     uint8_t asked_room;                // replay: its refusal already asked the textures for room (once until it gets one)
+    uint8_t twin;                      // MS_ON: the table's writes reach guest memory too (twin_wanted); 0: the mirror only
     uint32_t vd_wrote_sub, vd_use_sub; // verify mode: the last submission that bound it written / used its mirror
     uint64_t vd_wrote_n;               // verify mode: written bindings of it so far
     uint32_t mgen;                     // gen_lock: every page write stamped up to this generation is in the mirror
@@ -1472,9 +1473,10 @@ static void refuse(PoolRec *r, int why, const char *what) {
 // write-back or snapshot lists), and every GPU write to it went back to guest memory at the end of the submission that
 // made it (vk_mem_mirror_end), so the imported buffer holds everything. The device address table moves its pages back
 // to the imported buffer (vk_gpa_remap_plain); a shader of a submission in flight that reads the old record still finds
-// the mirror, destroyed only once the submission being recorded is done (vk_defer_buffer). The pool is mirrored again,
-// from a whole copy, on its next buffer use. Its freed bytes count as room at once (evict_room), until the GPU is past
-// the submission and the destroy shows in VMA's figures.
+// the mirror, destroyed only once the submission being recorded is done (vk_defer_buffer). A mirror without a twin
+// (twin_wanted) is never a victim: what shaders wrote into it through the table is in the mirror alone. The pool is
+// mirrored again, from a whole copy, on its next buffer use. Its freed bytes count as room at once (evict_room), until
+// the GPU is past the submission and the destroy shows in VMA's figures.
 #define MIRROR_IDLE 120
 #define RETRY_SOON 16
 static int mirror_evict_on = -1;
@@ -1506,6 +1508,7 @@ static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) 
         PoolRec *r = mlist[i];
         uint32_t age = msub - r->acc_sub;
         if (age < min_idle || r->wb_sub == msub || msub - r->wb_sub < 2) continue;
+        if (!r->twin && r->gpa_rec) continue;   // the table's writes are in the mirror alone
         int at = nv;
         while (at > 0 && msub - v[at - 1]->acc_sub < age) at--;
         if (at == MAXV) continue;
@@ -1548,6 +1551,31 @@ static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) 
         room_bytes += freed, room_fence = vk_sync_issued() + 2;
     }
     return freed;
+}
+
+// ---- twins (NX2NAVI_GPA_TWIN_MAX_KB, default 0: every mirror has one)
+// Shaders write through the device address table into both a mirror and its pool's imported buffer, guest memory
+// (vk_gpa.c, "The twin"): such writes are not recorded as GPU writes, so with the mirror alone the CPU never saw
+// them and a sync of a page the CPU wrote copied the stale guest page over them. On a discrete GPU the second write
+// crosses PCIe: on PCIe 3.0 the twins cost about 3 ms of GPU time a frame in Kokiri Forest (NX2NAVI_GPA_TWIN=0 against
+// on). The writes that went wrong without them were the foliage counts and records in pools of 20 and 44 KiB.
+// GPA_TWIN_MAX_KB=n gives a twin only to mirrors of pools up to n KiB; a larger mirror keeps the table's writes to
+// itself (its record names the mirror twice, which sends the second write to the table's scratch page) and its
+// buffer fills stay in the mirror (vk_mem_guest_twin). Such a mirror is never evicted (mirror_evict), since guest
+// memory lacks what the shaders wrote into it. For measuring which pools need a twin: a pool that does and is left
+// without draws stretched or flickering foliage.
+static int64_t twin_max = -1;          // bytes; 0 no limit
+static int64_t m_untwinned_n, m_untwinned_bytes;
+
+static int twin_wanted(const PoolRec *r) {
+    if (twin_max < 0) {
+        int kb = cfg_int("NX2NAVI_GPA_TWIN_MAX_KB");
+        twin_max = kb > 0 ? (int64_t)kb << 10 : 0;
+        if (twin_max)
+            rt_log("mem: only mirrors of pools up to %d KiB send the device address table's writes to guest memory "
+                   "too (NX2NAVI_GPA_TWIN_MAX_KB); larger ones keep them and are not evicted", kb);
+    }
+    return !twin_max || (int64_t)(r->import_hi - r->import_lo) <= twin_max;
 }
 
 // Replay thread: the pool's mirror on its first buffer use.
@@ -1624,7 +1652,15 @@ static void mirror_create(PoolRec *r) {
     r->mstate = MS_ON;
     r->asked_room = 0;
     // The device address table names the mirror from now on: the GPU's writes go there, and the sync copies the CPU's.
-    if (r->gpa_rec) r->gpa_rec = vk_gpa_remap(r->import_lo, r->import_hi, r->gpa_rec, r->mbuf, r->import_lo);
+    // With a twin they also go to the imported buffer; without one (twin_wanted) the record names the mirror twice.
+    r->twin = (uint8_t)twin_wanted(r);
+    if (!r->twin) {
+        plat_inc64(&m_untwinned_n);
+        plat_add64(&m_untwinned_bytes, (int64_t)n);
+    }
+    if (r->gpa_rec)
+        r->gpa_rec = r->twin ? vk_gpa_remap(r->import_lo, r->import_hi, r->gpa_rec, r->mbuf, r->import_lo)
+                             : vk_gpa_remap_plain(r->import_lo, r->import_hi, r->gpa_rec, r->mbuf, r->import_lo);
     range_add(&pend, &npend, &cpend, r, 0, n);
     mrep.first_n++, mrep.first_bytes += n;
     plat_inc64(&m_live_n);
@@ -1749,7 +1785,7 @@ void vk_mem_pick(VkMemSpan *sp) {
 
 VkBuffer vk_mem_guest_twin(const VkMemSpan *sp) {
     const PoolRec *r = sp->pool;
-    return r && r->mstate == MS_ON && sp->buffer == r->mbuf ? r->buf : VK_NULL_HANDLE;
+    return r && r->mstate == MS_ON && r->twin && sp->buffer == r->mbuf ? r->buf : VK_NULL_HANDLE;
 }
 
 int vk_mem_mirror_probe(uint64_t addr) {
@@ -2410,7 +2446,7 @@ static void mirror_log(uint64_t frame) {
            "first use %.2f pools %.3f MiB, write-back %.3f MiB in %.1f ranges, merge %.3f MiB in %.1f dispatches "
            "(snapshots %.3f MiB, new buffers %.2f), flush calls %.1f (%.3f MiB), queries "
            "%.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu %.3f ms (pre-snap %.3f, syncs %.3f); so far "
-           "evicted %lld (%.1f MiB), budget refusals asked again %lld%s",
+           "evicted %lld (%.1f MiB), budget refusals asked again %lld, made without a twin %lld (%.1f MiB)%s",
            (unsigned long long)frame, (long long)m_live_n, m_live_bytes / M, (long long)m_refused_n[MR_BUDGET],
            m_refused_bytes[MR_BUDGET] / M, (long long)m_refused_n[MR_UNTRACKED], (long long)m_refused_n[MR_OVERLAP],
            (long long)m_refused_n[MR_ALLOC], a.subs / f, a.syncs / f, a.upload_bytes / f / M, a.upload_copies / f,
@@ -2418,7 +2454,7 @@ static void mirror_log(uint64_t frame) {
            a.merge_dispatches / f, a.snap_bytes / f / M, a.snap_allocs / f, fc / f, fb / f / M,
            a.presnap_queries / f, a.presnap_bytes / f / M, a.sync_queries / f, a.prologues / f, qpc_ms(a.presnap_t + a.sync_t) / f,
            qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, (long long)m_evicted_n, m_evicted_bytes / M, (long long)m_retries,
-           ver);
+           (long long)m_untwinned_n, m_untwinned_bytes / M, ver);
     rt_log("mem: mirror frame %llu: upload sources per frame, overlaps counted twice: written pages %.3f MiB; flush ranges "
            "%.2f, %.3f MiB, from %.1f flushes of %.3f MiB; flushed and not copied (write-watched) %.3f MiB",
            (unsigned long long)frame, a.page_bytes / f / M, a.flush_n / f,

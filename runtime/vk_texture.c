@@ -116,7 +116,7 @@ static uint64_t ru_same_n, ru_same_bytes;   // re-uploads skipped: the pages wer
 // NX2NAVI_TEX_ALIAS (default on; =0: a new image over live storage starts empty): a new descriptor over the storage of a
 // live image that the GPU wrote gets that image's content (alias_copy). Counts since the last log line.
 static int tex_alias = -1;
-static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit;
+static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit, n_alias_kept, n_alias_released;
 static uint32_t submit_epoch = 1;   // bumped per queue submit: draw bindings check a texture's storage once per submit
 // Mirrored textures the GPU wrote into, sorted by address (vk_texture_cpu_stale, vk_texture_write_back). Changed under
 // tex_lock and owned_lock; read under either.
@@ -235,6 +235,7 @@ static void unlock(void) {
 }
 
 static uint32_t umax(uint32_t a, uint32_t b) { return a > b ? a : b; }
+static uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 static uint32_t mip(uint32_t v, unsigned lv) { return umax(v >> lv, 1); }
 
 static void make_key(const tex_t *t, TexKey *k) {
@@ -352,6 +353,7 @@ static int pool_fits(VkCtx *c, const Tex *e, const VkMemoryRequirements *req, ui
 // (vkGetImageMemoryRequirements does most of the driver's layout work) cost 5% of the replay in Kokiri Forest.
 static nvn_hmap img_reqs = {.klen = sizeof(ImgKey)};   // ImgKey -> VkMemoryRequirements (malloc'd)
 static uint64_t n_bind_skips;   // since the last perf line
+#define DEDICATED_MIN ((VkDeviceSize)32 << 20)   // create_tex: images this large get memory of their own
 
 static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img, uint64_t guest_size) {
     VkMemoryRequirements req;
@@ -693,6 +695,11 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     if (!img) {
         if (gpu_only) n_reuse_new++;
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        // An image of DEDICATED_MIN or more gets memory of its own: freed inside one of VMA's 256 MiB blocks it left a hole
+        // the driver went on counting, with the rest of the block, against the budget and the system's commit (0.5 to 1.8
+        // GiB of such free space in a session at 5120x2160), until the block emptied; its own memory goes back when it does.
+        const VkMemoryRequirements *known = nvn_hm_get(&img_reqs, &e->ik);
+        if ((known ? known->size : image_size(&ci)) >= DEDICATED_MIN) ai.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkResult r = vmaCreateImage(c->vma, &ci, &ai, &img, &e->alloc, NULL);
         if (r != VK_SUCCESS) {
             log_limited(&n_failed, "image creation failed (%d): nvn fmt %#x %ux%ux%u target %d levels %u layers %u", (int)r,
@@ -890,10 +897,12 @@ static void touch(Tex *e) {
 }
 static int idle(const Tex *e, uint64_t now);
 
-// NX2NAVI_TEX_RELEASED_MB (default a sixteenth of the installed memory, 1 to 4 GiB; 0 = no limit) bounds the own memory
-// of the released entries: RELEASED_MAX alone kept 5-7 GiB of released render targets and decoded textures after an
-// hour of play at a 2160p game resolution, device memory the driver also charges to the system's commit (the process's
-// private bytes reached 31 GiB). NX2NAVI_TEX_COMMIT_FREE_MB (default the larger of 4 GiB and a tenth of the commit
+// NX2NAVI_TEX_RELEASED_MB (default a thirty-second of the installed memory, 512 MiB to 2 GiB; 0 = no limit) bounds the
+// own memory of the released entries: RELEASED_MAX alone kept 5-7 GiB of released render targets and decoded textures
+// after an hour of play at a 2160p game resolution, device memory the driver also charges to the system's commit (the
+// process's private bytes reached 31 GiB). A sixteenth (1 to 4 GiB) still let them hold 1.3 GiB on a 32 GB PC whose
+// commit then ran out at an area load (device lost); only entries released STALE_FRAMES presents ago go, so the
+// transient ones the game takes back within frames stay. NX2NAVI_TEX_COMMIT_FREE_MB (default the larger of 4 GiB and a tenth of the commit
 // limit; 0 = off) lowers that bound to COMMIT_LOW_KEEP while less of the system's commit is free: an allocation that
 // fails there ends the game. Both drop only stale entries (drop_stale), a few per check like the VRAM pressure.
 #define COMMIT_LOW_KEEP ((uint64_t)256 << 20)
@@ -910,8 +919,8 @@ static uint64_t released_cap_bytes(void) {
         else {
             float used, total, proc;
             plat_mem_info(&used, &total, &proc);
-            mb = total > 0 ? (long long)(total / 16) : 2048;
-            mb = mb < 1024 ? 1024 : mb > 4096 ? 4096 : mb;
+            mb = total > 0 ? (long long)(total / 32) : 1024;
+            mb = mb < 512 ? 512 : mb > 2048 ? 2048 : mb;
         }
         released_cap = mb > 0 ? (uint64_t)mb << 20 : UINT64_MAX;
         if (mb > 0) rt_log("vk: released textures keep at most %lld MiB of their own memory", mb);
@@ -941,6 +950,8 @@ static int commit_is_low(void) {
     }
     return commit_low = low;
 }
+
+int vk_texture_commit_low(void) { return __atomic_load_n(&commit_low, __ATOMIC_RELAXED); }
 
 // Drops up to PRESSURE_STEP released entries that own memory and were released STALE_FRAMES presents ago or earlier,
 // oldest first and the intact ones before the others, while the released entries own more than keep. A transient
@@ -1524,15 +1535,24 @@ static int img_block(const Tex *e, int *bw, int *bh) {
     return e->f.vk == e->f.ideal ? b : 0;
 }
 
-// The new entry e can take src's content texel for texel: colour, one sample, the same shape and storage layout, and
-// image formats of one block size.
-static int alias_compatible(const Tex *e, const Tex *src) {
+// The new entry e can take src's content texel for texel: colour, one sample, the same image type and storage layout,
+// and image formats of one block size (0 with a reason in *why when not). Block-compressed images need the same shape;
+// uncompressed ones take the region both cover (alias_copy). Ocarina moves render targets whose size follows an effect
+// on screen, so a descriptor made over a live target's memory is often a few texels larger or smaller than it. The game
+// reads the bytes there as its content (the same memory on the console); started empty instead, the scene went black
+// for a frame about once a second while the camera turned, from 0.6.1 on (issue #253).
+static int alias_compatible(const Tex *e, const Tex *src, const char **why) {
     const VkTexImage *p = &e->pub, *q = &src->pub;
-    if (e->f.depth || e->f.stencil || src->f.depth || src->f.stencil || p->samples > 1 || q->samples > 1) return 0;
-    if (p->type != q->type || p->width != q->width || p->height != q->height || p->depth != q->depth) return 0;
-    if (e->t.L.size != src->t.L.size || nvn_tex_is_linear(&e->t.d) != nvn_tex_is_linear(&src->t.d)) return 0;
+    if (e->f.depth || e->f.stencil || src->f.depth || src->f.stencil || p->samples > 1 || q->samples > 1)
+        return *why = "depth, stencil or multisample", 0;
+    if (p->type != q->type) return *why = "another image type", 0;
+    if (nvn_tex_is_linear(&e->t.d) != nvn_tex_is_linear(&src->t.d)) return *why = "linear and block-linear", 0;
     int ew, eh, sw, sh, eb = img_block(e, &ew, &eh), sb = img_block(src, &sw, &sh);
-    return eb && eb == sb && ew == sw && eh == sh;
+    if (!eb || eb != sb || ew != sw || eh != sh) return *why = "another block size", 0;
+    if (ew == 1 && eh == 1) return 1;
+    if (p->width != q->width || p->height != q->height || p->depth != q->depth || e->t.L.size != src->t.L.size)
+        return *why = "compressed, another shape", 0;
+    return 1;
 }
 
 // src holds content the storage bytes do not: the GPU wrote it and, for a mirrored texture, it was not written back
@@ -1555,12 +1575,18 @@ static int alias_copy(Tex *e, const Tex *src) {
     int bw, bh, bpb = img_block(e, &bw, &bh);
     uint32_t levels = e->pub.levels < src->pub.levels ? e->pub.levels : src->pub.levels;
     uint32_t layers = e->pub.layers < src->pub.layers ? e->pub.layers : src->pub.layers, n = levels * layers, k = 0;
+    // the region both images cover (alias_compatible: the same shape for block-compressed ones); the rest of a larger
+    // new image starts as init_image would leave it
+    int partial = src->pub.width < e->pub.width || src->pub.height < e->pub.height || src->pub.depth < e->pub.depth ||
+                  levels < e->pub.levels || layers < e->pub.layers;
     VkBufferImageCopy *rg = calloc(n, sizeof *rg);
     if (!rg) rt_fatal("vk: out of memory for an alias copy");
     VkDeviceSize total = 0;
     for (uint32_t lv = 0; lv < levels; lv++)
         for (uint32_t ly = 0; ly < layers; ly++, k++) {
-            uint32_t w = mip(e->pub.width, lv), h = mip(e->pub.height, lv), z = mip(e->pub.depth, lv);
+            uint32_t w = umin(mip(e->pub.width, lv), mip(src->pub.width, lv));
+            uint32_t h = umin(mip(e->pub.height, lv), mip(src->pub.height, lv));
+            uint32_t z = umin(mip(e->pub.depth, lv), mip(src->pub.depth, lv));
             rg[k] = (VkBufferImageCopy){.bufferOffset = total, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1},
                                         .imageExtent = {w, h, z}};
             total += ((VkDeviceSize)(w + bw - 1) / bw * ((h + bh - 1) / bh) * z * bpb + 15) & ~15ull;
@@ -1585,6 +1611,13 @@ static int alias_copy(Tex *e, const Tex *src) {
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb,
                            .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ib};
     vkCmdPipelineBarrier2(cb, &di);
+    if (partial && vk_fix_zero() && !e->bound_to && !e->pub.mirrored && !format_compressed(e->f.vk)) {
+        VkClearColorValue zero = {0};
+        VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        vkCmdClearColorImage(cb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
+        barrier(cb, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    }
     vkCmdCopyBufferToImage(cb, buf, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, n, rg);
     barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
     vk_exec_inline_end(reopen);
@@ -1616,33 +1649,61 @@ static void create_failed(const TexKey *k) {
 // The start of e's content at its address, for a new entry and for a superseded one taken back (taken_back): another
 // descriptor's released entry there is superseded, and a live one holding GPU-written content is the alias source,
 // preferring the one that differs only in swizzle (same_but_swizzle). A superseded entry is kept for its own
-// descriptor, which takes it back and starts over here as a new entry would (alias copy or init_image): Ocarina
-// alternates descriptors at some addresses every frame (a 2560x1440 target and a 480x270 one in Kokiri Forest), and
-// destroying the released one made both images again each frame. Released mirrored entries are still destroyed: their
-// content is the storage's, uploaded when an entry is made.
+// descriptor, which takes it back here: Ocarina alternates descriptors at some addresses every frame (a 2560x1440
+// target and a 480x270 one in Kokiri Forest), and destroying the released one made both images again each frame. It
+// starts over as a new entry would (alias copy or init_image) when a texture at its address holds GPU content written
+// since its release (newer), and else keeps its own: the memory still holds what it held then. Ocarina gives its scene
+// picture (r11g11b10f) a second descriptor at the same address that nothing draws into (rgb9e5, read raw by the post
+// pass), and the picture, taken back about once a second and restarted empty, went black for a frame (issue #253).
+// Released mirrored entries are still destroyed: their content is the storage's, uploaded when an entry is made.
+// A released entry that holds GPU content gives it to e when no live texture there holds any (rsrc): its memory on
+// the console still holds what it drew, and a new descriptor made for that picture after the old one was let go read
+// it there (a black frame with FSR 3.1 and its frame generation, two presents long).
 static void start_at(Tex *e, const TexKey *k, int taken_back) {
     int alias = 0;
-    Tex *src = NULL;
+    Tex *src = NULL, *rsrc = NULL;
+    const char *why = "no live texture with GPU content";   // for the log of an alias left empty
+    const Tex *other = NULL;
+    int newer = 0;          // taken back: a texture at this address holds GPU content written since e's release
+    int live_content = 0;   // a live texture at this address holds GPU content
     for (Tex *p = nvn_hm_get(&by_addr, &k->addr), *nx; p; p = nx) {
         nx = p->next_at;
         if (p == e) continue;
+        if (taken_back && p->use_frame >= e->rel_frame && alias_has_gpu_content(p)) newer = 1;
         if (p->released) {
-            if (p->pub.mirrored) destroy_tex(p);
-            else p->superseded = 1;
+            if (p->pub.mirrored) {
+                destroy_tex(p);
+                continue;
+            }
+            p->superseded = 1;
+            const char *unused;
+            if (tex_alias && alias_has_gpu_content(p) && alias_compatible(e, p, &unused) &&
+                (!rsrc || p->use_frame > rsrc->use_frame))
+                rsrc = p;
             continue;
         }
         alias = 1;
-        if (tex_alias && (!src || (same_but_swizzle(&p->key, k) && !same_but_swizzle(&src->key, k))) &&
-            alias_compatible(e, p) && alias_has_gpu_content(p))
-            src = p;
+        other = p;
+        if (alias_has_gpu_content(p)) live_content = 1;
+        if (!tex_alias || (src && !(same_but_swizzle(&p->key, k) && !same_but_swizzle(&src->key, k)))) continue;
+        if (!alias_compatible(e, p, &why)) continue;
+        if (!alias_has_gpu_content(p)) { why = "the live texture holds no GPU content"; continue; }
+        src = p;
     }
+    int from_released = !src && rsrc && !live_content;
+    if (from_released) src = rsrc;
     if (alias) perf_count(PERF_CNT_TEX_ALIAS);
+    if (taken_back && !newer && !e->pub.mirrored) {   // its image still holds its content
+        n_alias_kept++;
+        return;
+    }
     if (!tex_alias) {   // create_tex initialised a new entry
         if (taken_back) init_new(e);
         return;
     }
     if (src && alias_copy(e, src)) {
         n_alias_copied++;
+        if (from_released) n_alias_released++;
         if (e->pub.mirrored) {   // the content is src's GPU render, newer than the storage bytes
             vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
             e->uploaded = 1;
@@ -1653,7 +1714,21 @@ static void start_at(Tex *e, const TexKey *k, int taken_back) {
         init_new(e);
         if (alias) {
             if (e->pub.mirrored) n_alias_upload++;
-            else n_alias_uninit++;
+            else {
+                n_alias_uninit++;
+                static int logged;
+                // what an empty start over live memory was, to tell a black frame's cause; depth buffers start empty
+                // over another target's memory at every area load, harmlessly, and are left out
+                int depth = e->f.depth || e->f.stencil || other->f.depth || other->f.stencil;
+                if (logged < 24 && other && !depth) {
+                    logged++;
+                    rt_log("vk: texture %#llx (%ux%u fmt %#x%s) starts empty over a live one (%ux%u fmt %#x): %s; frame %llu",
+                           (unsigned long long)k->addr, e->pub.width, e->pub.height, e->t.d.format,
+                           taken_back ? ", taken back" : "", other->pub.width, other->pub.height, other->t.d.format,
+                           src ? "no replay recording to copy in" : why,
+                           (unsigned long long)__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED));
+                }
+            }
         }
     }
 }
@@ -2046,10 +2121,11 @@ void vk_texture_new_submit(void) {
     uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED) / 60;
     if ((rt_trace & RT_TRACE_PERF) && f != log_at && tex_alias > 0) {
         log_at = f;
-        rt_log("perf: frame %llu: texture aliases: content copied %llu, filled from storage %llu, left uninitialised %llu",
-               (unsigned long long)f * 60, (unsigned long long)n_alias_copied, (unsigned long long)n_alias_upload,
-               (unsigned long long)n_alias_uninit);
-        n_alias_copied = n_alias_upload = n_alias_uninit = 0;
+        rt_log("perf: frame %llu: texture aliases: content copied %llu (%llu from a released texture), filled from storage "
+               "%llu, left uninitialised %llu; taken back with their own content %llu",
+               (unsigned long long)f * 60, (unsigned long long)n_alias_copied, (unsigned long long)n_alias_released,
+               (unsigned long long)n_alias_upload, (unsigned long long)n_alias_uninit, (unsigned long long)n_alias_kept);
+        n_alias_copied = n_alias_upload = n_alias_uninit = n_alias_kept = n_alias_released = 0;
         rt_log("perf: frame %llu: texture re-uploads %llu (%.1f MiB, %.2f ms), after WriteTexels %llu (%.1f MiB, %.2f ms); "
                "skipped with unchanged bytes %llu (%.1f MiB)",
                (unsigned long long)f * 60, (unsigned long long)ru_n, ru_bytes / 1048576.0, ru_ns / 1e6,
