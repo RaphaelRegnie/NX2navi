@@ -12,7 +12,8 @@
 // a block per memory type is held back.
 // Under VRAM pressure no headroom is kept: the spare block counts against the budget that decides whether a pool gets
 // its VRAM mirror (vk_memory.c), so while use plus two blocks passes 85% of the budget the anchor goes and nothing new
-// is allocated.
+// is allocated. Nor while the system's commit is low (vk_texture_commit_low): the driver charges device memory to it,
+// and a spare block of each type held up to 256 MiB of it empty when an allocation that failed there ended the game.
 // NX2NAVI_VRAM_HEADROOM=0 turns it off.
 
 #include "cfg.h"
@@ -63,6 +64,7 @@ static VkDeviceSize block_size(const VkCtx *c, uint32_t type) {
 }
 
 static int room(const VkCtx *c, uint32_t type, VkDeviceSize block) {
+    if (vk_texture_commit_low()) return 0;
     VmaBudget b[VK_MAX_MEMORY_HEAPS];
     vmaGetHeapBudgets(c->vma, b);
     const VmaBudget *h = &b[c->mem_props.memoryTypes[type].heapIndex];

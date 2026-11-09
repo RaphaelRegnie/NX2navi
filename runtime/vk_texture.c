@@ -353,6 +353,7 @@ static int pool_fits(VkCtx *c, const Tex *e, const VkMemoryRequirements *req, ui
 // (vkGetImageMemoryRequirements does most of the driver's layout work) cost 5% of the replay in Kokiri Forest.
 static nvn_hmap img_reqs = {.klen = sizeof(ImgKey)};   // ImgKey -> VkMemoryRequirements (malloc'd)
 static uint64_t n_bind_skips;   // since the last perf line
+#define DEDICATED_MIN ((VkDeviceSize)32 << 20)   // create_tex: images this large get memory of their own
 
 static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img, uint64_t guest_size) {
     VkMemoryRequirements req;
@@ -694,6 +695,11 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     if (!img) {
         if (gpu_only) n_reuse_new++;
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        // An image of DEDICATED_MIN or more gets memory of its own: freed inside one of VMA's 256 MiB blocks it left a hole
+        // the driver went on counting, with the rest of the block, against the budget and the system's commit (0.5 to 1.8
+        // GiB of such free space in a session at 5120x2160), until the block emptied; its own memory goes back when it does.
+        const VkMemoryRequirements *known = nvn_hm_get(&img_reqs, &e->ik);
+        if ((known ? known->size : image_size(&ci)) >= DEDICATED_MIN) ai.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkResult r = vmaCreateImage(c->vma, &ci, &ai, &img, &e->alloc, NULL);
         if (r != VK_SUCCESS) {
             log_limited(&n_failed, "image creation failed (%d): nvn fmt %#x %ux%ux%u target %d levels %u layers %u", (int)r,
@@ -891,10 +897,12 @@ static void touch(Tex *e) {
 }
 static int idle(const Tex *e, uint64_t now);
 
-// NX2NAVI_TEX_RELEASED_MB (default a sixteenth of the installed memory, 1 to 4 GiB; 0 = no limit) bounds the own memory
-// of the released entries: RELEASED_MAX alone kept 5-7 GiB of released render targets and decoded textures after an
-// hour of play at a 2160p game resolution, device memory the driver also charges to the system's commit (the process's
-// private bytes reached 31 GiB). NX2NAVI_TEX_COMMIT_FREE_MB (default the larger of 4 GiB and a tenth of the commit
+// NX2NAVI_TEX_RELEASED_MB (default a thirty-second of the installed memory, 512 MiB to 2 GiB; 0 = no limit) bounds the
+// own memory of the released entries: RELEASED_MAX alone kept 5-7 GiB of released render targets and decoded textures
+// after an hour of play at a 2160p game resolution, device memory the driver also charges to the system's commit (the
+// process's private bytes reached 31 GiB). A sixteenth (1 to 4 GiB) still let them hold 1.3 GiB on a 32 GB PC whose
+// commit then ran out at an area load (device lost); only entries released STALE_FRAMES presents ago go, so the
+// transient ones the game takes back within frames stay. NX2NAVI_TEX_COMMIT_FREE_MB (default the larger of 4 GiB and a tenth of the commit
 // limit; 0 = off) lowers that bound to COMMIT_LOW_KEEP while less of the system's commit is free: an allocation that
 // fails there ends the game. Both drop only stale entries (drop_stale), a few per check like the VRAM pressure.
 #define COMMIT_LOW_KEEP ((uint64_t)256 << 20)
@@ -911,8 +919,8 @@ static uint64_t released_cap_bytes(void) {
         else {
             float used, total, proc;
             plat_mem_info(&used, &total, &proc);
-            mb = total > 0 ? (long long)(total / 16) : 2048;
-            mb = mb < 1024 ? 1024 : mb > 4096 ? 4096 : mb;
+            mb = total > 0 ? (long long)(total / 32) : 1024;
+            mb = mb < 512 ? 512 : mb > 2048 ? 2048 : mb;
         }
         released_cap = mb > 0 ? (uint64_t)mb << 20 : UINT64_MAX;
         if (mb > 0) rt_log("vk: released textures keep at most %lld MiB of their own memory", mb);
@@ -942,6 +950,8 @@ static int commit_is_low(void) {
     }
     return commit_low = low;
 }
+
+int vk_texture_commit_low(void) { return __atomic_load_n(&commit_low, __ATOMIC_RELAXED); }
 
 // Drops up to PRESSURE_STEP released entries that own memory and were released STALE_FRAMES presents ago or earlier,
 // oldest first and the intact ones before the others, while the released entries own more than keep. A transient
