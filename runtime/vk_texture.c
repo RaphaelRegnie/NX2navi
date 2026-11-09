@@ -116,7 +116,7 @@ static uint64_t ru_same_n, ru_same_bytes;   // re-uploads skipped: the pages wer
 // NX2NAVI_TEX_ALIAS (default on; =0: a new image over live storage starts empty): a new descriptor over the storage of a
 // live image that the GPU wrote gets that image's content (alias_copy). Counts since the last log line.
 static int tex_alias = -1;
-static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit, n_alias_kept;
+static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit, n_alias_kept, n_alias_released;
 static uint32_t submit_epoch = 1;   // bumped per queue submit: draw bindings check a texture's storage once per submit
 // Mirrored textures the GPU wrote into, sorted by address (vk_texture_cpu_stale, vk_texture_write_back). Changed under
 // tex_lock and owned_lock; read under either.
@@ -1646,28 +1646,42 @@ static void create_failed(const TexKey *k) {
 // picture (r11g11b10f) a second descriptor at the same address that nothing draws into (rgb9e5, read raw by the post
 // pass), and the picture, taken back about once a second and restarted empty, went black for a frame (issue #253).
 // Released mirrored entries are still destroyed: their content is the storage's, uploaded when an entry is made.
+// A released entry that holds GPU content gives it to e when no live texture there holds any (rsrc): its memory on
+// the console still holds what it drew, and a new descriptor made for that picture after the old one was let go read
+// it there (a black frame with FSR 3.1 and its frame generation, two presents long).
 static void start_at(Tex *e, const TexKey *k, int taken_back) {
     int alias = 0;
-    Tex *src = NULL;
+    Tex *src = NULL, *rsrc = NULL;
     const char *why = "no live texture with GPU content";   // for the log of an alias left empty
     const Tex *other = NULL;
-    int newer = 0;   // taken back: a texture at this address holds GPU content written since e's release
+    int newer = 0;          // taken back: a texture at this address holds GPU content written since e's release
+    int live_content = 0;   // a live texture at this address holds GPU content
     for (Tex *p = nvn_hm_get(&by_addr, &k->addr), *nx; p; p = nx) {
         nx = p->next_at;
         if (p == e) continue;
         if (taken_back && p->use_frame >= e->rel_frame && alias_has_gpu_content(p)) newer = 1;
         if (p->released) {
-            if (p->pub.mirrored) destroy_tex(p);
-            else p->superseded = 1;
+            if (p->pub.mirrored) {
+                destroy_tex(p);
+                continue;
+            }
+            p->superseded = 1;
+            const char *unused;
+            if (tex_alias && alias_has_gpu_content(p) && alias_compatible(e, p, &unused) &&
+                (!rsrc || p->use_frame > rsrc->use_frame))
+                rsrc = p;
             continue;
         }
         alias = 1;
         other = p;
+        if (alias_has_gpu_content(p)) live_content = 1;
         if (!tex_alias || (src && !(same_but_swizzle(&p->key, k) && !same_but_swizzle(&src->key, k)))) continue;
         if (!alias_compatible(e, p, &why)) continue;
         if (!alias_has_gpu_content(p)) { why = "the live texture holds no GPU content"; continue; }
         src = p;
     }
+    int from_released = !src && rsrc && !live_content;
+    if (from_released) src = rsrc;
     if (alias) perf_count(PERF_CNT_TEX_ALIAS);
     if (taken_back && !newer && !e->pub.mirrored) {   // its image still holds its content
         n_alias_kept++;
@@ -1679,6 +1693,7 @@ static void start_at(Tex *e, const TexKey *k, int taken_back) {
     }
     if (src && alias_copy(e, src)) {
         n_alias_copied++;
+        if (from_released) n_alias_released++;
         if (e->pub.mirrored) {   // the content is src's GPU render, newer than the storage bytes
             vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
             e->uploaded = 1;
@@ -1692,7 +1707,10 @@ static void start_at(Tex *e, const TexKey *k, int taken_back) {
             else {
                 n_alias_uninit++;
                 static int logged;
-                if (logged < 24 && other) {   // what an empty start over live memory was, to tell a black frame's cause
+                // what an empty start over live memory was, to tell a black frame's cause; depth buffers start empty
+                // over another target's memory at every area load, harmlessly, and are left out
+                int depth = e->f.depth || e->f.stencil || other->f.depth || other->f.stencil;
+                if (logged < 24 && other && !depth) {
                     logged++;
                     rt_log("vk: texture %#llx (%ux%u fmt %#x%s) starts empty over a live one (%ux%u fmt %#x): %s; frame %llu",
                            (unsigned long long)k->addr, e->pub.width, e->pub.height, e->t.d.format,
@@ -2093,11 +2111,11 @@ void vk_texture_new_submit(void) {
     uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED) / 60;
     if ((rt_trace & RT_TRACE_PERF) && f != log_at && tex_alias > 0) {
         log_at = f;
-        rt_log("perf: frame %llu: texture aliases: content copied %llu, filled from storage %llu, left uninitialised %llu; "
-               "taken back with their own content %llu",
-               (unsigned long long)f * 60, (unsigned long long)n_alias_copied, (unsigned long long)n_alias_upload,
-               (unsigned long long)n_alias_uninit, (unsigned long long)n_alias_kept);
-        n_alias_copied = n_alias_upload = n_alias_uninit = n_alias_kept = 0;
+        rt_log("perf: frame %llu: texture aliases: content copied %llu (%llu from a released texture), filled from storage "
+               "%llu, left uninitialised %llu; taken back with their own content %llu",
+               (unsigned long long)f * 60, (unsigned long long)n_alias_copied, (unsigned long long)n_alias_released,
+               (unsigned long long)n_alias_upload, (unsigned long long)n_alias_uninit, (unsigned long long)n_alias_kept);
+        n_alias_copied = n_alias_upload = n_alias_uninit = n_alias_kept = n_alias_released = 0;
         rt_log("perf: frame %llu: texture re-uploads %llu (%.1f MiB, %.2f ms), after WriteTexels %llu (%.1f MiB, %.2f ms); "
                "skipped with unchanged bytes %llu (%.1f MiB)",
                (unsigned long long)f * 60, (unsigned long long)ru_n, ru_bytes / 1048576.0, ru_ns / 1e6,
