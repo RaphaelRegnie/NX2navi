@@ -225,7 +225,8 @@ static int status_line(const char *key, const char *content, char *kind, char *o
         size_t len = end ? (size_t)(end - line) : strlen(line);
         if (len > 18 && !memcmp(line, want, 18)) {
             char copy[600];
-            snprintf(copy, sizeof copy, "%.*s", (int)(len < sizeof copy ? len : sizeof copy - 1), line + 18);
+            size_t rest = len - 18;   // the line after the 18 bytes compared, not into the next line
+            snprintf(copy, sizeof copy, "%.*s", (int)(rest < sizeof copy ? rest : sizeof copy - 1), line + 18);
             char *t1 = strchr(copy, '\t'), *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
             if (!t1 || !t2) return 0;
             *t1 = *t2 = 0;
