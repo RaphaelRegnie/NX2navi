@@ -84,6 +84,9 @@ static unsigned picture_height(void) {
 // to scale it back up. FSR 3.1 and a mode change while one runs apply at once.
 // dlaa switched off in the menu stops DLSS at once (vk_dlaa.c vk_dlaa_frame reads it each frame), so the share follows
 // the setting too: the scene goes back to the game's own scale instead of staying small with nothing to enlarge it.
+static double dlss_share(void);
+double wide_dlss_share(void) { return dlss_share(); }   // vk_dlaa.c: the mode's share, 0 off
+
 static double dlss_share(void) {
     if (!vk_dlaa_wanted() || !cfg_bool("NX2NAVI_DLAA") || (!vk_dlaa_fsr3() && !vk_dlaa_available())) return 0;
     const char *m = cfg_value("NX2NAVI_DLSS");

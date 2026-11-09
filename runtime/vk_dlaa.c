@@ -1529,6 +1529,8 @@ static int srgb8(VkFormat f) { return f == VK_FORMAT_R8G8B8A8_SRGB || f == VK_FO
 // DLAA's depth and motion.
 static int output_target(VkFormat f) { return srgb8(f) || vk_hdr_native_picture(f); }
 
+double wide_dlss_share(void);   // widescreen.c: the DLSS mode's share of the picture (1 DLAA), 0 off
+
 void vk_dlaa_pass(VkExec *ex) {
     const VkExecTarget *c = &ex->color[0], *z = &ex->depth;
     if (!dl_active()) return;
@@ -1583,7 +1585,11 @@ void vk_dlaa_pass(VkExec *ex) {
         int one = ex->pass_ncolor == 1 && c->image && !z->image && c->image != D.color.image && c->samples <= 1 &&
                   !c->is3d;
         if (one) F.one_n++, F.one_w = c->width, F.one_h = c->height, F.one_fmt = c->format;
-        if (one && c->width > D.color.width && c->height > D.color.height) {
+        // the output pass is the picture's size, the scene over the mode's share: at Ultra Performance (854 wide) a
+        // 960x540 post pass comes first, and DLSS wrote there, which left a 540-line picture stretched to the output
+        double share = wide_dlss_share();
+        int big = share <= 0 || share >= 1 || c->width >= 0.95 * D.color.width / share;
+        if (one && big && c->width > D.color.width && c->height > D.color.height) {
             D.ended = D.done = D.up = 1;
             evaluate(ex, c);
         } else if (one && output_target(c->format) && c->width == D.color.width &&
