@@ -332,6 +332,12 @@
 # audio = default
 # Audio the output queues before it starts, in ms (0 to 500; above about 170, half the output ring, it is held there).
 # audio_prefill_ms = 20
+# Log where gaps in the sound come from (1 = on): output underruns, late passes of the audio render thread, late
+# audio updates from the game and voices that ran out of queued sound, with the game frame of each.
+# audio_stats = 0
+# Host priority of the game's audio thread: 0 leaves it alone, 1 raises it to the highest while its audio update is
+# read (the audio render thread waits for that), 2 also keeps it above normal. Takes effect at the next start.
+# audio_game_prio = 0
 # Volume in percent (0 to 100), on top of the game's own. Changes while the game runs take effect at once.
 # volume = 100
 # Speakers: stereo, 5.1 or auto (5.1 when the Windows speaker setup has six or more channels, stereo otherwise). The
