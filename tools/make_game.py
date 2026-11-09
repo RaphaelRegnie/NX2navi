@@ -1129,6 +1129,14 @@ def step_shaders(out):
     """Every shader of the game files into the game's shader cache and the driver's own cache, before the first start.
     Its output is read as it comes: the counts nx2navi.exe prints become progress events, the other lines go on to
     the log, and while nothing moves an event every few seconds keeps saying the step is running and for how long."""
+    # The game translates with the copy beside it. The compile step refreshes that copy, but a kit that changes only
+    # the translator runs this step again alone (step_key), which would then prepare with the old one. Only a kit that
+    # has one: the compile step, which always runs first, stops a build without it.
+    for d in (KIT / 'bin', KIT / 'build' / 'xlate'):
+        if (d / XLATE_NAME).is_file():
+            for name in (XLATE_NAME, 'nx2navi_xlate.id'):
+                copy_if_changed(d / name, out / name)
+            break
     cmd = [sys.executable, '-u', str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
            '--exefs', str(out / 'exefs'), '--no-list', '--exe', EXE_NAME]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
