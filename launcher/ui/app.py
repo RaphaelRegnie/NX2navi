@@ -106,6 +106,12 @@ class App:
         self.release = None
         self.check_error = ''
         self.checked_at = 0.0
+        self.check_started = 0.0
+        # the update fetched in the background and installed when the game is not running; a checkout and the
+        # selftest have nothing to switch to
+        self.bg = jobs.BackgroundUpdate(ctx, lambda a: winsys.restart(self.layout, a),
+                                        enabled=not self.layout.dev and not args.selftest)
+        self.row_gap = GAP
         self.message = ''
         self.save_message = ''   # the last Import Saves result, shown in its description
         self.dumps = None
@@ -133,6 +139,7 @@ class App:
         self.root.after(80, self.animate)
         self.root.after(150, self.tick)
         self.root.after(50, self.poll_gamepad)
+        self.root.after(60000, self.minute)
         self.center()
         self.framed = not winsys.frameless(root)   # Windows: the band is the title bar
         self.root.after(60, self.native_window)
@@ -386,7 +393,7 @@ class App:
         for i, r in enumerate(self.rows):
             if r.rect and r.focusable:
                 x0, y0, x1, y1 = r.rect
-                if x0 <= x <= x1 and y0 - self.X(GAP / 2) <= y <= y1 + self.X(GAP / 2):
+                if x0 <= x <= x1 and y0 - self.X(self.row_gap / 2) <= y <= y1 + self.X(self.row_gap / 2):
                     return i
         return None
 
@@ -458,6 +465,8 @@ class App:
     def on_close(self):
         if self.job and self.job.result is None:
             self.job.cancel()
+        if self.bg.staging():   # what it downloaded is resumed, and its unfinished folder replaced, next time
+            self.bg.job.cancel()
         self.root.destroy()
 
     # ---------------------------------------------------------------- screens
@@ -467,6 +476,8 @@ class App:
         gd = self.settings.get('game_dir')
         if a.rolled_back:
             self.ctx.log(f'the stub went back from {a.rolled_back} to {self.layout.version}')
+            self.settings['rolled_back'] = versions.display(a.rolled_back)   # never installed again by itself
+            self.settings.save()
         for old in self.layout.root.glob('python.old*'):   # the Python an update replaced (launcher/native/nx2navi.c)
             shutil.rmtree(old, ignore_errors=True)
         if gd or self.settings.get('dump'):
@@ -481,6 +492,8 @@ class App:
         elif gd and build.built_version(gd):
             self.show('home')
             self.after_update_notice()
+            if self.install_staged('a staged update waited for the launcher to start'):
+                return
             if self.settings.get('auto_check'):
                 self.check_now()
         else:
@@ -562,8 +575,9 @@ class App:
             self.toggle('Desktop Shortcut', 'desktop_shortcut',
                         'Put an NX2navi shortcut on the desktop. The Start menu always has one.'),
             self.toggle('Check for Updates at Start', 'auto_check',
-                        'Look for a new version of NX2navi each time the launcher opens. Nothing is installed '
-                        'until you choose Update.'),
+                        'Look for a new version of NX2navi when the launcher opens, and every hour while it stays '
+                        'open. A new version downloads in the background and installs when you are not playing; '
+                        'Settings can make it wait until you choose Updates.'),
             self.channel_row(),
             Row('divider'),
             Row('action', 'Begin Installation', on=self.begin_install, desc=begin_desc, enabled=True),
@@ -659,7 +673,14 @@ class App:
         built = build.built_version(gd)
         mine = versions.display(self.layout.version)
         play_value = 'Ocarina of Time'
-        if self.release and jobs.update_available(self.ctx, self.release):
+        staged = self.bg.ready(self.release)
+        if staged:
+            upd = Row('value', 'Updates', f'Ready · {staged["version"]}', 'orange_arrow', big=True, icon='refresh',
+                      badge=True, on=self.start_update, focus_value=True, desc=lambda: self.staged_desc(staged))
+        elif self.bg.staging():
+            upd = Row('value', 'Updates', f'Downloading {self.bg.job.ver}', 'orange_arrow', big=True,
+                      icon='refresh', on=self.start_update, focus_value=True, desc=self.staging_desc)
+        elif self.release and jobs.update_available(self.ctx, self.release):
             nv = versions.display(self.release.version)
             upd = Row('value', 'Updates', f'Version {nv}', 'orange_arrow', big=True, icon='refresh', badge=True,
                       on=self.start_update, focus_value=True, desc=self.update_desc)
@@ -684,6 +705,8 @@ class App:
         play_desc = ('Start Ocarina of Time. The launcher steps aside while you play and comes back when you quit.',)
         if built and versions.display(built) != mine:
             play_desc += (f'The game was built with {versions.display(built)}. Rebuild the Game brings it to {mine}.',)
+        if staged and self.settings.get('auto_install'):
+            play_desc += (f'NX2navi {staged["version"]} is downloaded and installs after you quit the game.',)
         if self.message:
             play_desc = (self.message,) + play_desc
         return [
@@ -750,6 +773,32 @@ class App:
                          f'minutes. Your saves and settings stay as they are.'],
                 'divider': bool(notes), 'subtitle': "What's New" if notes else '', 'bullets': notes}
 
+    def staged_desc(self, m):
+        """The Updates row of a release downloaded in the background (BackgroundUpdate.ready)."""
+        nv, mine = m['version'], versions.display(self.layout.version)
+        notes = feed.plain_notes(m.get('notes', ''), 4)
+        if self.settings.get('auto_install'):
+            text = (f'You have {mine}. Version {nv} is downloaded and installs when you are not playing: after you '
+                    'quit the game, or when NX2navi next opens. Select this row to install it now.')
+        else:
+            text = f'You have {mine}. Version {nv} is downloaded. Select this row to install it.'
+        return {'title': f'Version {nv} Is Ready', 'text': [text],
+                'divider': bool(notes), 'subtitle': "What's New" if notes else '', 'bullets': notes,
+                'note': 'Installing restarts the launcher and rebuilds the game in a few minutes. Your saves and '
+                        'settings stay as they are.'}
+
+    def staging_desc(self):
+        nv, mine = self.bg.job.ver, versions.display(self.layout.version)
+        if self.bg.asked:
+            then = 'It installs as soon as the download is done.'
+        elif self.settings.get('auto_install'):
+            then = 'It installs when you are not playing. Select this row to install it as soon as it is downloaded.'
+        else:
+            then = 'Select this row to install it as soon as it is downloaded.'
+        return {'title': f'Downloading Version {nv}',
+                'text': [f'You have {mine}. Version {nv} is downloading in the background; you can play meanwhile. '
+                         f'{then}']}
+
     def ago(self, t):
         d = time.time() - t
         if d < 90:
@@ -764,12 +813,14 @@ class App:
         if not force and time.time() - self.settings.get('last_check', 0) < 600 and self.release:
             return
         self.check_error = ''
+        self.check_started = time.time()
         self.check = jobs.CheckJob(self.ctx).start()
         if self.screen == 'home':
             self.show('home', self.focus)
 
     def check_done(self):
         c = self.check
+        self.bg.checked()   # the release found is staged at the next tick, also one whose staging failed before
         if c.result == 'ok':
             self.release = c.release
             self.checked_at = time.time()
@@ -819,7 +870,10 @@ class App:
         self.root.deiconify()
         self.root.lift()
         if code not in (0, None):
+            self.ctx.log(f'the game ended with code {code}')
             self.message = f'The game ended with code {code}. Its log is logs\\nx2navi.log in the game folder.'
+        if self.install_staged('the game exited'):
+            return
         self.show('home', self.focus)
 
     def open(self, path):
@@ -830,14 +884,61 @@ class App:
             self.render()
 
     def start_update(self):
-        if not self.release:
-            return
+        """The Updates row: install the release staged in the background, have the one downloading install once it
+        is staged, or else download it here with its steps on screen (as when the background download failed)."""
         gd = self.settings.get('game_dir')
         if gd and build.game_running(gd):
             self.message = 'Close the game first: the update rebuilds it.'
             self.show('home', self.focus)
             return
+        if self.bg.staging():
+            self.bg.asked = True
+            self.message = f'Version {self.bg.job.ver} installs as soon as it is downloaded.'
+            self.show('home', self.focus)
+            return
+        if self.bg.ready(self.release):
+            if not self.install_staged('selected', asked=True):
+                self.message = f'The update could not be installed: {self.bg.error or "see the launcher log"}.'
+                self.show('home', self.focus)
+            return
+        if not self.release:
+            return
         self.run_job(jobs.UpdateDownloadJob(self.ctx, self.release), 'home')
+
+    def install_staged(self, why, asked=False):
+        """Install the release staged in the background when nothing stops it (BackgroundUpdate.install) and close
+        for the restart into it; True when it was installed."""
+        if self.job and self.job.result is None:
+            return False
+        running = bool(self.game_proc and self.game_proc.poll() is None)
+        ver = self.bg.install(self.settings.get('game_dir'), self.release, why, asked=asked, running=running)
+        if not ver:
+            return False
+        if self.bg.restarting:
+            self.message = f'Installing NX2navi {ver}…'
+            self.root.after(200, self.root.destroy)
+        else:
+            self.message = f'NX2navi {ver} is installed: start NX2navi again to finish it.'
+        if self.screen == 'home':
+            self.show('home', self.focus)
+        return True
+
+    def background_event(self, ev):
+        """A background staging started or ended (BackgroundUpdate.poll)."""
+        if ev in ('staged', 'failed') and (self.bg.asked or self.bg.waiting):
+            if self.install_staged('the download finished'):
+                return
+            if ev == 'failed' and self.bg.asked:
+                # the player chose to update: download it here instead, where its error and Try Again show
+                self.bg.asked = False
+                gd = self.settings.get('game_dir')
+                if (self.screen == 'home' and self.release and jobs.update_available(self.ctx, self.release)
+                        and not (self.game_proc and self.game_proc.poll() is None)
+                        and not (gd and build.game_running(gd))):
+                    self.run_job(jobs.UpdateDownloadJob(self.ctx, self.release), 'home')
+                    return
+        if self.screen == 'home':
+            self.show('home', self.focus)
 
     def start_rebuild(self):
         gd = self.settings.get('game_dir')
@@ -850,8 +951,12 @@ class App:
         dump = self.settings.get('dump')
         return [
             self.toggle('Check for Updates at Start', 'auto_check',
-                        'Look for a new version of NX2navi each time the launcher opens. Nothing is installed '
-                        'until you choose Update.'),
+                        'Look for a new version of NX2navi when the launcher opens, and every hour while it stays '
+                        'open (also while you play). A new version downloads in the background.'),
+            self.toggle('Install Updates Automatically', 'auto_install',
+                        'Install a downloaded update by itself when you are not playing: after you quit the game, '
+                        'or when NX2navi opens. Off: it waits until you select Updates. Updates download in the '
+                        'background either way.'),
             self.toggle('Hide Launcher While Playing', 'hide_while_playing',
                         'Hide this window while the game runs; it comes back when you quit the game.'),
             self.toggle('Keep Build Cache', 'keep_cache',
@@ -1072,6 +1177,9 @@ class App:
             if self.check and self.check.result is not None and not getattr(self.check, 'seen', False):
                 self.check.seen = True
                 self.check_done()
+            ev = self.bg.poll(self.release, busy=bool(self.job and self.job.result is None))
+            if ev:
+                self.background_event(ev)
             if self.screen == 'job' and self.job:
                 if self.job.rev != self.job_rev:
                     self.job_rev = self.job.rev
@@ -1087,6 +1195,21 @@ class App:
         except Exception as e:   # a drawing error must not stop the timer
             self.ctx.log(f'tick: {e!r}')
         self.root.after(150, self.tick)
+
+    def minute(self):
+        """Once a minute, also while the window is hidden during play: look for a new version an hour after the last
+        look (a new one then downloads in the background), and install a staged release that waited for a copy of
+        the game the launcher did not start to close."""
+        try:
+            if not self.args.selftest and self.screen in ('home', 'settings'):
+                last = max(self.settings.get('last_check', 0.0), self.check_started)
+                if self.settings.get('auto_check') and time.time() - last >= jobs.RECHECK:
+                    self.check_now()
+                if self.bg.waiting and not (self.game_proc and self.game_proc.poll() is None):
+                    self.install_staged('the game closed')
+        except Exception as e:
+            self.ctx.log(f'minute: {e!r}')
+        self.root.after(60000, self.minute)
 
     def animate(self):
         if self.cursor_frames:
@@ -1105,12 +1228,33 @@ class App:
             if not (0 <= self.focus < len(self.rows)) or not self.rows[self.focus].focusable:
                 self.focus = self.job_focus()
         x0, x1, y = ROWS
-        for i, r in enumerate(self.rows):
-            self.draw_row(r, self.X(x0), self.X(y), self.X(x1), self.X(y + r.h))
-            y += r.h + GAP
+        heights, self.row_gap = self.fit_rows(y, H - 46 if self.screen == 'job' else H - 12)
+        for r, h in zip(self.rows, heights):
+            self.draw_row(r, self.X(x0), self.X(y), self.X(x1), self.X(y + h))
+            y += h + self.row_gap
         self.draw_status()
         self.draw_cursor()
         self.draw_desc()
+
+    def fit_rows(self, top, bottom):
+        """The height of each row and the gap between rows (logical pixels) that end the rows above bottom. A screen
+        with more rows than the window holds (Settings with every row, a job with every step) narrows its gaps
+        first, then its dividers, and last makes its rows a little lower."""
+        rows = self.rows
+        hs = [r.h for r in rows]
+        gaps = max(1, len(rows) - 1)
+        room = bottom - top
+        for stage in ('gaps', 'dividers', 'rows'):
+            if stage == 'dividers':
+                hs = [min(h, 14) if r.kind == 'divider' else h for r, h in zip(rows, hs)]
+            elif stage == 'rows':
+                over = sum(hs) + 6 * gaps - room
+                cut = -(-over // max(1, sum(1 for r in rows if r.kind != 'divider')))
+                hs = [h if r.kind == 'divider' else max(30, h - cut) for r, h in zip(rows, hs)]
+            gap = min(GAP, (room - sum(hs)) // gaps)
+            if gap >= 6:
+                return hs, gap
+        return hs, 6
 
     def draw_status(self):
         if self.screen != 'job' or not self.job:
@@ -1215,6 +1359,7 @@ class App:
         elif r.style == 'orange_arrow':
             self.orange(ix0, iy0, ix1, iy1)
             cw, ch = X(9), X(12)
+            vfont = self.fit_font(vfont, r.value, (ix1 - ix0) - X(30) - cw, 0.8)
             label_w = vfont.measure(r.value)
             total = label_w + X(10) + cw
             sx = cx - total // 2

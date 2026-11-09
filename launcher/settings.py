@@ -7,7 +7,8 @@ from pathlib import Path
 DEFAULTS = {
     'game_dir': '',               # the built game; empty until the first install picks one
     'dump': '',                   # the .nup (or the folder with exefs/ and romfs/) the game was built from
-    'auto_check': True,           # look for a new version when the launcher opens
+    'auto_check': True,           # look for a new version when the launcher opens, and every hour while it runs
+    'auto_install': True,         # install a downloaded update by itself whenever the game is not running
     'channel': 'stable',          # 'stable' or 'preview' (GitHub pre-releases)
     'hide_while_playing': True,   # hide the window while the game runs, show it again when it exits
     'keep_cache': True,           # keep build-cache/ (the lift and objects) so an update recompiles only changes
@@ -16,6 +17,7 @@ DEFAULTS = {
     'github_token': '',           # only for a private release repository; stored as plain text
     'last_check': 0.0,
     'last_seen': '',              # the newest version the player was told about
+    'rolled_back': '',            # the last version that failed to start; it is never downloaded or installed by itself
 }
 
 
@@ -47,7 +49,8 @@ class Settings(dict):
 
     def reset(self):
         """Default Settings: the choices go back to their defaults; the game folder, dump and history stay."""
-        keep = {k: self[k] for k in ('game_dir', 'dump', 'last_check', 'last_seen', 'feed_repo', 'github_token')}
+        keep = {k: self[k] for k in ('game_dir', 'dump', 'last_check', 'last_seen', 'feed_repo', 'github_token',
+                                     'rolled_back')}
         self.clear()
         self.update(DEFAULTS)
         self.update(keep)

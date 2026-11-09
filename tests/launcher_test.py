@@ -8,6 +8,9 @@ Run: python tests/launcher_test.py   (Python 3.14 for the zstd tests; the window
   server with certificates the openssl command makes (an expired one, an unknown one), the clock comparison
 - feed: GitHub releases (stable, preview, private with a token) and a plain manifest URL, served locally
 - updater: staging a release, switching, rollback, pruning, refusing unsafe archives
+- background updates: a release staged beside the running version without switching to it, the ready marker, a
+  staged release found and installed after a restart, no install while the game runs, the install once it exited,
+  nothing by itself with Install Updates Automatically off, a failed staging tried again after the next check
 - gamefiles: the .bfotf font wrapping and zstd dictionaries, on a font of this system made into a fake RomFS
 - the button art of a release: the files tools/prompt_art.py copies, and the packages and tools the prompts need
 - make_game.py: a synthetic .nup through the check, exefs and romfs steps with --events, skipped steps on a second
@@ -687,6 +690,210 @@ class FeedTest(Tmp):
         with self.assertRaises(updater.UpdateError):
             updater.stage_app(self.layout, rel)
         self.assertFalse((self.layout.apps / '1.0.2').exists())
+
+
+class BackgroundUpdateTest(Tmp):
+    """An update fetched while the launcher runs (updater.stage, jobs.StageJob, jobs.BackgroundUpdate): staged beside
+    the running version without switching to it, and installed only when the game is not running, by itself only
+    with Install Updates Automatically on. The releases come from the local server through a URL feed."""
+
+    def setUp(self):
+        super().setUp()
+        self.srv = Server(self.tmp)
+        self.addCleanup(self.srv.close)
+        self.layout = self.installed('0.4.0')
+        self.game = str(self.tmp / 'game')
+        self.running = False   # what build.game_running answers: a copy of the game the launcher did not start
+        saved = build.game_running
+        build.game_running = lambda game_dir, exe='ocarina.exe': self.running
+        self.addCleanup(setattr, build, 'game_running', saved)
+        self.restarts = []
+
+    def installed(self, ver):
+        """An installed launcher's folder (not a checkout) running version ver on the Python py-1."""
+        root = self.tmp / 'nx'
+        app = root / 'app' / ver
+        (app / 'launcher').mkdir(parents=True)
+        (app / 'launcher' / 'start.pyw').write_text('')
+        (app / 'VERSION').write_text(ver + '\n')
+        (root / 'app' / 'current.txt').write_text(ver + '\n')
+        (root / 'python').mkdir()
+        (root / 'python' / 'runtime-id.txt').write_text('py-1\n')
+        layout = Layout(root=root, app=app).ensure()
+        self.assertFalse(layout.dev)
+        return layout
+
+    def publish(self, ver, runtime='', pre=False, damaged=False):
+        """A release of ver on the local server, read through a URL feed; runtime: the id of the Python it brings;
+        damaged: its manifest gives the wrong sha256 for the app archive."""
+        z = make_app_zip(self.tmp, ver)
+        m = manifest_for(z, ver)
+        if runtime:
+            r = self.tmp / f'NX2navi-runtime-{runtime}.zip'
+            with zipfile.ZipFile(r, 'w') as zf:
+                zf.writestr('python.exe', 'MZ')
+                zf.writestr('runtime-id.txt', runtime + '\n')
+            m['runtime'] = {'id': runtime, 'name': r.name, 'size': r.stat().st_size, 'sha256': sha(r.read_bytes())}
+        if damaged:
+            m['app']['sha256'] = '0' * 64
+        (self.tmp / f'm-{ver}.json').write_text(json.dumps(m))
+        rel = feed.latest({'type': 'url', 'url': self.srv.url + f'm-{ver}.json'})
+        rel.prerelease = pre
+        return rel
+
+    def context(self):
+        """The launcher starting (again) in the installed folder: its settings, its log."""
+        ctx = Context(self.layout)
+        self.addCleanup(lambda: ctx._file and ctx._file.close())
+        return ctx
+
+    def background(self, ctx):
+        return jobs.BackgroundUpdate(ctx, lambda args: self.restarts.append(args) or True)
+
+    def stage(self, bg, rel):
+        """poll() as the window's timer calls it: start the staging, wait for it, and return how it ended."""
+        self.assertEqual(bg.poll(rel), 'started')
+        deadline = time.time() + 60
+        while bg.staging() and time.time() < deadline:
+            time.sleep(0.02)
+        return bg.poll(rel)
+
+    def state(self):
+        return updater.current(self.layout), updater.previous(self.layout), self.restarts
+
+    def test_staging_leaves_the_running_version(self):
+        """The release is unpacked beside the running version, its Python in its own folder rather than python.next
+        (which the stub would swap in at the next start, under the running version), and nothing is switched or
+        restarted."""
+        bg = self.background(self.context())
+        rel = self.publish('0.5.0', runtime='py-2')
+        self.assertEqual(self.stage(bg, rel), 'staged')
+        folder = self.layout.apps / '0.5.0'
+        self.assertTrue((folder / 'launcher' / 'start.pyw').is_file())
+        self.assertEqual(updater.read_text(folder / updater.STAGED_PYTHON / 'runtime-id.txt'), 'py-2')
+        self.assertFalse((self.layout.root / 'python.next').exists())
+        self.assertEqual(self.state(), ('0.4.0', '', []))
+        self.assertEqual(bg.ready(rel)['version'], '0.5.0')
+        self.assertIsNone(bg.poll(rel))                      # once per check
+        bg.checked()
+        self.assertIsNone(bg.poll(rel))                      # the next check finds it staged: nothing to download
+        self.assertFalse(bg.staging())
+        older = feed.Release({'format': 1, 'version': '0.4.5', 'app': {}})
+        self.assertIsNone(bg.ready(older))                   # the feed no longer offers it: not installed
+        updater.prune(self.layout)                           # an update's cleanup keeps a newer staged release
+        self.assertTrue((folder / updater.STAGED).is_file())
+
+    def test_ready_marker(self):
+        """Only a release whose staging finished (staged.json, written last) and that is still whole installs."""
+        rel = self.publish('0.5.0', runtime='py-2')
+        updater.stage_app(self.layout, rel)                  # unpacked, as an interrupted staging leaves it
+        self.assertIsNone(updater.staged(self.layout))
+        with self.assertRaises(updater.UpdateError):
+            updater.install_staged(self.layout, '0.5.0')
+        self.assertEqual(updater.current(self.layout), '0.4.0')
+        updater.stage(self.layout, rel)
+        self.assertEqual(updater.staged(self.layout)['version'], '0.5.0')
+        self.assertIsNone(updater.staged(self.layout, skip='0.5.0'))   # the version that failed to start
+        py = self.layout.apps / '0.5.0' / updater.STAGED_PYTHON
+        shutil.move(py, self.tmp / 'py')                     # the Python it needs is gone
+        self.assertIsNone(updater.staged(self.layout))
+        shutil.move(self.tmp / 'py', py)
+        self.assertIsNotNone(updater.staged(self.layout))
+        (self.layout.apps / '0.5.0' / updater.STAGED).write_text('{"version": "0.')   # cut short
+        self.assertIsNone(updater.staged(self.layout))
+        updater.stage(self.layout, rel)
+        # a pre-release counts only on the Preview channel; staging it removes the staged release it supersedes
+        updater.stage(self.layout, self.publish('0.6.0-rc1', pre=True))
+        self.assertIsNone(updater.staged(self.layout, 'stable'))
+        self.assertEqual(updater.staged(self.layout, 'preview')['version'], '0.6.0-rc1')
+        self.assertFalse((self.layout.apps / '0.5.0').exists())
+        self.assertTrue((self.layout.apps / '0.4.0').is_dir())
+
+    def test_staged_version_installs_after_a_restart(self):
+        """A staged release outlives the launcher: the next start finds it without a check and installs it: its
+        Python to python.next for the stub, current.txt, and the restart that finishes in ContinueUpdateJob."""
+        bg = self.background(self.context())
+        rel = self.publish('0.5.0', runtime='py-2')
+        self.assertEqual(self.stage(bg, rel), 'staged')
+        bg = self.background(self.context())                 # the launcher started again, still 0.4.0
+        self.assertEqual(bg.ready()['version'], '0.5.0')
+        self.assertEqual(bg.install(self.game, why='the launcher started'), '0.5.0')
+        self.assertEqual(self.state(), ('0.5.0', '0.4.0', [['--continue-update', '0.4.0']]))
+        self.assertTrue(bg.restarting)
+        self.assertEqual(updater.read_text(self.layout.root / 'python.next' / 'runtime-id.txt'), 'py-2')
+        self.assertFalse((self.layout.apps / '0.5.0' / updater.STAGED).exists())
+        # the stub rolled back from it: it is neither staged nor installed by itself again
+        self.assertTrue(updater.rollback(self.layout))
+        ctx = self.context()
+        ctx.settings['rolled_back'] = '0.5.0'
+        bg = self.background(ctx)
+        self.assertIsNone(bg.poll(rel))
+        self.assertEqual(bg.install(self.game, rel), '')
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_no_install_while_the_game_runs(self):
+        """A copy of the game started elsewhere, the copy the launcher started, and a download under way each hold
+        the install back, also one the player asked for."""
+        bg = self.background(self.context())
+        rel = self.publish('0.5.0')
+        self.assertEqual(self.stage(bg, rel), 'staged')
+        self.running = True
+        self.assertEqual(bg.install(self.game, rel, why='the launcher started'), '')
+        self.assertTrue(bg.waiting)
+        self.assertEqual(bg.install(self.game, rel, asked=True), '')
+        self.running = False
+        self.assertEqual(bg.install(self.game, rel, running=True), '')
+        bg.job = jobs.StageJob(bg.ctx, feed.Release({'format': 1, 'version': '0.5.1', 'app': {}}))   # not finished
+        self.assertEqual(bg.install(self.game, rel), '')
+        self.assertEqual(self.state(), ('0.4.0', '', []))
+        self.assertTrue((self.layout.apps / '0.5.0' / updater.STAGED).is_file())
+
+    def test_install_after_the_game_exits(self):
+        """Install Updates Automatically on (the default): a release staged during play installs once the game has
+        exited."""
+        ctx = self.context()
+        self.assertTrue(ctx.settings['auto_install'])
+        bg = self.background(ctx)
+        self.running = True                                  # the check during play finds the release
+        rel = self.publish('0.5.0')
+        self.assertEqual(self.stage(bg, rel), 'staged')
+        self.assertEqual(bg.install(self.game, rel, why='the download finished'), '')
+        self.assertEqual(self.state(), ('0.4.0', '', []))
+        self.running = False                                 # the game exits
+        self.assertEqual(bg.install(self.game, rel, why='the game exited'), '0.5.0')
+        self.assertEqual(self.state(), ('0.5.0', '0.4.0', [['--continue-update', '0.4.0']]))
+        self.assertFalse(bg.waiting)
+
+    def test_nothing_automatic_when_the_setting_is_off(self):
+        """Install Updates Automatically off: the release is still staged in the background, and only selecting
+        Updates installs it (also once selected during the download)."""
+        ctx = self.context()
+        ctx.settings['auto_install'] = False
+        bg = self.background(ctx)
+        rel = self.publish('0.5.0')
+        self.assertEqual(self.stage(bg, rel), 'staged')
+        for why in ('the launcher started', 'the game exited', 'the game closed', 'the download finished'):
+            self.assertEqual(bg.install(self.game, rel, why=why), '')
+        self.assertFalse(bg.waiting)
+        self.assertEqual(self.state(), ('0.4.0', '', []))
+        bg.asked = True                                      # selected while it downloaded
+        self.assertEqual(bg.install(self.game, rel, why='the download finished'), '0.5.0')
+        self.assertEqual(self.state(), ('0.5.0', '0.4.0', [['--continue-update', '0.4.0']]))
+
+    def test_failed_download_waits_for_the_next_check(self):
+        """A staging that fails is logged, never raised, leaves nothing to install, and is tried again only after the
+        next update check."""
+        ctx = self.context()
+        bg = self.background(ctx)
+        rel = self.publish('0.5.0', damaged=True)
+        self.assertEqual(self.stage(bg, rel), 'failed')
+        self.assertIn('0.5.0 was not staged', (self.layout.logs / 'launcher.log').read_text(encoding='utf-8'))
+        self.assertIsNone(bg.poll(rel))
+        self.assertIsNone(bg.ready(rel))
+        self.assertEqual(bg.install(self.game, rel), '')
+        bg.checked()
+        self.assertEqual(self.stage(bg, rel), 'failed')
+        self.assertEqual(self.state(), ('0.4.0', '', []))
 
 
 # ---------------------------------------------------------------- gamefiles
@@ -1800,7 +2007,7 @@ class WindowTest(Tmp):
         r = subprocess.run([sys.executable, '-m', 'launcher', '--root', str(self.tmp / 'w'), '--selftest'],
                            cwd=ROOT, capture_output=True, text=True, timeout=180)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('10 screens drawn', r.stdout)
+        self.assertIn('11 screens drawn', r.stdout)
 
 
 if __name__ == '__main__':

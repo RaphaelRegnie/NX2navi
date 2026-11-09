@@ -168,10 +168,17 @@ def states(app):
                             'saves\\backup 2026-11-08 17.30.12.')
         app.show('home', next(i for i, r in enumerate(app.rows_home()) if r.label == 'Import Saves'))
 
+    def update_staged():   # a release downloaded in the background, waiting for the game to be closed
+        rel = fake_release(ahead_of(ctx.version))
+        staged = {'version': rel.version, 'runtime': '', 'prerelease': False, 'notes': rel.notes}
+        app.bg.ready = lambda release=None: staged
+        app.release, app.message = rel, ''
+        app.show('home', 1)
+
     return [('1-first-run', first_run), ('2-installing', installing), ('3-home', home),
             ('4-update-ready', update_ready), ('5-updating', updating), ('6-settings', settings),
             ('7-build-failed', failed), ('8-uninstall', uninstall), ('9-import-saves', import_saves),
-            ('10-shaders', shaders)]
+            ('10-shaders', shaders), ('11-update-staged', update_staged)]
 
 
 def run(app, shots):

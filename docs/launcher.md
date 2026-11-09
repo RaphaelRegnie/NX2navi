@@ -17,9 +17,11 @@ it. The code is `launcher/`, the release is made by `tools/make_launcher.py`, an
    unpacks it, translates and compiles the game: 10 to 25 minutes. It keeps the PC awake meanwhile.
 4. Selects **Play**. The launcher hides while the game runs and comes back when it exits.
 
-From then on the launcher looks for a new version each time it opens (Settings can turn that off). When one is out,
-the Updates row turns orange; selecting it downloads the new version, restarts the launcher in it and rebuilds the
-game. Saves and settings are never touched.
+From then on the launcher looks for a new version when it opens and every hour while it runs, also while it is
+hidden during play (Settings can turn that off). A new version downloads in the background, the game playing on, and
+installs when the game is not running: right after the game exits, or the next time the launcher opens. The launcher
+then restarts in the new version and rebuilds the game. With Install Updates Automatically off (Settings) it waits
+until the player selects Updates. Saves and settings are never touched.
 
 ## Look
 
@@ -39,8 +41,9 @@ identity (`NX2navi.Launcher`), so the taskbar groups and pins it under NX2navi r
 Screens (`launcher/ui/app.py`): first run (dump, install folder, Desktop Shortcut, Check for Updates at Start,
 Update Channel, Begin Installation); the steps of an install, update or rebuild with their progress, the build log's
 last lines and Cancel, and after a failure Try Again and Copy Report; home (Play, Updates, Game Folder, Import Saves,
-Rebuild the Game, Settings); settings (update check, Hide Launcher While Playing, Keep Build Cache, Update Channel, the folders,
-Open Logs Folder, Uninstall, Back); uninstall (keep or remove the built game).
+Rebuild the Game, Settings); settings (update check, Install Updates Automatically, Hide Launcher While Playing, Keep
+Build Cache, Update Channel, the folders, Open Logs Folder, Uninstall, Back); uninstall (keep or remove the built game).
+A screen with more rows than the window holds draws them closer together (`fit_rows`).
 
 Controls: the mouse (hover moves the cursor, a click selects); the keyboard (arrows, Enter or Space, Esc, F5 checks
 for updates); an XInput gamepad (d-pad or left stick, A, B, Y) while the window is in front.
@@ -56,7 +59,9 @@ python/                  python.org's embeddable Python 3.14.9 with tkinter, num
 app/current.txt          the version the stub starts; app/previous.txt the one before it
 app/<version>/           launcher/, runtime/, recomp/, tools/, bin/nx2navi_xlate.exe, VERSION,
                          toolchain.lock.json (the pinned build tools), feed.json (where updates come from), and in a
-                         release made with --prompt-art, prompt-art/ (the button art the prompts are drawn from)
+                         release made with --prompt-art, prompt-art/ (the button art the prompts are drawn from); a
+                         release staged in the background also holds staged.json and the Python it brings,
+                         python.staged/, until it installs
 pydeps/                  zbic, downloaded from PyPI on this PC
 toolchain/msys64/ucrt64  MSYS2's clang and libraries, downloaded from the MSYS2 repository on this PC
 toolchain/pkgs/          the downloaded package files
@@ -118,7 +123,46 @@ directly. Every address is https (plain http only to this PC), a redirect to htt
 sent on when a redirect leaves the host it was meant for (`launcher/net.py`). A manifest that does not give a file's
 size and sha256 is refused.
 
-`jobs.UpdateDownloadJob`, before the restart (`launcher/updater.py`):
+### In the background
+
+The player never waits for a download and play is never interrupted. A check that finds a newer release (the check
+at start, then one an hour after the last, also while the window is hidden during play: `jobs.RECHECK`) stages it
+at once, without a screen (`jobs.StageJob`, `updater.stage`):
+
+- The app archive is downloaded and checked as in step 1 below and unpacks into `app/<version>` as in step 2. A new
+  Python unpacks into `app/<version>/python.staged`, not `python.next`: the stub swaps `python.next` in at every
+  start, which would put the running version on the new Python. `app/<version>/staged.json`, written last, marks the
+  release complete (`updater.staged_info`); a folder without it, or one that lost its Python, is never installed and
+  is staged again. Nothing is switched and the launcher keeps running. The thread runs in Windows' background mode
+  (lower processor, disk and memory priority), so it shares only the network with the game.
+- A staging that fails is logged in `launcher.log` and tried again after the next check; it never shows an error.
+  Selecting Updates then downloads the release with its steps on screen, as below.
+- The Updates row reads "Downloading <version>", then "Ready · <version>". A staged release survives a restart of the
+  launcher, which finds it without a check (`updater.staged`). A pre-release counts only on the Preview channel; the
+  version the stub last rolled back from (`rolled_back` in `data/launcher.json`) is neither staged nor installed by
+  itself; a staged release newer than the feed's newest is passed over, as the release was withdrawn. Staging a
+  release removes the staged one it supersedes, and `updater.prune` keeps a staged release newer than the current
+  version.
+
+`jobs.BackgroundUpdate` installs a staged release only while no copy of the game runs (`build.game_running`, and the
+process the launcher started), no job holds the window and no staging is under way:
+
+- by itself, with Install Updates Automatically on (Settings; the default): when the launcher starts, right after the
+  game exits (the launcher comes back from hiding), and, checked every minute, once a copy of the game started
+  elsewhere that held the install back has closed;
+- when the player selects Updates, also with the setting off; selected during the download, it installs as soon as
+  the download is done.
+
+Play always starts the game: a release staged meanwhile installs after the game exits. Installing
+(`updater.install_staged`) moves `python.staged` to `python.next`, switches `app/current.txt` as in step 3, deletes
+`staged.json` (so a version the stub rolls back from is not installed again) and restarts the launcher with
+`--continue-update`; the new version finishes in `jobs.ContinueUpdateJob` (steps 4 to 9). A checkout runs from the
+repository: it stages and installs nothing.
+
+### Steps
+
+Without a staged release (its staging failed, it is the version the stub rolled back from, or the launcher runs from a
+checkout), selecting Updates runs `jobs.UpdateDownloadJob`, before the restart (`launcher/updater.py`):
 
 1. **Download** `NX2navi-app-<version>.zip` (about 3 MB plus the shader translator) to `data/downloads`, resuming a cut
    download, and check its size and sha256. When the manifest names a Python other than `python/runtime-id.txt`, also
@@ -148,7 +192,8 @@ The stub swaps `python.next` in while no Python runs, then starts the new versio
 7. **Prepare the Shaders** again for the new build; shaders the translator already prepared come from the cache.
 8. **Draw the Button Prompts**, with button art in the new version: only when the art, the prompt tools or the key
    bindings changed, or a prompt folder is missing (a first version with art draws them all).
-9. Every version but the current and the previous one is deleted.
+9. Every version but the current and the previous one is deleted, except a staged release newer than the current
+   one.
 
 When the new version fails to start (exit code 86 from `start.pyw`, or any error within six seconds), the stub sets
 `current.txt` back to `previous.txt`'s version and starts it with `--rolled-back`. The game is never rebuilt while it
@@ -241,7 +286,10 @@ repository keeps old package files, so a release keeps building with the compile
 `python tests/launcher_test.py` (Python 3.14): versions, settings, the toolchain resolver and installer against a
 local fake repository, resumed and checked downloads, the certificate checks against a local HTTPS server (its
 certificates made with the `openssl` command), the GitHub and URL feeds, staging, switching, rollback and
-pruning, unsafe archives, the font decoding on a system font wrapped like the game's, `make_game.py` on a synthetic
+pruning, unsafe archives, the background update (a release staged beside the running version without switching, the
+`staged.json` marker, a staged release installed after a restart, no install while the game runs, the install once
+it exited, nothing by itself with Install Updates Automatically off, a failed staging tried again after the next
+check), the font decoding on a system font wrapped like the game's, `make_game.py` on a synthetic
 `.nup` (events, skipped steps, `--rebuild` without the dump, step keys), the RomFS step beside the lift and compile
 and its failure stopping the build, the prompts step with a stand-in prompt tool (when it runs again, and that it
 makes no other step run), the button art a release copies and the packages and tools the prompts need in a release,

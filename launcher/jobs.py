@@ -1,12 +1,15 @@
-"""The launcher's long tasks, run on a worker thread: install, update, rebuild and the update check. Each job is a
-list of steps the window shows as rows; the window reads the job's state on a timer (rev changes on every change)
-and never blocks on it. The same jobs run headless from launcher/cli.py."""
+"""The launcher's long tasks, run on a worker thread: install, update, rebuild, the update check and the background
+staging of an update. Each job is a list of steps the window shows as rows; the window reads the job's state on a
+timer (rev changes on every change) and never blocks on it. The same jobs run headless from launcher/cli.py.
+BackgroundUpdate decides when a staged update installs."""
 import collections
 import threading
 import time
 import traceback
 
-from . import build, feed, gamefiles, net, toolchain, updater, versions
+from . import build, feed, gamefiles, net, toolchain, updater, versions, winsys
+
+RECHECK = 3600   # seconds between update checks while the launcher stays open, hidden during play included
 
 PENDING, RUNNING, DONE, SKIPPED, FAILED = 'pending', 'running', 'done', 'skipped', 'failed'
 
@@ -407,3 +410,124 @@ class CheckJob(Job):
 
 def update_available(ctx, release):
     return bool(release) and versions.newer(release.version, ctx.layout.version)
+
+
+class StageJob(Job):
+    """A release downloaded, checked and unpacked beside the running version without switching to it
+    (updater.stage), while the launcher runs and the game too. Its thread runs at background priority, so the game
+    shares only the network with it. No screen shows it: the home screen's Updates row reads it."""
+    kind = 'stage'
+
+    def __init__(self, ctx, release):
+        ver = versions.display(release.version)
+        super().__init__(ctx, ['download'], ver)
+        self.release, self.ver = release, ver
+
+    def run(self):
+        winsys.background_thread()
+        self.begin('download')
+        prog = lambda d, t: self.progress('download', d / max(t, 1), f'{d / 1e6:.1f} of {t / 1e6:.1f} MB')  # noqa: E731
+        updater.stage(self.ctx.layout, self.release, progress=prog, cancel=self.cancelled, version=self.ctx.version)
+        self.finish('download')
+
+
+class BackgroundUpdate:
+    """The update the launcher fetches by itself, and when it goes in (docs/launcher.md, "Updating"). The window
+    calls poll() on its timer, checked() after each update check, and install() when the launcher starts, when the
+    game exits, when a game that held an install up has closed, and when the player selects Updates.
+
+    A newer release is staged once per update check (StageJob); a staging that fails is logged and tried again after
+    the next check. A staged release installs only while no copy of the game runs, no job holds the window and no
+    staging is under way, and by itself only with Install Updates Automatically on. Installing switches
+    app/current.txt to it and restarts the launcher (restart(args), the stub), whose new version finishes in
+    ContinueUpdateJob. A checkout has nothing to switch to: there (enabled False) nothing is staged or installed."""
+
+    def __init__(self, ctx, restart, enabled=True):
+        self.ctx, self.restart, self.enabled = ctx, restart, enabled
+        self.job = None            # the StageJob running, or the last one
+        self.tried = ''            # the release staged, or found staged, since the last update check
+        self.asked = False         # the player selected Updates during the download: it installs once staged
+        self.waiting = False       # an install had to wait (the game ran, a download ran): the window tries again
+        self.restarting = False    # the last install restarted the launcher
+        self.error = ''            # why the last install failed
+
+    def staging(self):
+        return self.job is not None and self.job.result is None
+
+    def ready(self, release=None):
+        """The staged release an install would take now (updater.staged_info's dict), or None. With release (the
+        last check's answer), a staged release newer than it is passed over: the feed no longer offers it."""
+        if not self.enabled:
+            return None
+        s = self.ctx.settings
+        m = updater.staged(self.ctx.layout, s.get('channel', 'stable'), s.get('rolled_back', ''))
+        if m and release and versions.newer(m['version'], release.version):
+            return None
+        return m
+
+    def checked(self):
+        """An update check ended: the release it found is staged at the next poll, also one that failed before."""
+        self.tried = ''
+
+    def poll(self, release, busy=False):
+        """Report a staging that ended ('staged' or 'failed'), or start staging release when it is newer than the
+        running version and not staged yet ('started'); None when nothing changed. busy: a job holds the window
+        (an install, update or rebuild); staging waits for it, as an update's prune() clears the same folders."""
+        j = self.job
+        if j and j.result is not None and not getattr(j, 'seen', False):
+            j.seen = True
+            if j.result == 'ok':
+                self.ctx.log(f'background update: {j.ver} is staged')
+                return 'staged'
+            self.ctx.log(f'background update: {j.ver} was not staged ({j.result}: {j.error}); it is tried again '
+                         'after the next update check')
+            return 'failed'
+        if not self.enabled or busy or self.staging() or not release:
+            return None
+        ver = versions.display(release.version)
+        if ver == self.tried:
+            return None
+        self.tried = ver
+        if (not update_available(self.ctx, release) or ver == self.ctx.settings.get('rolled_back')
+                or updater.staged_info(self.ctx.layout, ver)):
+            return None
+        self.ctx.log(f'background update: staging {ver}')
+        self.job = StageJob(self.ctx, release).start()
+        return 'started'
+
+    def install(self, game_dir, release=None, why='', asked=False, running=False):
+        """Install the staged release now unless something stops it, and restart into it. asked: the player
+        selected Updates (now or during the download), which Install Updates Automatically off does not stop;
+        running: the window knows the game runs (the process it started); game_dir: a copy started elsewhere counts
+        too (build.game_running). Returns the version installed, or '' (then waiting says whether it is worth trying
+        again)."""
+        if not self.enabled or not (asked or self.asked or self.ctx.settings.get('auto_install')):
+            return ''
+        m = self.ready(release)
+        if not m:
+            return ''
+        ver = m['version']
+        why_not = ('the game is running' if running or (game_dir and build.game_running(game_dir)) else
+                   f'{self.job.ver} is downloading' if self.staging() else '')
+        if why_not:
+            if not self.waiting:
+                self.ctx.log(f'background update: {ver} waits: {why_not}')
+            self.waiting = True
+            return ''
+        old = versions.display(self.ctx.layout.version)
+        try:
+            updater.install_staged(self.ctx.layout, ver)
+        except (OSError, updater.UpdateError) as e:
+            self.error = str(e)
+            self.waiting = False
+            self.ctx.log(f'background update: {ver} could not be installed: {e}')
+            return ''
+        self.waiting = self.asked = False
+        self.error = ''
+        self.ctx.log(f'background update: installing {ver}' + (f' ({why})' if why else ''))
+        try:
+            self.restarting = bool(self.restart(['--continue-update', old]))
+        except OSError as e:   # the stub did not start: the new version runs at the launcher's next start
+            self.ctx.log(f'background update: the launcher could not restart: {e}')
+            self.restarting = False
+        return ver

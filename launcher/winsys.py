@@ -201,6 +201,22 @@ def keep_awake(on):
         pass
 
 
+def background_thread():
+    """Windows: put the calling thread in background mode (SetThreadPriority THREAD_MODE_BACKGROUND_BEGIN), which
+    lowers its processor, disk and memory priority, so work done beside the game takes only what the game leaves.
+    False where that is not possible."""
+    if os.name != 'nt':
+        return False
+    try:
+        from ctypes import wintypes
+        k = ctypes.WinDLL('kernel32')   # a private handle: the argument types set here touch no other caller
+        k.GetCurrentThread.restype = wintypes.HANDLE
+        k.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+        return bool(k.SetThreadPriority(k.GetCurrentThread(), 0x00010000))
+    except (AttributeError, OSError):
+        return False
+
+
 # What the launcher puts in its folder (launcher/paths.py, the stub's python.next and python.old-<n>). Uninstall deletes
 # only these: the default game folder is <root>\game, and a folder given to the setup with --dest may hold other things.
 OWNED = ('NX2navi.exe', 'app', 'python', 'python.next', 'pydeps', 'data', 'toolchain')
@@ -226,7 +242,7 @@ def uninstall_plan(layout, remove_game=''):
 def uninstall_script(gone, empty):
     """The cmd.exe line that deletes them once the launcher has exited: a file with del, a folder with rmdir /s, the
     folders that must be empty with a plain rmdir (which leaves a folder that still holds something). A path holding
-    % is left out: cmd.exe expands %NAME% even inside quotes, so a folder named C:\%HOMEPATH% would delete another."""
+    % is left out: cmd.exe expands %NAME% even inside quotes, so a folder named C:\\%HOMEPATH% would delete another."""
     steps = ['ping -n 3 127.0.0.1 >nul']
     for p in gone:
         if '%' not in str(p):
