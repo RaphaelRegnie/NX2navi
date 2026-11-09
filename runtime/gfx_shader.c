@@ -1063,11 +1063,20 @@ static int use_find(const uint8_t h[32], UseMask *m) {
     return known;
 }
 
+// NX2NAVI_SHADER_CACHE_FLUSH (default 0): 1 flushes the .spv, .res.json and .use files to the disk too, as the cache
+// did before (see "Durability" at the top), for a drive or setup where a torn file was seen.
+static int cache_flush(void) {
+    static int on = -1;
+    if (on < 0) on = rt_knob("SHADER_CACHE_FLUSH", "0") == 1;
+    return on;
+}
+
 static void use_store(const uint8_t h[32], const UseMask *m) {
     char p[PATH_CAP + 80];
     use_path(h, p);
     uint32_t f[5] = {USE_MAGIC, USE_VERSION, m->slots, m->attrs, m->fouts};
-    plat_file_write_cached(p, f, sizeof f);   // not flushed: a torn mask fails its magic and size check (see the top)
+    if (cache_flush()) plat_file_write_atomic(p, f, sizeof f);
+    else plat_file_write_cached(p, f, sizeof f);   // not flushed: a torn mask fails its magic and size check (see the top)
     plat_mutex_lock(&cache_lock);
     use_put(h, 1, m);
     plat_mutex_unlock(&cache_lock);
@@ -1529,6 +1538,7 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
         return fail(reply, hex);
     }
     // Not flushed (see "Durability" at the top): the translator wrote them whole, and disk_load checks both.
+    if (cache_flush()) plat_file_flush(spv_path), plat_file_flush(res_path);
     if (!(s = disk_load(key, r->iid))) return fail("translator output missing or malformed", hex);
     if (!r->final) {                                       // name the files after the cache key, remember the mask
         m = use_of(s);
@@ -1536,9 +1546,9 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
         char mhex[65], to[PATH_CAP + 80];
         key_hex(mk, mhex);
         snprintf(to, PATH_CAP + 80, "%s/%s.spv", cache_dir, mhex);
-        int moved = plat_file_replace(spv_path, to, 0);
+        int moved = plat_file_replace(spv_path, to, cache_flush());
         snprintf(to, PATH_CAP + 80, "%s/%s.res.json", cache_dir, mhex);
-        moved = moved && plat_file_replace(res_path, to, 0);
+        moved = moved && plat_file_replace(res_path, to, cache_flush());
         if (moved) {
             use_store(r->code_hash, &m);
         } else {                                           // keep the mask for this run only
