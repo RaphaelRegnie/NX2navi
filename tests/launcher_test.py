@@ -263,6 +263,20 @@ class SettingsTest(Tmp):
         t.reset()
         self.assertEqual((t['auto_check'], t['game_dir'], t['channel']), (True, 'D:/g', 'stable'))
 
+    def test_defaults(self):
+        # the Settings page of a new install, and what Default Settings goes back to: updates checked at start, the
+        # launcher hidden while playing, the build cache kept (an update recompiles only what changed), Stable
+        chosen = ('auto_check', 'hide_while_playing', 'keep_cache', 'channel')
+        want = (True, True, True, 'stable')
+        s = settings.Settings(self.layout.settings)
+        self.assertEqual(tuple(s[k] for k in chosen), want)
+        s.update(auto_check=False, hide_while_playing=False, keep_cache=False, channel='preview')
+        s.save()
+        t = settings.Settings(self.layout.settings)   # a player's own choices stay across starts and updates
+        self.assertEqual(tuple(t[k] for k in chosen), (False, False, False, 'preview'))
+        t.reset()
+        self.assertEqual(tuple(t[k] for k in chosen), want)
+
     def test_bad_types_ignored(self):
         self.layout.settings.write_text(json.dumps({'auto_check': 'yes', 'channel': 'preview', 'junk': 1}))
         s = settings.Settings(self.layout.settings)
