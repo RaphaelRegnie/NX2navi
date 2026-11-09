@@ -65,6 +65,7 @@ int vk_hdr_wanted(void);
 int vk_hdr_active(void);
 int vk_dlaa_needs_restart(void);
 double frame_step_limit_hz(void);
+int frame_limit_follows_display(void);
 int frame_limit_adjustable(void);
 int rtss_limit_state(void);
 int frame_free_running(void);
@@ -711,7 +712,8 @@ static void row_game_lang(void) {
     opt_choice_list("NX2NAVI_LANG", UI_MENU_GAME_LANG, vals, names, n + 1, UI_MENU_GAME_LANG_DESC, cur);
 }
 
-// The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
+// The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30, and frame generation in use means the
+// monitor's rate (frame_limit_follows_display), which the row then shows. The monitor choice shows the rate it gives.
 // The note says when RivaTuner Statistics Server does the limiting (rtss_limit.c), cannot change its profile, or let the
 // game run past its limit.
 static void row_fps_limit() {
@@ -732,7 +734,7 @@ static void row_fps_limit() {
         names[9] = display;
     }
     const char *set = cfg_get("NX2NAVI_FPS_LIMIT"), *old = cfg_get("NX2NAVI_FPS60");
-    int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : -1;
+    int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : frame_limit_follows_display() ? 9 : -1;
     int rtss = rtss_limit_state();
     const char *note = rtss == 1   ? menu_text(UI_MENU_FPS_RTSS)
                        : rtss == 2 ? menu_text(UI_MENU_FPS_RTSS_READONLY)

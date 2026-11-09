@@ -115,7 +115,8 @@ int frame_step_realtime(void) { return step_word != NULL; }
 
 // The frame limit (menu, NX2NAVI_FPS_LIMIT, live): 30, 60, 90, 120, 144, any whole rate from 30 to 240, or display (the
 // refresh rate of the window's monitor, at most 240). A higher number gives 240, the rate of the shortest step the
-// game survives (STEP_MIN_S). Unset, the older NX2NAVI_FPS60=0 still means 30. A limit of 30 switches the set
+// game survives (STEP_MIN_S). Unset, the older NX2NAVI_FPS60=0 still means 30, and frame generation in use means display
+// (frame_limit_follows_display). A limit of 30 switches the set
 // fps60 off (the shipping minimum interval 2), every other limit switches it on; the controller reads its minimum
 // interval from the patched sites each frame. With the real-time step the pacer holds frames to the limit; above 60
 // only the pacer changes, as the step's floor is the limit's ceiling. Without it the game steps whole 60 Hz vsyncs and the pacer
@@ -139,9 +140,11 @@ int frame_limit_adjustable(void) { return 1; }
 static unsigned limit_seen;
 static int limit_read;
 static int limit_hz = -1;   // 0: display; -2: unlimited (free-running builds); -1 before the first read
+static int limit_unset;     // neither NX2NAVI_FPS_LIMIT nor the older NX2NAVI_FPS60=0 is set: the default 60
 
 static int limit_parse(void) {
     const char *e = cfg_get("NX2NAVI_FPS_LIMIT"), *old = cfg_get("NX2NAVI_FPS60");
+    limit_unset = (!e || !*e) && !(old && !strcmp(old, "0"));
     if (!e || !*e) return old && !strcmp(old, "0") ? 30 : 60;
     if (!strcmp(e, "display")) return 0;
     int free_run = frame_free_running();
@@ -204,6 +207,22 @@ static int movie_cap_hz(void) {
 // multiplier with NVIDIA's (vk_dlssg.c, one to three); 1 while neither generates (off, or paused for the menu).
 static int generated_factor(void) { return vk_fg_generating() ? 2 : vk_dlssg_multiplier(); }
 
+// The limit in effect, as limit_hz counts it (0 display, -2 unlimited, else the rate). With frame generation's
+// swapchain in use and no limit chosen it is the display's rate: the pacer divides the limit by generated_factor, so
+// the default 60 held the game to 30, 20 or 15 rendered frames a second on any monitor, 15 at DLSS 4x on a 165 Hz one,
+// where the display rate gives 41 rendered and 165 shown. "In use" rather than generating keeps the limit still while
+// the menu pauses generation. A limit the player set is kept as it is.
+int frame_limit_follows_display(void) { return limit_unset && limit_hz > 0 && (vk_fg_active() || vk_dlssg_active()); }
+static int limit_effective(void) { return frame_limit_follows_display() ? 0 : limit_hz; }
+
+// The rate the game renders at under the limit: frame_step_limit_hz over the frames shown per game frame (mouse_direct.c,
+// whose camera input follows the game's own frame time); 0 unknown.
+double frame_step_game_hz(void) {
+    double hz = frame_step_limit_hz();
+    int gen = generated_factor();
+    return gen > 1 ? hz / gen : hz;
+}
+
 // RivaTuner Statistics Server (rtss_limit.c) gets the same limit; while it limits this process the pacer holds no
 // frames, so the two never stack. NX2NAVI_RTSS=0 and frame generation (RTSS would count the generated frames) keep it out.
 uint64_t frame_step_cap_ns(void) {
@@ -229,8 +248,16 @@ uint64_t frame_step_cap_ns(void) {
         return 0;
     }
     // unlimited during a movie: the movie's rate, times frame generation's factor for the division below
-    double hz = limit_hz == -2 ? movie_hz * gen
-                               : shown_hz(limit_hz ? limit_hz : gfx_window_refresh_hz());
+    int follow = frame_limit_follows_display(), limit = follow ? 0 : limit_hz;
+    static int follow_was, follow_logs;
+    if (follow != follow_was) {
+        follow_was = follow;
+        if (follow_logs++ < 20) {
+            if (follow) rt_log("frame rate: frame generation with no limit set: the limit is the monitor's refresh rate");
+            else rt_log("frame rate: limit %d fps again", limit_hz);
+        }
+    }
+    double hz = limit == -2 ? movie_hz * gen : shown_hz(limit ? limit : gfx_window_refresh_hz());
     double max = frame_free_running() ? LIMIT_FREE_MAX_HZ : LIMIT_MAX_HZ;
     if (hz > max) hz = max;
     // Frame generation presents one to three generated frames between each two of the game's: the game is paced at the
@@ -249,10 +276,11 @@ uint64_t frame_step_cap_ns(void) {
 double frame_step_limit_hz(void) {
     if (frame_free_running()) {   // 0 for unlimited, as before the first read
         frame_limit_live();
-        if (limit_hz == -2 || limit_hz == -1) return 0;
-        return shown_hz(limit_hz ? limit_hz : gfx_window_refresh_hz());
+        int limit = limit_effective();
+        if (limit == -2 || limit == -1) return 0;
+        return shown_hz(limit ? limit : gfx_window_refresh_hz());
     }
-    int hz = limit_hz;
+    int hz = limit_effective();
     if (hz < 0) return 0;
     double r = shown_hz(hz ? hz : gfx_window_refresh_hz());
     return !step_word && r > 60 ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;

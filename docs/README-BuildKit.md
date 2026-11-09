@@ -110,7 +110,8 @@ beside the game.
   background while you play.
 - **Screen** in the menu has Upscaling (DLSS on NVIDIA RTX cards, FSR 3.1 on any card), Frame generation (NVIDIA DLSS
   on RTX 40 and 50 cards, with a DLSS multiplier of 2x, or 3x and 4x on RTX 50 cards; FSR 3.1 on any card; it needs
-  DLSS or FSR 3.1 upscaling on, and the frame limit then counts the frames on screen), HDR (the game's picture tone mapped to your display, with its own grading rows, or Native, the game's own HDR; turn HDR on in Windows first) and the
+  DLSS or FSR 3.1 upscaling on, and the frame limit then counts the frames on screen; with no limit chosen it is the
+  display's refresh rate), HDR (the game's picture tone mapped to your display, with its own grading rows, or Native, the game's own HDR; turn HDR on in Windows first) and the
   resolution. Those marked "after restart" take effect when the game starts again.
 - **Controls** in the menu has Button prompts: the game's own, or Xbox, PlayStation or keyboard and mouse ones when
   the build drew them (a kit with `prompt-art`). It takes effect after a restart. The keyboard and mouse prompts show
