@@ -942,13 +942,16 @@ static void tab_sound(float scale) {
 // A confirmation is open (Controls: restart, Advanced: reset): B and Esc close it, not the menu; L / R stay on the page.
 static bool g_modal;
 
-// The note under the layout: Automatic with a gamepad connected, the layout it picked ("in use: Xbox"). NULL otherwise.
+// The note under the layout: Automatic with a gamepad connected, the layout it picked ("in use: Xbox"), named
+// PlayStation for a pad whose bottom button is labelled cross. NULL otherwise.
 static const char *pad_layout_note(void) {
     int got = input_pad_layout();
     if (got < 0 || strcmp(cfg_value("NX2NAVI_PAD_LAYOUT"), "auto")) return nullptr;
     static char note[96];
-    snprintf(note, sizeof note, menu_text(UI_MENU_PAD_LAYOUT_IN_USE),
-             menu_text(got == PAD_LAYOUT_XBOX ? UI_MENU_PAD_LAYOUT_XBOX : UI_MENU_PAD_LAYOUT_NINTENDO));
+    UiTextId name = got != PAD_LAYOUT_XBOX                     ? UI_MENU_PAD_LAYOUT_NINTENDO
+                    : input_pad_label(PAD_SOUTH) == PAD_LABEL_CROSS ? UI_MENU_PAD_LAYOUT_PLAYSTATION
+                                                                  : UI_MENU_PAD_LAYOUT_XBOX;
+    snprintf(note, sizeof note, menu_text(UI_MENU_PAD_LAYOUT_IN_USE), menu_text(name));
     return note;
 }
 
@@ -1064,8 +1067,9 @@ static void restart_confirm(float scale) {
 
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
-    static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
-    opt_choice("NX2NAVI_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
+    static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX,
+                                      UI_MENU_PAD_LAYOUT_PLAYSTATION};
+    opt_choice("NX2NAVI_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 4, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
     // The first three values of the setting (cfg.c): pc stays readable in nx2navi.ini, but nothing makes its files for
     // this game, so the row leaves it out. The game reads its prompts at start: the row's note says when a restart
     // would bring others, and the bar's Restart button does it.

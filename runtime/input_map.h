@@ -82,9 +82,10 @@ int input_map_bind(const char *button, const char *list);
 // Applies the NX2NAVI_BIND_<action> settings (cfg_get) over the defaults: at start, and again when one of them changes.
 void input_map_configure(void);
 
-// The layout for a NX2NAVI_PAD_LAYOUT value: "nintendo" or "xbox" (any case); "xbox_prompts", 0.1.9's name for the Nintendo
-// layout with the Xbox prompts, maps the buttons as "nintendo". Anything else ("auto", NULL) picks Nintendo when the
-// pad's east button is labelled A (a Switch Pro Controller, a GuliKit) and Xbox otherwise.
+// The layout for a NX2NAVI_PAD_LAYOUT value: "nintendo" or "xbox" (any case); "playstation" is the Xbox layout under its
+// PlayStation name (cross A, circle B, square X, triangle Y); "xbox_prompts", 0.1.9's name for the Nintendo layout with
+// the Xbox prompts, maps the buttons as "nintendo". Anything else ("auto", NULL) picks Nintendo when the pad's east
+// button is labelled A (a Switch Pro Controller, a GuliKit) and Xbox otherwise.
 int input_pad_layout_pick(const char *setting, int east_labelled_a);
 
 // Button prompts (NX2NAVI_PROMPTS): the controller whose buttons the game's prompts show. Nintendo: the game's own. Xbox

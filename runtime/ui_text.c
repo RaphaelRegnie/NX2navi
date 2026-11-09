@@ -219,9 +219,12 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_TRIGGERS] = "Trigger vibration (Xbox)",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "Also vibrates the triggers on Xbox controllers.",
     [UI_MENU_PAD_LAYOUT] = "Button layout",
-    [UI_MENU_PAD_LAYOUT_DESC] = "Sets which button acts as A.",
+    [UI_MENU_PAD_LAYOUT_DESC] = "Sets which button acts as A. Nintendo: by position, A right, B bottom, X top, Y "
+                                "left. Xbox and PlayStation: by label, A bottom, B right, X left, Y top (on a "
+                                "PlayStation pad cross, circle, square and triangle). Automatic: Nintendo for a pad "
+                                "labelled the Nintendo way, by label for the others.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Automatic", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A right)",
-    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A bottom)",
+    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A bottom)", [UI_MENU_PAD_LAYOUT_PLAYSTATION] = "PlayStation (A bottom)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "in use: %s",
     [UI_MENU_PROMPTS] = "Button prompts",
     [UI_MENU_PROMPTS_DESC] = "Which controller's buttons the game's prompts show, in text, in the action prompt and on "
@@ -691,9 +694,12 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_TRIGGERS] = "Вибрация триггеров (Xbox)",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "Вибрация также на курках контроллера Xbox.",
     [UI_MENU_PAD_LAYOUT] = "Раскладка кнопок",
-    [UI_MENU_PAD_LAYOUT_DESC] = "Какая кнопка работает как A.",
+    [UI_MENU_PAD_LAYOUT_DESC] = "Какая кнопка работает как A. Nintendo: по положению, A справа, B снизу, X сверху, "
+                                "Y слева. Xbox и PlayStation: по подписи, A снизу, B справа, X слева, Y сверху (на "
+                                "контроллере PlayStation крест, круг, квадрат и треугольник). Автоматически: "
+                                "Nintendo для контроллера с подписями Nintendo, по подписи для остальных.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Автоматически", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A справа)",
-    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A снизу)",
+    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A снизу)", [UI_MENU_PAD_LAYOUT_PLAYSTATION] = "PlayStation (A снизу)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "сейчас: %s",
     [UI_MENU_PROMPTS] = "Подсказки кнопок",
     [UI_MENU_PROMPTS_DESC] = "Кнопки какого контроллера показывают подсказки игры: в тексте, в подсказке действия и на "
@@ -1076,9 +1082,13 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_TRIGGERS] = "Vibração dos gatilhos (Xbox)",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "Também vibra os gatilhos do controle Xbox.",
     [UI_MENU_PAD_LAYOUT] = "Layout dos botões",
-    [UI_MENU_PAD_LAYOUT_DESC] = "Define qual botão funciona como A.",
+    [UI_MENU_PAD_LAYOUT_DESC] = "Define qual botão funciona como A. Nintendo: pela posição, A à direita, B embaixo, "
+                                "X em cima, Y à esquerda. Xbox e PlayStation: pela letra, A embaixo, B à direita, X à "
+                                "esquerda, Y em cima (num controle PlayStation xis, círculo, quadrado e triângulo). "
+                                "Automático: Nintendo para um controle com as letras da Nintendo, pela letra para os "
+                                "outros.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Automático", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A à direita)",
-    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A embaixo)",
+    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox (A embaixo)", [UI_MENU_PAD_LAYOUT_PLAYSTATION] = "PlayStation (A embaixo)",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "em uso: %s",
     [UI_MENU_GROUP_STICKS] = "Analógicos",
     [UI_MENU_LSTICK_DEADZONE] = "Zona morta do analógico esquerdo",
@@ -1592,10 +1602,13 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_TRIGGERS] = "扳机振动（Xbox）",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "同时震动 Xbox 手柄的扳机。",
     [UI_MENU_PAD_LAYOUT] = "按键布局",
-    [UI_MENU_PAD_LAYOUT_DESC] = "设置哪个按键作为 A 键。",
+    [UI_MENU_PAD_LAYOUT_DESC] = "设置哪个按键作为 A 键。Nintendo：按位置，A 在右、B 在下、X 在上、Y 在左。Xbox 和 PlayStation："
+                                "按标注，A 在下、B 在右、X 在左、Y 在上（PlayStation 手柄上为叉、圆圈、方块和三角）。自动："
+                                "Nintendo 标注的手柄用 Nintendo，其他手柄按标注。",
     [UI_MENU_PAD_LAYOUT_AUTO] = "自动",
     [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo（A 在右）",
     [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox（A 在下）",
+    [UI_MENU_PAD_LAYOUT_PLAYSTATION] = "PlayStation（A 在下）",
     [UI_MENU_PAD_LAYOUT_IN_USE] = "使用中：%s",
     [UI_MENU_GROUP_STICKS] = "摇杆",
     [UI_MENU_LSTICK_DEADZONE] = "左摇杆死区", [UI_MENU_RSTICK_DEADZONE] = "右摇杆死区",

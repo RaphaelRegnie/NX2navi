@@ -14,6 +14,7 @@ amplitude before the strength (0.2 to 1.5, default 0.6; lower makes weak pulses 
 
 - `nintendo` (default): by position, as on a Switch (the table below).
 - `xbox`: south A, east B, west X, north Y, as an Xbox pad labels them; on a PlayStation pad cross is A, circle B, square X, triangle Y.
+- `playstation`: the same buttons as `xbox` under the PlayStation name: cross A, circle B, square X, triangle Y.
 - `auto`: `nintendo` for a pad whose east button SDL reports labelled A (Switch Pro Controller, Nintendo-layout pads), `xbox` for the others.
 
 The log names the layout in effect (`input: gamepad layout ...`) and each gamepad's first press
@@ -28,7 +29,7 @@ letters unless *Button prompts* says otherwise (below).
 - the letter in the action prompt (top right);
 - the ocarina's note buttons.
 
-A, B, X and Y show the button the *Button layout* presses: with `nintendo` (by position) Switch A is the right face button, so its prompts show B or circle, B shows A or cross, X shows Y or triangle and Y shows X or square; with `xbox` and `automatic` (by label) A shows A or cross, B shows B or circle, X shows X or square and Y shows Y or triangle. The game reads the font and the interface textures once at start, so a change shows after a restart (the row says so; the menu's Restart button restarts). A button remapped on this tab keeps its old prompt.
+A, B, X and Y show the button the *Button layout* presses: with `nintendo` (by position) Switch A is the right face button, so its prompts show B or circle, B shows A or cross, X shows Y or triangle and Y shows X or square; with `xbox`, `playstation` and `automatic` (by label) A shows A or cross, B shows B or circle, X shows X or square and Y shows Y or triangle. The game reads the font and the interface textures once at start, so a change shows after a restart (the row says so; the menu's Restart button restarts). A button remapped on this tab keeps its old prompt.
 
 The prompts live in four overlay folders next to the exe, `romfs-patches-xbox`, `romfs-patches-xbox-label`, `romfs-patches-playstation` and `romfs-patches-playstation-label` (by position and by label), which `runtime/romfs.c` loads in place of the game's files. `tools/pad_prompts.py` draws them on the player's machine from the player's own RomFS and a folder of button art, which the repository does not hold:
 

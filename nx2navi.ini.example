@@ -288,7 +288,8 @@
 # rumble_triggers = 0
 # Which gamepad button is Switch A: nintendo (the default: the Switch's buttons by position on any pad, east A,
 # south B, west Y, north X), xbox (south A, east B, west X, north Y, as an Xbox pad labels them; cross A on a
-# PlayStation pad) or auto (nintendo for a pad with Nintendo labels, xbox for the others). The bind_ lines below apply
+# PlayStation pad), playstation (the same as xbox: cross A, circle B, square X, triangle Y) or auto (nintendo for a
+# pad with Nintendo labels, xbox for the others). The bind_ lines below apply
 # on top. Changes while the game runs take effect at once. 0.1.9's xbox_prompts is read as nintendo with prompts = xbox.
 # pad_layout = nintendo
 # The buttons the game's prompts show: nintendo (the game's own), xbox (LB RB LT RT, Menu, View) or playstation (L1 R1

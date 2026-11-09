@@ -319,6 +319,8 @@ int probe_cfg(void) {
     CHECK(input_pad_layout_pick("xbox_prompts", 0) == PAD_LAYOUT_NINTENDO &&
               input_pad_layout_pick("Xbox_Prompts", 1) == PAD_LAYOUT_NINTENDO,
           "pad layout: 0.1.9's xbox_prompts keeps the Nintendo positions (only the prompts change, romfs.c overlay_init)");
+    CHECK(input_pad_layout_pick("PlayStation", 1) == PAD_LAYOUT_XBOX && input_pad_layout_pick("playstation", 0) == PAD_LAYOUT_XBOX,
+          "pad layout: playstation plays by label as xbox does (cross A), whatever the pad's labels");
     // Button prompts (input_map.c)
     CHECK(input_prompts_pick(NULL, "auto") == PROMPTS_NINTENDO && input_prompts_pick("", "xbox") == PROMPTS_NINTENDO &&
               input_prompts_pick("Xbox", "nintendo") == PROMPTS_XBOX && input_prompts_pick("nintendo", "xbox") == PROMPTS_NINTENDO,
@@ -351,8 +353,8 @@ int probe_cfg(void) {
     // romfs-patches-xbox shows A as B and romfs-patches-playstation A as circle (tools/pad_prompts.py FACE). That is
     // right exactly where the layout puts A on the east button, which an Xbox pad labels B and a PlayStation pad circle.
     input_map_reset();
-    static const char *const layouts[] = {"nintendo", "xbox", "auto", "xbox_prompts"};
-    for (int i = 0; i < 4; i++) {
+    static const char *const layouts[] = {"nintendo", "xbox", "playstation", "auto", "xbox_prompts"};
+    for (int i = 0; i < 5; i++) {
         int a_east = input_map_pad_buttons((uint8_t[PAD_COUNT]){[PAD_EAST] = 1}, input_pad_layout_pick(layouts[i], 0)) == 1ull << B_A;
         CHECK(a_east == EQ(input_prompts_folder(PROMPTS_XBOX, layouts[i]), "romfs-patches-xbox"),
               "prompts: the folder names A as B exactly when the layout puts A on the button labelled B");
