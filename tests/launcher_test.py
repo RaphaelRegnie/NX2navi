@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tools'))
 
-from launcher import build, feed, gamefiles, jobs, net, saves, settings, toolchain, updater, versions, winsys  # noqa: E402
+from launcher import build, feed, gameini, gamefiles, jobs, net, saves, settings, toolchain, updater, versions, winsys  # noqa: E402
 from launcher.context import Context  # noqa: E402
 from launcher.paths import Layout  # noqa: E402
 
@@ -251,6 +251,32 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(versions.display('0.3.11+abc1234'), '0.3.11')
         with self.assertRaises(ValueError):
             versions.parse('banana')
+
+
+class GameIniTest(Tmp):
+    """The game settings the launcher switches (launcher/gameini.py), read as runtime/cfg.c reads nx2navi.ini."""
+
+    def test_new_file_gets_the_section(self):
+        gameini.put(self.tmp, 'discord', 'discord_rpc', '1')
+        self.assertEqual((self.tmp / 'nx2navi.ini').read_text(encoding='utf-8'), '[discord]\ndiscord_rpc = 1\n')
+        self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '1')
+
+    def test_only_the_key_line_changes(self):
+        ini = self.tmp / 'nx2navi.ini'
+        ini.write_bytes('﻿[display]\r\nfullscreen = 1\r\n# discord_rpc = 1\r\n[discord]\r\n'
+                        'NX2NAVI_DISCORD_RPC = "1"\r\ndiscord_app_id = 42'.encode('utf-8'))
+        self.assertEqual(gameini.get(self.tmp, 'DISCORD_RPC'), '1')   # quotes, prefix and case as the game reads them
+        gameini.put(self.tmp, 'discord', 'discord_rpc', '0')
+        self.assertEqual(ini.read_bytes().decode('utf-8'), '[display]\r\nfullscreen = 1\r\n# discord_rpc = 1\r\n'
+                         '[discord]\r\ndiscord_rpc = 0\r\ndiscord_app_id = 42')
+        self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '0')
+
+    def test_missing_key_goes_under_its_section(self):
+        ini = self.tmp / 'nx2navi.ini'
+        ini.write_bytes(b'[discord]\ndiscord_app_id = 42\n[display]\nfullscreen = 1')
+        self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '')
+        gameini.put(self.tmp, 'discord', 'discord_rpc', '1')
+        self.assertEqual(ini.read_bytes(), b'[discord]\ndiscord_rpc = 1\ndiscord_app_id = 42\n[display]\nfullscreen = 1')
 
 
 class SettingsTest(Tmp):

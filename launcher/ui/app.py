@@ -26,7 +26,7 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog
 
-from .. import NAME, build, feed, gamefiles, jobs, saves, versions, winsys
+from .. import NAME, build, feed, gameini, gamefiles, jobs, saves, versions, winsys
 from ..context import Context
 from . import art
 
@@ -588,6 +588,18 @@ class App:
                    desc=('Stable gets each finished release. Preview also gets test builds before they are '
                          'released, which may have new problems.',))
 
+    def discord_row(self, game_dir):
+        """The game's discord_rpc setting (runtime/discord_rpc.c), kept in the game's nx2navi.ini as the game's own
+        menu keeps it; the game reads it when it starts."""
+        def on(v):
+            try:
+                gameini.put(game_dir, 'discord', 'discord_rpc', '1' if v else '0')
+            except OSError as e:
+                self.message = f'The game\'s settings could not be written: {e}'
+        return Row('toggle', 'Discord Status', on=on, get=lambda: gameini.get(game_dir, 'discord_rpc') == '1',
+                   desc=('Show "Playing NX2navi" with your play time in your Discord status while the game runs. '
+                         'The game\'s menu switches it too (Game tab).',))
+
     def choose_dump(self):
         start = str(Path(self.settings.get('dump')).parent) if self.settings.get('dump') else str(Path.home())
         path = filedialog.askopenfilename(parent=self.root, title='Choose your Ocarina of Time dump',
@@ -833,6 +845,7 @@ class App:
                         'Keep the translated code and compiled files (about 5 GB) in the game folder, so an update '
                         'compiles only what changed. Off: they are deleted after each build.'),
             self.channel_row(),
+            *([self.discord_row(gd)] if gd and Path(gd).is_dir() else []),
             Row('divider'),
             Row('value', 'Game Folder', gd or 'Not chosen', on=lambda: gd and self.open(gd),
                 desc=('Open the game folder: saves in profile, the game\'s settings in nx2navi.ini, its logs in '
