@@ -274,6 +274,12 @@ const uint8_t *vk_usnap_map(void);   // a host copy of the current arena, at the
 const uint8_t *vk_usnap_bytes(uint64_t addr, uint64_t n);   // the copy of [addr, addr+n) as of the submit, NULL: none
 void vk_usnap_drop(uint64_t addr, uint64_t n);   // the replay makes the GPU write [addr, addr+n) of guest memory
 uint64_t vk_usnap_gen(void);                      // changes whenever a binding may resolve differently
+// [addr, addr+n) into dst: 1 from this submission's copy, 2 from guest memory where the copy lacks it but the bytes are
+// ones the CPU writes (an imported pool) and no GPU write in flight touches them, 0 neither (dst untouched).
+int vk_usnap_read(uint64_t addr, uint64_t n, void *dst);
+// Why vk_usnap_find finds nothing for [addr, addr+n) in this submission (diagnostics).
+enum { VK_USNAP_FOUND, VK_USNAP_NO_SNAPSHOT, VK_USNAP_DROPPED, VK_USNAP_IN_FLIGHT, VK_USNAP_NOT_CPU, VK_USNAP_NOT_BOUND };
+int vk_usnap_why(uint64_t addr, uint64_t n);
 void vk_usnap_shutdown(void);                     // vk_exec_draw_shutdown: frees the arenas
 // vk_mvprev.c: last frame's copy of the scene's object (c7) and bone (c5) blocks, for per-object motion vectors.
 // vk_mvprev_step: the distance of the game's other copy of a vertex-stage block the snapshot also copies, 0: none.

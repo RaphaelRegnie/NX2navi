@@ -986,6 +986,8 @@ static int cont_ready(const Cont *c) {
     return !c->at || vk_exec_event_met(nvn_op_payload(c->at)) || vk_exec_submit_seq - c->since > CONT_MAX;
 }
 
+int vk_exec_held(void) { return evo_pending; }
+
 // Walks the continuation from where it stopped; 1 when it stopped at another wait (c->i, c->at updated), 0 when done.
 static int cont_walk(VkExec *ex, Cont *c) {
     if (c->at && !vk_exec_event_met(nvn_op_payload(c->at))) {
