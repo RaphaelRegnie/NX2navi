@@ -301,6 +301,17 @@ class GameIniTest(Tmp):
         self.assertTrue((self.tmp / 'nx2navi.ini').is_dir())
 
 
+class RebuildArgsTest(Tmp):
+    """Rebuild the Game compiles the game's code for this processor's level (--retune); an update keeps the level its
+    objects were compiled for, so that it compiles only what changed (tools/make_game.py lifted_level)."""
+
+    def test_retune_only_for_rebuild_the_game(self):
+        self.assertIn('--retune', build.rebuild_args(self.layout, 'G:/game', True))
+        self.assertNotIn('--retune', build.rebuild_args(self.layout, 'G:/game'))
+        self.assertTrue(jobs.RebuildJob.retune)
+        self.assertFalse(jobs.ContinueUpdateJob.retune)
+
+
 class SettingsTest(Tmp):
     def test_roundtrip_and_reset(self):
         s = settings.Settings(self.layout.settings)

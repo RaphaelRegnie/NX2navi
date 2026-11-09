@@ -316,6 +316,7 @@ class InstallJob(Job):
 class RebuildJob(Job):
     kind = 'rebuild'
     title = 'Rebuilding'
+    retune = True   # Rebuild the Game: the game's code for this processor's level (build.rebuild_args)
 
     def __init__(self, ctx, game_dir, dump=''):
         super().__init__(ctx, ['tools_update', 'lift', 'compile_changed', 'swap', 'shaders', *prompt_rows(ctx)])
@@ -327,7 +328,7 @@ class RebuildJob(Job):
         if build.game_running(self.game_dir):
             raise build.BuildError('the game is running: close it and try again')
         if build.can_rebuild(self.game_dir):
-            args = build.rebuild_args(layout, self.game_dir)
+            args = build.rebuild_args(layout, self.game_dir, self.retune)
         elif self.dump:
             args = build.install_args(layout, self.dump, self.game_dir)
         else:
@@ -372,6 +373,7 @@ class UpdateDownloadJob(Job):
 
 class ContinueUpdateJob(RebuildJob):
     """After the restart, in the new version: bring the tools to its lock and rebuild the game."""
+    retune = False   # an update keeps the compiled game's level, so it compiles only what changed
     kind = 'update'
 
     def __init__(self, ctx, game_dir, old, dump=''):

@@ -36,8 +36,10 @@ def install_args(layout, dump, game_dir):
     return [*src, '--out', str(game_dir), '--msys', str(layout.msys)]
 
 
-def rebuild_args(layout, game_dir):
-    return ['--rebuild', '--out', str(game_dir), '--msys', str(layout.msys)]
+def rebuild_args(layout, game_dir, retune=False):
+    """retune: Rebuild the Game, which compiles the game's code for this processor's level; an update keeps the level
+    its objects were compiled for, so that it compiles only what changed (tools/make_game.py lifted_level)."""
+    return ['--rebuild', *(['--retune'] if retune else []), '--out', str(game_dir), '--msys', str(layout.msys)]
 
 
 def check_args(dump):
