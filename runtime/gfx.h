@@ -93,8 +93,8 @@ int gfx_shader_write_code(const GfxShader *s, const char *path);   // the guest 
 // A shader of the runtime's own (SPIR-V and a .res.json text as the translator writes them), outside the cache and
 // never freed; its key is the sha256 of both. NULL when the SPIR-V is malformed.
 const GfxShader *gfx_shader_own(const uint32_t *spirv, uint64_t words, const char *res_json);
-// vk_hdr.c: with NX2NAVI_HDR=1, replaces a fragment shader's SPIR-V (malloc'd, *words long) by the HDR tonemap when it is
-// the game's tonemap; gfx_shader.c calls it for every fragment shader entering the cache.
+// vk_hdr.c: with NX2NAVI_HDR=1, splices the HDR tonemap into a fragment shader's SPIR-V (malloc'd, *words long) when it
+// is the game's tonemap, and unclamps the game's FSR pass; gfx_shader.c calls it for every fragment shader entering the cache.
 void vk_hdr_shader_swap(uint32_t **spirv, uint64_t *words);
 uint64_t gfx_shader_failures(void);                         // failed translations; feeds GfxStats.shader_failures
 // Reflection: parsed once per shader from the translator's .res.json and the SPIR-V before it enters the cache.

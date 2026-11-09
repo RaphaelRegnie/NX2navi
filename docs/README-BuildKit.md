@@ -66,7 +66,7 @@ When it says `finished`, start `C:\Games\Ocarina\ocarina.exe`. You can delete `C
   it lasts at most about 20 seconds once the shaders are translated, and the remaining pipelines are built in the
   background while you play.
 - **Screen** in the menu has Upscaling (DLSS on NVIDIA RTX cards, FSR 3.1 on any card), Frame generation (FSR 3.1; it
-  needs DLSS or FSR 3.1 upscaling on), HDR (Native is the game's own HDR; turn HDR on in Windows first) and the
+  needs DLSS or FSR 3.1 upscaling on), HDR (the game's picture tone mapped to your display, with its own grading rows, or Native, the game's own HDR; turn HDR on in Windows first) and the
   resolution. Those marked "after restart" take effect when the game starts again.
 - DLSS needs `nvngx_dlss.dll` from NVIDIA beside `ocarina.exe` (the kit does not include it); FSR 3.1's
   `amd_fidelityfx_vk.dll` is copied there by the build.

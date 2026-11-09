@@ -265,17 +265,34 @@
 # once.
 # fxaa = 1
 
-# HDR output: hdr = 1 sends the picture as HDR10 (needs HDR on in Windows, "Use HDR", or a Wayland compositor with
-# colour management; without it the picture stays SDR). The game's tonemap keeps highlights up to hdr_peak_nits (your
-# display's peak); hdr_game_nits is the picture's white (paper white, 203 is the HDR reference) and hdr_ui_nits the
-# HUD's and the menu's. hdr is read at start, the nits at once.
+# HDR output: hdr = 1 sends the picture as HDR10 through the HDR tone mapper, hdr = native as the game renders it in
+# its own HDR mode (both need HDR on in Windows, "Use HDR", or a Wayland compositor with colour management; without it
+# the picture stays SDR, the game's own). hdr_peak_nits is your display's peak; hdr_game_nits the picture's white
+# (paper white, 203 is the HDR reference) and hdr_ui_nits the HUD's and the menu's. hdr is read at start, the rest at
+# once.
 # hdr = 0
 # hdr_peak_nits = 1000
 # hdr_game_nits = 203
 # hdr_ui_nits = 203
-# Highlight hue correction in percent (0 to 100): bright colours such as fire turn towards white as in the game's SDR
-# picture, matching the light they cast; 0 keeps them fully saturated. Changes take effect at once.
-# hdr_hue = 80
+# With hdr = 1: gamma correction (off, 2.2 or 2.4) shows the picture as a display of that power would, as the game was
+# made to be seen; off keeps the sRGB curve. The tone mapper: vanilla is the game's own curve at SDR brightness,
+# renodrt carries the game's look up to the peak.
+# hdr_gamma = 2.2
+# hdr_tonemap = renodrt
+# With renodrt: exposure in percent (100 unchanged); highlights, shadows, contrast, saturation and highlight saturation
+# from 0 to 100 (50 unchanged); blowout (bright parts towards white) and flare (lifted blacks) from 0 to 100 (0 none);
+# hue correction in percent (how much bright colours keep their hue); grade, the percentage of the game's own colour
+# grading the picture keeps.
+# hdr_exposure = 100
+# hdr_highlights = 50
+# hdr_shadows = 50
+# hdr_contrast = 50
+# hdr_saturation = 50
+# hdr_highlight_sat = 50
+# hdr_blowout = 0
+# hdr_flare = 0
+# hdr_hue = 100
+# hdr_grade = 100
 
 [language]
 # Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.

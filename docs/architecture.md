@@ -100,6 +100,12 @@ keeps per-core data without locks and relies on that, so the host models it (`ru
   are compiled outside the pipeline lock, and one compile serves every thread that needs it.
 - The game's tensor-core upscaler is replaced by a decode-and-scale pass (`vk_tonemap.c`); `vk_fsr.c` runs AMD FSR 1
   (EASU, RCAS) on the present when the window is larger than the picture.
+- HDR (`vk_hdr.c`): the game tonemaps its scene into a float target, upscales it, draws the HUD into a second float
+  target and copies that into the 8-bit sRGB window texture it presents. With `NX2NAVI_HDR=1` the tonemap shader gets
+  the function of `shaders/hdr_tonemap.frag` spliced in where its SDR curve clamps each channel, so the float picture
+  holds the HDR picture relative to the HUD's white; the game's FSR 1 pass loses its output clamp; the present reads
+  the float picture in place of the window texture and `shaders/hdr_encode.comp` writes PQ for an HDR10 swapchain.
+  `NX2NAVI_HDR=native` reports an HDR10 display to the game, which then renders and presents its own PQ picture.
 - ASTC textures are uploaded as they are where the device samples ASTC, and decoded by a compute shader everywhere
   else (`vk_astc.c`); under 20 GiB of video memory the decoder encodes them to BC3.
 - Occlusion queries never block the CPU; a result that is not ready counts as visible.

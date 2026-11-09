@@ -34,7 +34,7 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - Frame generation with AMD FSR 3.1 (any GPU): a generated frame between every two the game draws, with the HUD kept
   out of it, for about twice the frame rate on a fast display; in a window of another shape than the picture, frames
   are generated inside the picture only, so the black bars stay clean
-- HDR on HDR displays: the game's own native HDR, or an enhanced HDR made from its SDR picture
+- HDR on HDR displays: the game's own native HDR, or its SDR picture tone mapped to the display's peak, with exposure, highlights, shadows, contrast, saturation and gamma in the menu
 - Every shader prepared when the game is built, and the pipelines met in play built again in the background at each
   start, so play does not stop to compile them; a draw that must wait for its pipeline has it built on worker
   threads, never on the game's drawing thread

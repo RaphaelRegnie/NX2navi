@@ -851,18 +851,35 @@ static const char *hdr_note(void) {
     return note;
 }
 
-// HDR (vk_hdr.c), after a restart: off, the runtime's own (the game's tonemap kept above SDR white) or the game's native
-// HDR. The brightness rows follow while it is on.
+// HDR (vk_hdr.c), after a restart: off, the HDR tone mapper over the game's picture or the game's native HDR. The
+// brightness rows follow while it is on; the tone mapper's own rows only with the first (native HDR is the game's
+// picture as it is), its grading rows only with its own curve chosen.
 static void row_hdr(void) {
     static const char *const values[] = {"0", "1", "native"};
-    const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), menu_text(UI_MENU_HDR_ENHANCED), menu_text(UI_MENU_HDR_NATIVE)};
+    const char *names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), menu_text(UI_MENU_HDR_TONEMAPPED), menu_text(UI_MENU_HDR_NATIVE)};
     opt_choice_list("NX2NAVI_HDR", UI_MENU_HDR, values, names, 3, UI_MENU_HDR_DESC, -1, hdr_note());
     if (!cfg_bool("NX2NAVI_HDR")) return;
     opt_slider("NX2NAVI_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 10000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
-    opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f nits");
-    opt_slider("NX2NAVI_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f nits");
-    // no hue slider: the hue correction belonged to the runtime's replacement tonemap, and Enhanced now extends the
-    // game's own tonemap in place (vk_hdr.c aces_extend), so NX2NAVI_HDR_HUE changes nothing in this game
+    opt_slider("NX2NAVI_HDR_GAME_NITS", UI_MENU_HDR_GAME, 48, 500, UI_MENU_HDR_GAME_DESC, 1, "%.0f nits");
+    opt_slider("NX2NAVI_HDR_UI_NITS", UI_MENU_HDR_UI, 48, 500, UI_MENU_HDR_UI_DESC, 1, "%.0f nits");
+    if (!strcmp(cfg_value("NX2NAVI_HDR"), "native")) return;
+    static const char *const gammas[] = {"off", "2.2", "2.4"};
+    const char *gamma_names[] = {menu_text(UI_MENU_FRAMEGEN_OFF), "2.2", "BT.1886 (2.4)"};
+    opt_choice_list("NX2NAVI_HDR_GAMMA", UI_MENU_HDR_GAMMA, gammas, gamma_names, 3, UI_MENU_HDR_GAMMA_DESC);
+    static const char *const curves[] = {"vanilla", "renodrt"};
+    static const char *const curve_names[] = {"Vanilla", "RenoDRT"};
+    opt_choice_list("NX2NAVI_HDR_TONEMAP", UI_MENU_HDR_TONEMAP, curves, curve_names, 2, UI_MENU_HDR_TONEMAP_DESC);
+    if (!strcmp(cfg_value("NX2NAVI_HDR_TONEMAP"), "vanilla")) return;
+    opt_slider("NX2NAVI_HDR_EXPOSURE", UI_MENU_HDR_EXPOSURE, 0, 200, UI_MENU_HDR_EXPOSURE_DESC, 5, "%.0f %%");
+    opt_slider("NX2NAVI_HDR_HIGHLIGHTS", UI_MENU_HDR_HIGHLIGHTS, 0, 100, UI_MENU_HDR_HIGHLIGHTS_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_SHADOWS", UI_MENU_HDR_SHADOWS, 0, 100, UI_MENU_HDR_SHADOWS_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_CONTRAST", UI_MENU_HDR_CONTRAST, 0, 100, UI_MENU_HDR_CONTRAST_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_SATURATION", UI_MENU_HDR_SATURATION, 0, 100, UI_MENU_HDR_SATURATION_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_HIGHLIGHT_SAT", UI_MENU_HDR_HIGHLIGHT_SAT, 0, 100, UI_MENU_HDR_HIGHLIGHT_SAT_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_BLOWOUT", UI_MENU_HDR_BLOWOUT, 0, 100, UI_MENU_HDR_BLOWOUT_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_FLARE", UI_MENU_HDR_FLARE, 0, 100, UI_MENU_HDR_FLARE_DESC, 1, "%.0f");
+    opt_slider("NX2NAVI_HDR_HUE", UI_MENU_HDR_HUE, 0, 100, UI_MENU_HDR_HUE_DESC, 5, "%.0f %%");
+    opt_slider("NX2NAVI_HDR_GRADE", UI_MENU_HDR_GRADE, 0, 100, UI_MENU_HDR_GRADE_DESC, 5, "%.0f %%");
 }
 
 // Frame generation (vk_fg.cpp, at once; NVIDIA's after a restart); it needs a temporal upscaler's motion vectors
@@ -1359,7 +1376,7 @@ static void perf_picture(const MenuTarget *t, PerfPanel *p) {
         else snprintf(v[7], sizeof v[7], "%sp", r);
     }
     const char *hdr = cfg_value("NX2NAVI_HDR");
-    snprintf(v[8], sizeof v[8], "%s", menu_text(!strcmp(hdr, "native") ? UI_MENU_HDR_NATIVE : cfg_bool("NX2NAVI_HDR") ? UI_MENU_HDR_ENHANCED : UI_MENU_FRAMEGEN_OFF));
+    snprintf(v[8], sizeof v[8], "%s", menu_text(!strcmp(hdr, "native") ? UI_MENU_HDR_NATIVE : cfg_bool("NX2NAVI_HDR") ? UI_MENU_HDR_TONEMAPPED : UI_MENU_FRAMEGEN_OFF));
     const char *fg = cfg_value("NX2NAVI_FRAMEGEN");
     snprintf(v[9], sizeof v[9], "%s", !strcmp(fg, "fsr3") ? "AMD FSR 3.1" : !strcmp(fg, "dlss") ? "NVIDIA DLSS" : menu_text(UI_MENU_FRAMEGEN_OFF));
     // The 3D scene's size is known only where resolution.c sets it (the builds with its patch sets); Ocarina sizes its
