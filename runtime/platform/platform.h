@@ -459,6 +459,9 @@ typedef struct PlatChild PlatChild;
 // Children start one at a time so none inherits another pipe ends.
 PlatChild *plat_child_start(const char *exe, const char *arg, uint32_t *err);
 void plat_child_stop(PlatChild *c);                       // kills the child and frees c
+// Runs the child below every normal-priority process (Windows: the idle priority class; elsewhere nice 19), for work
+// that must not slow the game down (gfx_shader.c, the carry pass).
+void plat_child_lower(PlatChild *c);
 int plat_child_write(PlatChild *c, const void *data, size_t n);   // 1 when all n bytes were written
 #define PLAT_CHILD_READ_MS 120000   // plat_child_read gives up on a child that sends nothing for this long
 long plat_child_read(PlatChild *c, void *buf, size_t cap);        // bytes read (at least 1); 0 or negative: pipe broke or timed out

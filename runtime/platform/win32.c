@@ -1913,6 +1913,10 @@ void plat_child_stop(PlatChild *c) {
     free(c);
 }
 
+void plat_child_lower(PlatChild *c) {
+    if (c) SetPriorityClass(c->proc, IDLE_PRIORITY_CLASS);
+}
+
 int plat_child_write(PlatChild *c, const void *data, size_t n) {
     DWORD put = 0;
     return WriteFile(c->in, data, (DWORD)n, &put, NULL) && put == n;

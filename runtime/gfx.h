@@ -62,8 +62,13 @@ const uint8_t *gfx_shader_input_id(const GfxShader *s);     // the 32-byte input
 // By input id from memory or disk; xlate 1 also translates it from its stored inputs. NULL if absent.
 const GfxShader *gfx_shader_load_input(const uint8_t iid[32], int xlate);
 // Boot prewarm: out[i] = gfx_shader_load_input(iids[i], 1) on `threads` threads with up to `procs` translators, then
-// every other stored input not cached under this translator is translated. Logs progress and the total.
+// every other stored input not cached under this translator is translated (one a previous translator's translation
+// serves is left to gfx_shader_carry_start's pass). Logs progress and the total.
 void gfx_shader_prewarm(const uint8_t (*iids)[32], size_t n, const GfxShader **out, int threads, int procs);
+// After the boot prewarm of a game run (boot.c): when the shader cache holds translations of a previous translator
+// (NX2NAVI_SHADER_CARRY), starts the background pass that translates them again under the current one for the next
+// start and then drops the old ones (gfx_shader.c, "Carry").
+void gfx_shader_carry_start(void);
 // How far the running (or last) gfx_shader_prewarm is: shaders done of total, and how many of them it translated (the
 // rest were cached). Any thread; the numbers lag the workers by at most 100 ms.
 void gfx_shader_prewarm_progress(int64_t *done, int64_t *total, int64_t *translated);

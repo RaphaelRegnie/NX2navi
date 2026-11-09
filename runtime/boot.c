@@ -347,6 +347,9 @@ static void prewarm_main(void *arg) {
         int cpus = (int)plat_cpu_usable();
         gfx_shader_prepare_recorded(cpus, cpus / 2 > 16 ? 16 : cpus / 2 < 1 ? 1 : cpus / 2);
     }
+    // Translations of a previous translator are made again in the background from here on, after the boot's own
+    // translations. Not for a --shot image: which translation a shader gets would then depend on the pass's timing.
+    if (!rt_config()->shot) gfx_shader_carry_start();
     return;
 }
 

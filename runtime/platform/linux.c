@@ -1835,6 +1835,10 @@ void plat_child_stop(PlatChild *c) {
     free(c);
 }
 
+void plat_child_lower(PlatChild *c) {   // a higher nice value needs no privilege
+    if (c) setpriority(PRIO_PROCESS, (id_t)c->pid, 19);
+}
+
 // A child that died makes the write fail with EPIPE; SIGPIPE is ignored for the process (main.c), as Windows has none.
 int plat_child_write(PlatChild *c, const void *data, size_t n) { return write_all(c->in, data, n); }
 

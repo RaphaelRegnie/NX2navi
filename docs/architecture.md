@@ -86,12 +86,21 @@ keeps per-core data without locks and relies on that, so the host models it (`ru
   pinned shader translator (`tools/vendor/ryujinx`, 1.3.2) with our patches (`tools/xlate/patches/`), built with .NET 10 NativeAOT as
   `nx2navi_xlate.exe` and run as separate processes. Translations are cached on disk; shaders and pipelines seen in
   play are prepared at the next boot. The game waits for it (`runtime/boot.c` `boot_wait`): about half a second
-  when warm; after a translator, GPU or driver change a "Preparing shaders" screen shows the progress (`ui/menu.cpp`
+  when warm; after a GPU or driver change, or a translator change with nothing to carry (below), a "Preparing
+  shaders" screen shows the progress (`ui/menu.cpp`
   `menu_boot_frame`). With the graphics pipeline library the boot builds recorded pipelines in record order for at
   most 20 s after the shaders are ready and leaves the rest to the pipeline workers below normal priority; a draw
   that meets one before it is built gets a fast-linked pipeline (`vk_pipeline.c` `PREWARM_PIPE_MS`).
   `NX2NAVI_PREWARM_FULL=1`, and drivers without the library, wait for every pipeline. `NX2NAVI_PREWARM_WAIT_MS` caps
   the whole wait, after which the rest finishes in the background.
+- Translator updates: every cache key names the translator, so a new one has no translations. The cache carries the
+  previous translator's (`NX2NAVI_SHADER_CARRY`, `runtime/gfx_shader.c` "Carry"): `shader-cache/identities.txt`
+  lists the translators it holds translations of, and a shader the new translator has not translated yet uses the
+  previous one's for the whole session, so neither the start nor play waits for a translation the update caused.
+  After the boot prewarm a background pass on its own translator process at idle priority, which waits while the game
+  translates, translates every stored program again for the next start, then deletes the old translations (a pruned
+  copy of `shader-cache.pack` replaces the pack at the next start). A program the new translator refuses keeps its
+  old translation. `--prepare-shaders` still translates everything with the current translator.
 - Mesh and task shaders run as `VK_EXT_mesh_shader`; indirect mesh draws read NVN's `{count, first}` record through a
   ring of Vulkan `{x, y, z}` records filled on the GPU.
 - Pipelines: `VK_EXT_graphics_pipeline_library` where the driver has it: stage libraries compiled ahead, a fast link
