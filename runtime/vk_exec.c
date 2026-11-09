@@ -874,10 +874,12 @@ static void set_rt(VkExec *ex, const p_set_rt *r) {
 // A part also spans at least NX2NAVI_SPLIT_US (1000) of replay time: a split costs about 40 us of the render thread
 // (vkQueueSubmit2, a command buffer, the mirror prologue), and a fight frame of 2,000 draws made 15 parts on the 7900X;
 // a millisecond of recording is a fraction of a millisecond of GPU work, so the GPU still starts early.
-// Neither limit holds the first part of a submission back while the GPU has run everything submitted (NX2NAVI_SPLIT_IDLE,
-// on): it goes at the first pass boundary after a draw or dispatch. Each frame the game's thread waits for the GPU to run
-// the frame's first submission (nvn_api_core.c nvnQueueSubmitCommands, NX2NAVI_SUBMIT_FINISH), so the GPU is idle
-// when the next one replays, and waited for the first 64 draws and 1 ms of it in Kokiri Forest (2026-11-09).
+// With NX2NAVI_SPLIT_IDLE=1, neither limit holds the first part of a submission back while the GPU has run everything
+// submitted: it goes at the first pass boundary after a draw or dispatch. Each frame the game's thread waits for the GPU
+// to run the frame's first submission (nvn_api_core.c nvnQueueSubmitCommands, NX2NAVI_SUBMIT_FINISH), so the GPU is idle
+// when the next one replays, and waited for the first 64 draws and 1 ms of it in Kokiri Forest (2026-11-09). Off by
+// default: with it the foliage of Kokiri Forest flickered (RTX 5090, 2026-11-09), and the parts it cuts that early are
+// the one thing it changes; why they matter is not known yet.
 // Both limits also split inside a pass (NX2NAVI_SPLIT_IN_PASS, on): the pass ends there and the next draw begins it
 // again in the new part, as after a barrier (attachments load and store; occlusion queries continue in a new segment).
 // Kokiri Forest's two scene passes of ~500 draws take 2-4 ms each to replay and most of the frame's GPU time; split only

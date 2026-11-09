@@ -165,16 +165,14 @@
 # only the dynamic states whose values changed since the last pipeline.
 # bind_reuse = 1
 # dyn_delta = 1
-# Submit GPU work in parts every N draws between passes so the GPU starts earlier (0 to 1000; 0 = off), each part at
-# least split_us microseconds long (0 to 20000).
 # Submit GPU work in parts every N draws so the GPU starts earlier (0 to 1000; 0 = off), each part at least split_us
 # microseconds long (0 to 20000). split_in_pass = 1 also splits inside a long pass (it ends there and begins again in the
 # next part); 0 splits between passes only. split_idle = 1 sends a submission's first part at the first pass boundary
-# while the GPU has nothing else to run.
+# while the GPU has nothing else to run; it made the foliage flicker in Kokiri Forest, so it is off by default.
 # split_draws = 64
 # split_us = 1000
 # split_in_pass = 1
-# split_idle = 1
+# split_idle = 0
 
 # Vulkan.
 # Vulkan validation layer: checks every call and slows the game down a lot. Needs the layer installed (Vulkan SDK).

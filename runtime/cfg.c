@@ -215,7 +215,7 @@ static const CfgMeta metas[] = {
     {"BIND_REUSE", "1", "0|1", RESTART}, {"DYN_DELTA", "1", "0|1", RESTART},
     {"DESC_TEMPLATE", "1", "0|1", RESTART},
     {"PUSH_SKIP", "1", "0|1", RESTART}, {"SPLIT_DRAWS", "64", "0..1000", RESTART},
-    {"SPLIT_US", "1000", "0..20000", RESTART}, {"SPLIT_IDLE", "1", "0|1", RESTART}, {"SPLIT_IN_PASS", "1", "0|1", RESTART},
+    {"SPLIT_US", "1000", "0..20000", RESTART}, {"SPLIT_IDLE", "0", "0|1", RESTART}, {"SPLIT_IN_PASS", "1", "0|1", RESTART},
     // Vulkan
     {"VK_VALIDATION", "0", "0|1", RESTART}, {"VK_DYN_VERTEX", "", "0|1", RESTART},
     {"VK_DYN_A2C", "", "0|1", RESTART}, {"VK_SUBGROUP_PIN", "1", "0|1", RESTART},
