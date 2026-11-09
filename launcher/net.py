@@ -194,9 +194,26 @@ def certificate_problem(url, refused, version='dev'):
             'may be replacing the certificate: let NX2navi through it or turn that scanning off, then try again.')
 
 
-def get_bytes(url, headers=None, timeout=30, version='dev', limit=64 << 20):
-    with request(url, headers, timeout, version) as r:
-        data = r.read(limit + 1)
+def get_bytes(url, headers=None, timeout=30, version='dev', limit=64 << 20, retries=3):
+    """The body of a GET of url, at most limit bytes. A cut connection, a timeout or a server error (5xx, 429) is tried
+    again after 1, then 2 seconds, as download's are: one connection reset during Gather Build Tools (the package
+    index read by toolchain.ensure_zbic) ended the install. A refused certificate or another HTTP error is not."""
+    last_error = None
+    for attempt in range(retries):
+        try:
+            with request(url, headers, timeout, version) as r:
+                data = r.read(limit + 1)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 429 and e.code < 500:
+                raise
+            last_error = e
+        except (urllib.error.URLError, OSError, TimeoutError) as e:   # not DownloadError or CertificateError
+            last_error = e
+        if attempt + 1 < retries:
+            time.sleep(min(2 ** attempt, 8))
+    else:
+        raise last_error
     if len(data) > limit:
         raise DownloadError(f'{url}: more than {limit >> 20} MB')
     return data

@@ -485,6 +485,41 @@ class ToolchainTest(Tmp):
 # ---------------------------------------------------------------- net
 
 class NetTest(Tmp):
+    def test_get_bytes_retries_a_cut_connection(self):
+        """A connection reset (WinError 10054 during Gather Build Tools) or a server error is tried again; a 404 is not."""
+        import urllib.error
+        calls = []
+
+        def flaky(url, headers=None, timeout=30, version='dev'):
+            calls.append(url)
+            if len(calls) == 1:
+                raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
+            if len(calls) == 2:
+                raise urllib.error.HTTPError(url, 503, 'busy', {}, None)
+            return io.BytesIO(b'{"ok": 1}')
+
+        with mock.patch.object(net, 'request', flaky), mock.patch.object(net.time, 'sleep') as slept:
+            self.assertEqual(net.get_json('https://example.invalid/x.json'), {'ok': 1})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(slept.call_count, 2)
+
+        def missing(url, headers=None, timeout=30, version='dev'):
+            calls.append(url)
+            raise urllib.error.HTTPError(url, 404, 'not found', {}, None)
+
+        calls.clear()
+        with mock.patch.object(net, 'request', missing), mock.patch.object(net.time, 'sleep'):
+            with self.assertRaises(urllib.error.HTTPError):
+                net.get_bytes('https://example.invalid/missing')
+        self.assertEqual(len(calls), 1)
+
+        def down(url, headers=None, timeout=30, version='dev'):
+            raise ConnectionResetError(10054, 'reset')
+
+        with mock.patch.object(net, 'request', down), mock.patch.object(net.time, 'sleep'):
+            with self.assertRaises(ConnectionResetError):   # every try failed: the last error goes up
+                net.get_bytes('https://example.invalid/down')
+
     def test_download_resume_and_checks(self):
         data = os.urandom(3 * net.CHUNK + 123)
         (self.tmp / 'f.bin').write_bytes(data)
