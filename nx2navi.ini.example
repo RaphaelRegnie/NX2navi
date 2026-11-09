@@ -14,6 +14,8 @@
 # 36 do, while 60 does not. vk_present = immediate shows a frame as soon as it is presented, without this quantisation,
 # at the cost of tearing. A monitor running with variable refresh (FreeSync, G-Sync) follows the frames instead, so
 # there any limit inside its range is even.
+# With frame generation on (framegen, [display]) the limit counts the frames on screen, generated ones included: the
+# game draws the limit divided by the multiplier.
 # fps_limit = 60
 # Where RivaTuner Statistics Server is installed and running, the limit goes into its profile for the game's
 # executable and RTSS does the limiting instead of the game; closing the game puts back what the profile held.
@@ -313,6 +315,19 @@
 # The game's own FXAA after the post effects; with DLAA on it is not needed. Changes while the game runs take effect at
 # once.
 # fxaa = 1
+# Frame generation: off, fsr3 (AMD FSR 3.1 on any GPU: one generated frame between every two the game draws, the HUD
+# kept out of it) or dlss (NVIDIA DLSS Frame Generation on GeForce RTX 40 and 50 GPUs, paced with Reflex; it needs
+# nx2navi_dlssg.dll and NVIDIA Streamline's files next to the executable, which the setup puts there). Both need DLSS or
+# FSR 3.1 upscaling (dlaa = 1). While frame generation runs, fps_limit counts the frames on screen, generated ones
+# included: the game draws the limit divided by the multiplier (2 for fsr3), so set the limit to the display's rate.
+# fsr3 takes effect at once, dlss (on or off) at the next start.
+# framegen = off
+# DLSS frame generation's multiplier: the frames on screen for each frame the game draws, 2, 3 or 4 (one, two or three
+# generated). 2 needs an RTX 40 GPU or newer, 3 and 4 an RTX 50 and a current driver. A value above what the GPU and
+# driver allow (Streamline reports it) is lowered to that, with a line in the log; the menu offers only what they allow.
+# Each step adds a little latency, and on a 60 Hz display 4 leaves the game drawing 15 fps. Changes while the game runs
+# take effect at once.
+# framegen_multiplier = 2
 
 # HDR output: hdr = 1 sends the picture as HDR10 through the HDR tone mapper, hdr = native as the game renders it in
 # its own HDR mode (both need HDR on in Windows, "Use HDR", or a Wayland compositor with colour management; without it

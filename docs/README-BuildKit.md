@@ -108,8 +108,9 @@ beside the game.
   "Preparing shaders" once while the driver rebuilds them. With a driver that has Vulkan's graphics pipeline library
   it lasts at most about 20 seconds once the shaders are translated, and the remaining pipelines are built in the
   background while you play.
-- **Screen** in the menu has Upscaling (DLSS on NVIDIA RTX cards, FSR 3.1 on any card), Frame generation (FSR 3.1; it
-  needs DLSS or FSR 3.1 upscaling on), HDR (the game's picture tone mapped to your display, with its own grading rows, or Native, the game's own HDR; turn HDR on in Windows first) and the
+- **Screen** in the menu has Upscaling (DLSS on NVIDIA RTX cards, FSR 3.1 on any card), Frame generation (NVIDIA DLSS
+  on RTX 40 and 50 cards, with a DLSS multiplier of 2x, or 3x and 4x on RTX 50 cards; FSR 3.1 on any card; it needs
+  DLSS or FSR 3.1 upscaling on, and the frame limit then counts the frames on screen), HDR (the game's picture tone mapped to your display, with its own grading rows, or Native, the game's own HDR; turn HDR on in Windows first) and the
   resolution. Those marked "after restart" take effect when the game starts again.
 - **Controls** in the menu has Button prompts: the game's own, or Xbox, PlayStation or keyboard and mouse ones when
   the build drew them (a kit with `prompt-art`). It takes effect after a restart. The keyboard and mouse prompts show

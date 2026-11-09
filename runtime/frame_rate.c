@@ -52,6 +52,7 @@
 #include "host.h"
 #include "layout.h"
 #include "platform/platform.h"
+#include "vk_dlssg.h"
 #include "vk_fg.h"
 
 #define STEP_SAMPLES 5
@@ -199,6 +200,10 @@ static int movie_cap_hz(void) {
     return hz && ov_movie_live() ? hz : 0;
 }
 
+// Frames on screen per game frame while frame generation runs: 2 with AMD's (vk_fg.cpp, one generated frame), the
+// multiplier with NVIDIA's (vk_dlssg.c, one to three); 1 while neither generates (off, or paused for the menu).
+static int generated_factor(void) { return vk_fg_generating() ? 2 : vk_dlssg_multiplier(); }
+
 // RivaTuner Statistics Server (rtss_limit.c) gets the same limit; while it limits this process the pacer holds no
 // frames, so the two never stack. NX2NAVI_RTSS=0 and frame generation (RTSS would count the generated frames) keep it out.
 uint64_t frame_step_cap_ns(void) {
@@ -208,7 +213,8 @@ uint64_t frame_step_cap_ns(void) {
         const char *e = cfg_get("NX2NAVI_RTSS");
         rtss_allowed = !(e && !strcmp(e, "0"));
     }
-    int rtss = rtss_allowed && !vk_fg_wanted();
+    int rtss = rtss_allowed && !vk_fg_wanted() && !vk_dlssg_active();
+    int gen = generated_factor();
     int movie_hz = movie_cap_hz();
     static int movie_was, movie_logs;
     if (!!movie_hz != movie_was) {
@@ -222,14 +228,15 @@ uint64_t frame_step_cap_ns(void) {
         rtss_limit_want(rtss ? 0 : -1);
         return 0;
     }
-    // unlimited during a movie: the movie's rate, doubled for frame generation's halving below
-    double hz = limit_hz == -2 ? movie_hz * (vk_fg_generating() ? 2 : 1)
+    // unlimited during a movie: the movie's rate, times frame generation's factor for the division below
+    double hz = limit_hz == -2 ? movie_hz * gen
                                : shown_hz(limit_hz ? limit_hz : gfx_window_refresh_hz());
     double max = frame_free_running() ? LIMIT_FREE_MAX_HZ : LIMIT_MAX_HZ;
     if (hz > max) hz = max;
-    // Frame generation presents a generated frame between each two of the game's (vk_fg.cpp): the game is paced at
-    // half the limit then, so the screen shows the limit
-    if (vk_fg_generating()) hz /= 2;
+    // Frame generation presents one to three generated frames between each two of the game's: the game is paced at the
+    // limit over that factor (half, a third, a quarter), so the screen shows the limit. With VSync and the limit at the
+    // display's rate, the generated frames then fill the display's refreshes and none is dropped.
+    if (gen > 1) hz /= gen;
     if (movie_hz && hz > movie_hz) hz = movie_hz;
     rtss_limit_want(rtss ? (int64_t)(hz * 1000 + 0.5) : -1);
     if (rtss_limit_active()) return 0;
