@@ -476,39 +476,54 @@ static void free_views(void *arg) {   // completion thread, once the submission 
 
 // ---- target history
 // The presented frame (gfx_counters.frames + 1; 0: never) each target subresource was last rendered into, and the one
-// before. prepare_draw lets a draw into a target the previous frame did not render (a one-shot draw: a volume or LUT
-// generated once) wait for its shaders and pipeline instead of skipping it. Per subresource, not per image: a volume
-// may be generated a few slices per frame. Direct-mapped: a slot another subresource took reads as not rendered, so a
-// collision makes a draw wait rather than skip.
+// before. prepare_draw lets a draw into a target no recent frame rendered (a one-shot draw: a volume or LUT generated
+// once) wait for its shaders and pipeline instead of skipping it. Per subresource, not per image: a volume may be
+// generated a few slices per frame.
+// Recent means within TFR_RECENT frames, not the frame before alone: the game's output images are a ring of three, its
+// probe and shadow layers are refreshed in turn every second to fourth frame, and the mips of its small effect buffers
+// alternate between images. Sets of TFR_WAYS, the oldest entry replaced: hundreds of subresources are rendered a
+// frame, and in a direct-mapped table of 1024 a fifth of the scene passes and most of the probe layers read as never
+// rendered because another subresource had taken their slot. Each misread made a draw whose pipeline was still
+// building wait for it (ONESHOT_WAIT_MS), so a new area was entered one pipeline at a time.
+#define TFR_SETS 1024
+#define TFR_WAYS 4
+#define TFR_RECENT 4
 typedef struct { VkImage image; uint32_t level, layer; uint64_t last, prev; } TargetFrames;
-static TargetFrames tfr[1024];
+static TargetFrames tfr[TFR_SETS * TFR_WAYS];
 
-static TargetFrames *tfr_slot(const VkExecTarget *t) {
+// The target's entry, or with make the entry it takes (the set's oldest, an empty one first); NULL without make
+// when it has none.
+static TargetFrames *tfr_find(const VkExecTarget *t, int make) {
     uint64_t h = ((uint64_t)(uintptr_t)t->image ^ (uint64_t)t->level << 56 ^ (uint64_t)t->base_layer << 40) *
                  0x9E3779B97F4A7C15ull;
-    return &tfr[h >> 54];
-}
-
-static int tfr_match(const TargetFrames *e, const VkExecTarget *t) {
-    return e->image == t->image && e->level == t->level && e->layer == t->base_layer;
+    TargetFrames *set = &tfr[(h >> 54) * TFR_WAYS], *oldest = set;
+    for (int i = 0; i < TFR_WAYS; i++) {
+        if (set[i].image == t->image && set[i].level == t->level && set[i].layer == t->base_layer) return &set[i];
+        if (set[i].last < oldest->last) oldest = &set[i];
+    }
+    if (!make) return NULL;
+    *oldest = (TargetFrames){t->image, t->level, t->base_layer, 0, 0};
+    return oldest;
 }
 
 static void tfr_note(const VkExecTarget *t, uint64_t stamp) {
-    TargetFrames *e = tfr_slot(t);
-    if (!tfr_match(e, t)) *e = (TargetFrames){t->image, t->level, t->base_layer, 0, 0};
+    TargetFrames *e = tfr_find(t, 1);
     if (e->last != stamp) e->prev = e->last, e->last = stamp;
 }
 
-static int tfr_recent(const VkExecTarget *t, uint64_t stamp) {
-    const TargetFrames *e = tfr_slot(t);
-    return tfr_match(e, t) && (e->last == stamp ? e->prev : e->last) == stamp - 1;
+// The frame before the current one that last rendered the target, 0 for none.
+static uint64_t tfr_before(const VkExecTarget *t, uint64_t stamp) {
+    const TargetFrames *e = tfr_find(t, 0);
+    return !e ? 0 : e->last == stamp ? e->prev : e->last;
 }
 
-// No frame before the current one rendered the target (a slot another subresource took reads the same).
-static int tfr_first(const VkExecTarget *t, uint64_t stamp) {
-    const TargetFrames *e = tfr_slot(t);
-    return !tfr_match(e, t) || !(e->last == stamp ? e->prev : e->last);
+static int tfr_recent(const VkExecTarget *t, uint64_t stamp) {
+    uint64_t before = tfr_before(t, stamp);
+    return before && stamp - before <= TFR_RECENT;
 }
+
+// No frame before the current one rendered the target.
+static int tfr_first(const VkExecTarget *t, uint64_t stamp) { return !tfr_before(t, stamp); }
 
 // With any, a recent depth target alone does not make the pass per-frame when a colour target is rendered for the
 // first time: the game's item icon capture (an inventory icon) draws into a new colour target with the
@@ -537,11 +552,10 @@ void vk_exec_targets_describe(VkExec *ex, char *buf, size_t cap) {
     for (int i = 0; i < 9 && n < cap; i++) {
         const VkExecTarget *t = i < 8 ? &ex->color[i] : &ex->depth;
         if (!t->image) continue;
-        const TargetFrames *e = tfr_slot(t);
-        int m = tfr_match(e, t);
+        const TargetFrames *e = tfr_find(t, 0);
         int w = snprintf(buf + n, cap - n, "%s%c%d fmt %d %ux%u L%u seen %llu/%llu", n ? "; " : "", i < 8 ? 'c' : 'd',
                          i < 8 ? i : 0, (int)t->format, t->width, t->height, t->base_layer,
-                         (unsigned long long)(m ? e->last : 0), (unsigned long long)(m ? e->prev : 0));
+                         (unsigned long long)(e ? e->last : 0), (unsigned long long)(e ? e->prev : 0));
         if (w < 0) break;
         n += (size_t)w;
     }

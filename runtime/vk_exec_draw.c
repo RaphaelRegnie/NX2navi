@@ -58,6 +58,32 @@ static uint32_t oneshot_wait_ms(void) {
     return (uint32_t)ms;
 }
 #define ONESHOT_WAIT_MS oneshot_wait_ms()
+// NX2NAVI_ONESHOT_BUDGET=1: one-shot draws wait for their pipelines from a budget per presented frame instead of up to
+// ONESHOT_WAIT_MS each (oneshot_budget): one budget for passes of ONESHOT_LARGE_PX pixels or more (the scene, its
+// half-resolution buffers, shadow maps) and one for smaller passes (LUTs, icon captures, the smallest bloom levels).
+// After a scene load every pass is new, so every draw of the first frame counts as one-shot, and the frame waited for
+// one cold pipeline after another, 300-1200 ms each: 5-14 s on an RTX 4080 SUPER while the workers sat idle. A draw
+// skipped for the budget comes back next frame, when its pass is recent and its pipeline is built on a worker like any
+// other; a target drawn only once (a LUT baked at load) stays as it was until the game draws it again. Off by default
+// until play shows no target left empty that way.
+#define ONESHOT_LARGE_PX 400000u
+#define ONESHOT_BUDGET_LARGE_NS 100000000ull
+#define ONESHOT_BUDGET_SMALL_NS 300000000ull
+static int oneshot_budget_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        on = rt_knob("ONESHOT_BUDGET", "0") == 1;
+        if (on) rt_log("vk_exec: one-shot draws wait for their pipelines from a per-frame budget (NX2NAVI_ONESHOT_BUDGET=1)");
+    }
+    return on;
+}
+// The wait budget left to this frame's one-shot draws (prepare_draw_ex), by pass size, reset at each presented frame.
+static uint64_t *oneshot_budget(int large) {
+    static uint64_t frame = ~0ull, left[2];
+    uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+    if (f != frame) frame = f, left[0] = ONESHOT_BUDGET_SMALL_NS, left[1] = ONESHOT_BUDGET_LARGE_NS;
+    return &left[large != 0];
+}
 
 enum { W_PROGRAM, W_SHADER, W_PIPELINE, W_NO_VS, W_INDEX, W_UB, W_BIND, W_SSBO_ALIGN, W_SSBO_SLOT, W_RESTART, W_INDIRECT, W_MESH, W_COUNT };
 
@@ -3219,19 +3245,27 @@ static int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int
     int pending;
     // A draw of at most 6 vertices over half the render area or more (a full-screen triangle or quad, a tile) waits for
     // its pipeline: skipping it can leave a black tile. The waits share 50 ms per presented frame
-    // (NX2NAVI_PIPE_SKIP=fullscreen skips them instead). A one-shot draw waits without that budget. Everything else is
-    // skipped while its pipeline is built.
+    // (NX2NAVI_PIPE_SKIP=fullscreen skips them instead). A one-shot draw waits without that budget, up to
+    // ONESHOT_WAIT_MS, or from its own per-frame budget with NX2NAVI_ONESHOT_BUDGET=1 (oneshot_budget). Everything else
+    // is skipped while its pipeline is built.
     static uint64_t wait_frame;
     static uint64_t wait_left_ns;
     uint32_t wait_ms = 0;
     uint64_t t0 = 0;
-    if (oneshot > 0) {
+    uint64_t *budget = NULL;   // the per-frame budget a timed wait is charged to
+    int large = (uint64_t)ex->pass_w * ex->pass_h >= ONESHOT_LARGE_PX;
+    if (oneshot > 0 && oneshot_budget_on()) {
+        budget = oneshot_budget(large);
+        wait_ms = (uint32_t)(*budget / 1000000);
+        if (wait_ms) t0 = kern_now_ns();
+    } else if (oneshot > 0) {
         wait_ms = ONESHOT_WAIT_MS;
     } else if (skip < 2 && count <= 6 && (uint64_t)sc.extent.width * sc.extent.height * 2 >= (uint64_t)ex->pass_w * ex->pass_h) {
         uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
         if (f != wait_frame) wait_frame = f, wait_left_ns = 50000000;
         wait_ms = (uint32_t)(wait_left_ns / 1000000);
         if (wait_ms) t0 = kern_now_ns();
+        budget = &wait_left_ns;
     }
     // The previous draw's pipeline while its state repeats (PM, NX2NAVI_PIPE_MEMO=0 turns it off): the cache key is made
     // from the state alone, and a pipeline once found only changes from its fast link to its optimised build, read
@@ -3245,16 +3279,24 @@ static int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int
     } else {
         w0 = t0 ? t0 : wait_ms ? kern_now_ns() : 0;   // the clock is read only for draws that may wait
         p = vk_pipeline_graphics_async(&s, &info, &pending, wait_ms);
-        if (t0) {
+        if (t0 && budget) {
             uint64_t spent = kern_now_ns() - t0;
-            wait_left_ns = spent < wait_left_ns ? wait_left_ns - spent : 0;
+            *budget = spent < *budget ? *budget - spent : 0;
         }
         why = oneshot > 0 ? "one-shot, shader" : wait_ms ? "full-screen" : NULL;
         if (pending && oneshot < 0 && !vk_exec_targets_recent(ex, skip >= 1)) {
             perf_count(PERF_CNT_ONESHOT_WAIT);
             why = "one-shot";
             if (!w0) w0 = kern_now_ns();
-            p = vk_pipeline_graphics_async(&s, &info, &pending, ONESHOT_WAIT_MS);
+            if (oneshot_budget_on()) {
+                budget = oneshot_budget(large);
+                uint64_t b0 = kern_now_ns();
+                p = vk_pipeline_graphics_async(&s, &info, &pending, (uint32_t)(*budget / 1000000));
+                uint64_t spent = kern_now_ns() - b0;
+                *budget = spent < *budget ? *budget - spent : 0;
+            } else {
+                p = vk_pipeline_graphics_async(&s, &info, &pending, ONESHOT_WAIT_MS);
+            }
         }
         PM.valid = !pending && p && info;
         if (PM.valid) PM.s = s, PM.info = info;

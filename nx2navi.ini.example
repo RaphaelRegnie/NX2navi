@@ -64,14 +64,15 @@
 # Draws whose pipeline is still building: default waits on a reserved worker; draw is the previous scheduling.
 # pipe_wait = default
 # Which draws are dropped instead of waiting for their pipeline: strict (only draws into per-frame passes), any (also
-# draws into passes whose target the previous frame rendered) or fullscreen (those and full-screen draws).
+# draws into passes whose target a recent frame rendered) or fullscreen (those and full-screen draws).
 # pipe_skip = fullscreen
-# How long (ms) a draw into a target the previous frame did not render waits for a pipeline built for the first time,
+# How long (ms) a draw into a target no recent frame rendered waits for a pipeline built for the first time,
 # then is skipped. The default waits, as such a target (a lookup table, a new area's target) can stay empty if
 # skipped; a lower value caps the stall.
 # oneshot_wait_ms = 30000
-# Build shader stage libraries in the background ahead of time, and the threads for it (1 to 16; default: a quarter of
-# the CPU threads).
+# 1: those draws share a wait budget per presented frame instead (100 ms for large passes, 300 ms for small ones); a
+# draw left over is drawn the next frame its target is drawn. Shortens the long first frame of a new area.
+# oneshot_budget = 0
 # Build shader stage libraries in the background ahead of time, and the threads for it (1 to 16; default 2). More
 # threads mostly wait on the graphics driver's lock: 16 on NVIDIA spent about 8 cores spinning in the driver.
 # lib_prebuild = 1
