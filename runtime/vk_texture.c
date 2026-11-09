@@ -707,6 +707,16 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
         e->bytes = own.size;
     }
     e->reusable = e->alloc && gpu_only;
+    // A new image's handle can be one a destroyed image had. Views are purged with the image (destroy_tex), so none
+    // should be cached under it: one that is was made from a destroyed texture's record after its purge, and would
+    // reach this image's memory through the dead one's. Dropped here, and counted in the log.
+    if (!e->reused) {
+        static volatile int32_t n_stale;
+        int stale = vk_exec_image_gone(img);
+        if (stale)
+            log_limited(&n_stale, "new image %#llx had %d cached views of a destroyed image with its handle; dropped",
+                        (unsigned long long)(uintptr_t)img, stale);
+    }
     VkTexImage *p = &e->pub;
     p->image = img;
     p->format = f.vk;
@@ -833,7 +843,12 @@ static void destroy_tex(Tex *e) {
     if (e->pub.image) vk_exec_image_gone(e->pub.image);   // none when another texture took it (create_tex, reuse)
     vk_defer_image(e->pub.image, e->alloc);
     free(e->snap);
-    free(e);
+    // The record goes once the GPU is past the submission being recorded, as its image: the replay keeps &e->pub as a
+    // render target for the rest of a command buffer (vk_exec.c resolve_target) and DLSS for the frame, and this runs on
+    // whichever thread released the texture. Freed here, a pass that began again read the freed record, cached a view of
+    // the dead image (vk_exec_target_view), and a later image given the same handle drew through it into freed memory.
+    e->pub.gone = 1;
+    vk_defer_free(e);
 }
 
 // Released entries with another descriptor at the same address are replaced; past RELEASED_MAX released entries the
