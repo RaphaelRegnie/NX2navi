@@ -85,7 +85,7 @@ void gfx_window_closed(void) {
     rtss_limit_restore();   // RivaTuner Statistics Server's profile as it was
     fs_save_flush();   // last: the game's threads still run until plat_exit, and a Commit after this one is refused
     if (restart) {
-        plat_setenv("NX2NAVI_REEXEC", NULL);   // the new process counts its own address-space retries (memory.c)
+        cfg_setenv("NX2NAVI_REEXEC", NULL);   // the new process counts its own address-space retries (memory.c)
         if (!plat_restart()) rt_log("gfx: the restart could not start the game again");
     }
     plat_exit(0);

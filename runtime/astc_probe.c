@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
 #include "platform/platform.h"
 #include "host.h"
 #include "tex.h"
@@ -560,7 +561,7 @@ static void timing(VkCtx *c, uint32_t bw, uint32_t bh) {
 }
 
 int probe_astc(void) {
-    plat_setenv("NX2NAVI_ASTC_BC", "1");   // also builds the BC3 encoder; the RGBA8 cases pass bc 0 and do not use it
+    cfg_setenv("NX2NAVI_ASTC_BC", "1");   // also builds the BC3 encoder; the RGBA8 cases pass bc 0 and do not use it
     if (!vk_init()) { printf("probe-astc: FAIL vk_init\n"); return 1; }
     VkCtx *c = vk_ctx();
     printf("probe-astc: GPU %s, textureCompressionASTC_LDR %d, mode %d\n", c->props.deviceName, c->has_astc_ldr,

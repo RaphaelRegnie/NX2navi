@@ -203,7 +203,7 @@ static void reexec_or_fail(const char *what) {
     if (n >= REEXEC_LIMIT) rt_fatal("memory: %s is not free after %d attempts", what, n);
     char buf[16];
     snprintf(buf, sizeof buf, "%d", n + 1);
-    plat_setenv("NX2NAVI_REEXEC", buf);
+    cfg_setenv("NX2NAVI_REEXEC", buf);
     plat_reexec();
 }
 

@@ -446,7 +446,9 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
         return NULL;
     }
     // NX2NAVI_ASTC_BC_PROBE (environment; diagnostics only): measure what a data-driven alpha rule would compress
-    if (f.astc_bw && getenv("NX2NAVI_ASTC_BC_PROBE")) astc_probe_alpha(t, &f);
+    static int bc_probe = -1;   // read once: this runs for every texture created
+    if (bc_probe < 0) bc_probe = getenv("NX2NAVI_ASTC_BC_PROBE") != NULL;
+    if (f.astc_bw && bc_probe) astc_probe_alpha(t, &f);
     nvn_texlayout L;
     nvn_tex_layout(d, &L);
     uint32_t w = umax(d->width, 1), h = umax(d->height, 1), depth = 1, layers = 1;

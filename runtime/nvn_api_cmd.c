@@ -998,9 +998,10 @@ NVN_API(nvnCommandBufferSetStencilRef) {
 NVN_API(nvnCommandBufferSetPolygonOffsetClamp) {
     *REC(cmd_of(c), OP_POLY_OFFSET, p_poly_offset) = (p_poly_offset){arg_s(c, 0), arg_s(c, 1), arg_s(c, 2)};
     // NX2NAVI_POLY_OFFSET_LOG: what the game asks for, to tell a decal that relies on the offset from one that does not
-    static int logged;
+    static int logged, on = -1;   // the environment read once: this runs for every offset the game sets
+    if (on < 0) on = getenv("NX2NAVI_POLY_OFFSET_LOG") != NULL;
     float f = (float)arg_s(c, 0), u = (float)arg_s(c, 1), cl = (float)arg_s(c, 2);
-    if (getenv("NX2NAVI_POLY_OFFSET_LOG") && logged < 24 && (f != 0.0f || u != 0.0f)) {
+    if (on && logged < 24 && (f != 0.0f || u != 0.0f)) {
         logged++;
         rt_log("nvn: polygon offset factor %.3f units %.3f clamp %.3f", f, u, cl);
     }

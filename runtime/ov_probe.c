@@ -243,7 +243,7 @@ static char *lang(void) {
     return s;
 }
 
-static void set_env(const char *name, const char *value) { plat_setenv(name, value); }   // NULL removes it
+static void set_env(const char *name, const char *value) { cfg_setenv(name, value); }   // NULL removes it
 
 static void probe_oe(void) {
     char *keep_lang = cfg_get("NX2NAVI_LANG") ? strdup(cfg_get("NX2NAVI_LANG")) : NULL;
@@ -956,9 +956,9 @@ static void probe_main(Cpu *c) {
 static uint32_t run_child(const char *mode, const char *env, char *out, size_t cap) {
     char name[64] = "";
     const char *eq = env ? strchr(env, '=') : NULL;
-    if (eq) snprintf(name, sizeof name, "%.*s", (int)(eq - env), env), plat_setenv(name, eq + 1);
+    if (eq) snprintf(name, sizeof name, "%.*s", (int)(eq - env), env), cfg_setenv(name, eq + 1);
     int code = plat_run_self(CHILD_ENV, mode, out, cap, 0);
-    if (eq) plat_setenv(name, NULL);
+    if (eq) cfg_setenv(name, NULL);
     if (code < 0) rt_fatal("probe-services: cannot start the %s child", mode);
     return (uint32_t)code;
 }

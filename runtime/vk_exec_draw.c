@@ -1764,7 +1764,18 @@ static uint16_t pool_kind_type(int k) {
 }
 
 #define POOL_WBATCH 512
-#define POOL_CREATE_BUDGET 64   // texture entries a pool sync may create (images and uploads), the rest next time
+// Texture entries a pool sync may create (images and uploads), the rest at the next sync (NX2NAVI_POOL_CREATE_BUDGET,
+// default 16). The sync holds the texture lock throughout, and with 64 streaming in new textures made frames of 20-40 ms
+// with the replay and other threads waiting on that lock (24 ms of holds per slow frame in a dense area); 16 brought
+// that to 5 ms with no pop-in a player could see. The slots it leaves keep their stand-in until the next sync.
+static int pool_create_budget(void) {
+    static int n = -1;
+    if (n < 0) {
+        n = cfg_int("NX2NAVI_POOL_CREATE_BUDGET");
+        if (n < 1) n = 1;
+    }
+    return n;
+}
 static VkWriteDescriptorSet pool_w[POOL_WBATCH];
 static VkDescriptorImageInfo pool_ii[POOL_WBATCH];
 static uint32_t pool_nw;
@@ -1994,7 +2005,7 @@ static void pool_sync_entries(VkExec *ex) {
     }
     int retry = 0;   // slots whose texture the creation budget left: filled again by the next sync
     if (fresh || gen != PL.gen || ep != PL.epoch || PL.retry) {
-        vk_texture_create_budget_locked(POOL_CREATE_BUDGET);
+        vk_texture_create_budget_locked(pool_create_budget());
         // Only a slot change since the last sync (no new kinds, no new submission, nothing left over): the slots that
         // changed (vk_texture_dirty_slots_locked), not the whole table
         PoolDirty pd = {ex, used, n, 0};
@@ -3120,7 +3131,8 @@ static int draw_skipped(const VkExec *ex, int mesh, int why) {
 
 // NX2NAVI_SKIP_PROG=<serial>[,<serial>...]: diagnostics. Drops every draw whose program serial is listed, so something
 // on screen can be attributed to one program by elimination: pass the programs of the pass it appears in, then half of
-// them, and so on. Environment only, and nothing is skipped without it.
+// them, and so on. Environment only, and nothing is skipped without it. Read once: a getenv on every draw scanned the
+// whole environment block and was a sixth of the replay thread's samples in a play profile.
 static int skip_prog_list[32], n_skip_prog = -1;
 static int skip_prog_wanted(uint64_t serial) {
     if (n_skip_prog < 0) {
@@ -3157,7 +3169,7 @@ static int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int
     VkRect2D sc = vk_exec_scissor(ex);
     if (!sc.extent.width || !sc.extent.height) return draw_skipped(ex, mesh, SK_SCISSOR);
     if (!ex->prog) return draw_skipped(ex, mesh, SK_NO_PROGRAM);
-    if (getenv("NX2NAVI_SKIP_PROG") && skip_prog_wanted(ex->prog->serial)) return draw_skipped(ex, mesh, SK_DISABLED);
+    if (n_skip_prog && skip_prog_wanted(ex->prog->serial)) return draw_skipped(ex, mesh, SK_DISABLED);   // -1 until read
     int has_vs, has_fs, vs_wait = 0, fs_wait = 0, memo = mesh ? 0 : shader_memo_on();
     int has_ts = 0, ts_wait = 0, vst = mesh ? NVN_STAGE_MESH : NVN_STAGE_VS;
     const GfxShader *vs, *fs, *ts = NULL;

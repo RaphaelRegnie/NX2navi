@@ -66,7 +66,7 @@ static const char *const known[] = {
     "ZSTD_CHECK", "ZSTD_NATIVE",
     "BIND_REUSE", "DYN_DELTA", "STG_ARENA", "SUBMIT_BATCH", "ASTC_GPU_DESWIZZLE", "ASTC_SCRATCH_KEEP", "ASTC_ARENA",
     "TEXUP_LOG_MS", "DYN_RES", "DYN_RES_TARGET", "DYN_RES_STEP",
-    "RECORDER_CORE", "RECORDER_PRIO", "REPLAY_TIME", "LOCK_TIME",
+    "RECORDER_CORE", "RECORDER_PRIO", "REPLAY_TIME", "LOCK_TIME", "POOL_CREATE_BUDGET",
 };
 
 // The nx2navi.ini section a key cfg_set may write goes to when the file lacks it (nx2navi.ini.example's sections).
@@ -105,7 +105,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"DYN_RES", "performance"}, {"DYN_RES_TARGET", "performance"}, {"DYN_RES_STEP", "performance"},
     {"RECORDER_CORE", "performance"}, {"RECORDER_PRIO", "performance"}, {"BIND_REUSE", "performance"},
     {"DYN_DELTA", "performance"}, {"STG_ARENA", "performance"}, {"SUBMIT_BATCH", "performance"},
-    {"ASTC_GPU_DESWIZZLE", "performance"}, {"ASTC_SCRATCH_KEEP", "performance"}, {"ASTC_ARENA", "performance"},
+    {"ASTC_GPU_DESWIZZLE", "performance"}, {"ASTC_SCRATCH_KEEP", "performance"}, {"ASTC_ARENA", "performance"}, {"POOL_CREATE_BUDGET", "performance"},
     {"TIMER_1MS", "performance"}, {"PIPE_WAIT", "performance"}, {"PIPE_SKIP", "performance"},
     {"LIB_PREBUILD", "performance"}, {"LIB_PREBUILD_THREADS", "performance"}, {"PIPE_PREBUILD", "performance"},
     {"PREWARM_XLATE", "performance"}, {"GPL", "performance"}, {"ASTC", "performance"}, {"MEMORY", "performance"},
@@ -190,7 +190,7 @@ static const CfgMeta metas[] = {
     {"DYN_RES", "0", "0|1", LIVE}, {"DYN_RES_TARGET", "16.7", "1..100", LIVE}, {"DYN_RES_STEP", "45", "8..600", LIVE},
     // the recording thread: a core of its own (auto: with 12 or more logical processors) and the highest priority
     // (vk_exec.c vk_exec_record)
-    {"RECORDER_CORE", "auto", "auto|0|1", RESTART}, {"RECORDER_PRIO", "1", "0|1", RESTART}, {"REPLAY_TIME", "0", "0|1", RESTART}, {"LOCK_TIME", "0", "0|1", RESTART},
+    {"RECORDER_CORE", "auto", "auto|0|1", RESTART}, {"RECORDER_PRIO", "1", "0|1", RESTART}, {"REPLAY_TIME", "0", "0|1", RESTART}, {"LOCK_TIME", "0", "0|1", RESTART}, {"POOL_CREATE_BUDGET", "16", "1..4096", RESTART},
     // held submissions handed to the queue together (vk_sync.c, submit batching)
     {"SUBMIT_BATCH", "4", "1..16", RESTART},
     // shaders and pipelines
@@ -286,6 +286,7 @@ static void migrate(void) {
 
 int cfg_load(const char *path) {
     clear();
+    __atomic_add_fetch(&version, 1, __ATOMIC_RELEASE);   // the lookup memo (cfg_memo) forgets the freed strings
     uint64_t size = 0;
     uint8_t *data = plat_file_read(path, &size);
     if (!data) return 0;
@@ -369,7 +370,7 @@ static const char *raw_get(const char *name) {
     return NULL;
 }
 
-const char *cfg_get(const char *name) {
+static const char *cfg_get_now(const char *name) {
     const char *v = raw_get(name);
     if (v || strncmp(name, PREFIX, PREFIX_LEN) || !profile_of()) return v;
     for (size_t i = 0; i < sizeof DECK / sizeof *DECK; i++)
@@ -381,6 +382,12 @@ const char *cfg_get(const char *name) {
 int cfg_is_set(const char *name) { return raw_get(name) != NULL; }
 
 unsigned cfg_version(void) { return __atomic_load_n(&version, __ATOMIC_ACQUIRE); }
+
+int cfg_setenv(const char *name, const char *value) {
+    int ok = plat_setenv(name, value);
+    __atomic_add_fetch(&version, 1, __ATOMIC_RELEASE);
+    return ok;
+}
 
 int cfg_from_env(const char *name) { return getenv(name) != NULL; }
 
@@ -473,13 +480,46 @@ const char *cfg_default(const char *key) {
 
 const CfgMeta *cfg_meta_at(int i) { return i >= 0 && (size_t)i < sizeof metas / sizeof *metas ? &metas[i] : NULL; }
 
-const char *cfg_value(const char *name) {
-    const char *e = cfg_get(name);
+static const char *cfg_value_now(const char *name) {
+    const char *e = cfg_get_now(name);
     if (e && *e) return e;
     const CfgMeta *m = cfg_meta(name);
     if (!m) rt_fatal("cfg: %s has no row in the settings table", name);
     return m->def;
 }
+
+// Lookup memo. cfg_get reads the environment (getenv walks the whole block comparing names) and then the file's
+// entries and the settings table by name, and several per-draw paths ask for live settings: on the replay thread those
+// lookups were about a sixth of the samples in a play profile (ucrtbase's string routines). Each thread keeps the
+// answers it got per name until the settings version changes (cfg_set, cfg_reset, cfg_load); values stay valid that
+// long because a set keeps the old string for readers and a load bumps the version. NX2NAVI_CFG_MEMO=0 (environment
+// only, read once) asks every time.
+#define CFG_MEMO_N 256
+typedef struct { unsigned ver; uint32_t h; uint8_t kind; char name[55]; const char *v; } CfgMemo;
+static _Thread_local CfgMemo cfg_memo[CFG_MEMO_N];
+static int cfg_memo_on = -1;
+
+static const char *cfg_memo_get(const char *name, int kind) {
+    if (cfg_memo_on < 0) {
+        const char *e = getenv(PREFIX "CFG_MEMO");
+        cfg_memo_on = !(e && !strcmp(e, "0"));
+    }
+    size_t len = strlen(name);
+    if (!cfg_memo_on || len >= sizeof cfg_memo[0].name) return kind ? cfg_value_now(name) : cfg_get_now(name);
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) h = (h ^ (uint8_t)name[i]) * 16777619u;
+    h = h * 2 + (uint32_t)kind;
+    CfgMemo *m = &cfg_memo[h % CFG_MEMO_N];
+    unsigned ver = __atomic_load_n(&version, __ATOMIC_ACQUIRE) + 1;   // 0 marks an empty slot
+    if (m->ver == ver && m->h == h && m->kind == kind && !memcmp(m->name, name, len + 1)) return m->v;
+    const char *v = kind ? cfg_value_now(name) : cfg_get_now(name);   // read after ver: a change meanwhile misses next time
+    m->ver = ver, m->h = h, m->kind = (uint8_t)kind, m->v = v;
+    memcpy(m->name, name, len + 1);
+    return v;
+}
+
+const char *cfg_get(const char *name) { return cfg_memo_get(name, 0); }
+const char *cfg_value(const char *name) { return cfg_memo_get(name, 1); }
 
 // The row's default as a number, for a set value that does not parse.
 static double default_number(const char *name) {
