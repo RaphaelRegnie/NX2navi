@@ -765,23 +765,74 @@ static void drop_stale(uint64_t keep, uint64_t *count) {
         }
 }
 
+// NX2NAVI_TEX_EVICT (default on; 0 = only released entries go under VRAM pressure, as before): above the VRAM pressure
+// threshold, once the released entries that come back intact are gone, live entries go too, least recently looked up
+// first: those that come back intact and that no lookup reached for IDLE_SUBMITS submissions and STALE_FRAMES presents
+// (touch: no live descriptor names them). A later lookup creates the image again and uploads it from its storage, as
+// for a texture seen the first time. Up to EVICT_STEP entries per check, until the device-local use is 2% of the budget
+// under the threshold; the next check waits until the GPU is past the submissions that may still name the images, as
+// their memory goes back to the driver only then (vk_defer_image) and the budget would show the old use.
+#define EVICT_STEP 64
+static int tex_evict = -1;
+static uint64_t evict_wait;                       // vk_sync_fence_done value the next eviction waits for
+static uint64_t n_evict, n_evict_bytes;           // since the last perf line
+static int evict_logs;
+
+static void evict_idle(uint64_t want, uint64_t used, uint64_t budget) {   // tex_lock held
+    if (vk_sync_fence_done() < evict_wait) return;
+    Tex *v[EVICT_STEP];
+    int nv = 0;
+    uint64_t now = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+    for (uint32_t i = 0; i < by_key.cap; i++) {   // the EVICT_STEP oldest candidates, oldest first
+        Tex *e = by_key.vals[i];
+        if (!e || e->released || !e->bytes || !comes_back_intact(e) || !idle(e, now)) continue;
+        uint32_t age = submit_epoch - e->use_ep;
+        int at = nv;
+        while (at > 0 && submit_epoch - v[at - 1]->use_ep < age) at--;
+        if (at == EVICT_STEP) continue;
+        if (nv < EVICT_STEP) nv++;
+        memmove(v + at + 1, v + at, sizeof *v * (size_t)(nv - 1 - at));
+        v[at] = e;
+    }
+    uint64_t freed = 0;
+    int n = 0;
+    for (; n < nv && freed < want; n++) freed += v[n]->bytes, destroy_tex(v[n]);
+    if (!n) return;
+    n_evict += (uint64_t)n, n_evict_bytes += freed;
+    evict_wait = vk_sync_issued() + 2;
+    if (evict_logs < 8 || ((rt_trace & RT_TRACE_PERF) && evict_logs < 64)) {
+        evict_logs++;
+        rt_log("vk: VRAM %.0f of %.0f MiB in use: %d idle textures evicted (%.1f MiB), least recently used first; they "
+               "are uploaded again when the game uses them", used / 1048576.0, budget / 1048576.0, n, freed / 1048576.0);
+    }
+}
+
 static void sweep_pressure(void) {   // tex_lock held
     if (vram_pressure < 0) {
         const char *s = cfg_get("NX2NAVI_TEX_VRAM_PRESSURE");
         vram_pressure = s && *s ? atoi(s) : 90;
         if (vram_pressure < 0 || vram_pressure > 100) vram_pressure = 90;
-        rt_log("vk: released textures under VRAM pressure: %s%d%%", vram_pressure ? "dropped above " : "off", vram_pressure);
+        tex_evict = rt_knob("TEX_EVICT", "1");
+        rt_log("vk: textures under VRAM pressure: %s%d%%%s", vram_pressure ? "dropped above " : "off", vram_pressure,
+               !vram_pressure ? "" : tex_evict ? ", released ones first, then idle live ones (NX2NAVI_TEX_EVICT=0: released only)"
+                                               : ", released ones only (NX2NAVI_TEX_EVICT=0)");
     }
-    if (!rel_head || submit_epoch & 7) return;   // the budget and commit queries every 8 submits
+    if (submit_epoch & 7) return;   // the budget and commit queries every 8 submits
     uint64_t used, budget;
     int exact, dropped = 0;
-    if (vram_pressure && vk_mem_vram(&used, &budget, &exact) && used > budget / 100 * (uint64_t)vram_pressure)
+    if (vram_pressure && (rel_head || tex_evict) && vk_mem_vram(&used, &budget, &exact) &&
+        used > budget / 100 * (uint64_t)vram_pressure) {
+        uint64_t freed = 0, over = used - budget / 100 * (uint64_t)vram_pressure + budget / 50;
         for (Tex *e = rel_head, *next; e && dropped < PRESSURE_STEP; e = next) {
             next = e->rel_next;
             if (!comes_back_intact(e)) continue;
+            freed += e->bytes;
             destroy_tex(e);
             dropped++, n_pressure_drops++;
         }
+        if (tex_evict && freed < over) evict_idle(over - freed, used, budget);
+    }
+    if (!rel_head) return;
     uint64_t cap = released_cap_bytes();
     if (rel_bytes > cap) drop_stale(cap, &n_cap_drops);
     if (rel_bytes > COMMIT_LOW_KEEP && commit_is_low()) drop_stale(COMMIT_LOW_KEEP, &n_commit_drops);
@@ -1636,10 +1687,11 @@ void vk_texture_new_submit(void) {
                (unsigned long long)untr);
         n_checks = 0;
         rt_log("perf: frame %llu: released textures kept %d (%.0f MiB of own memory), dropped past the size limit %llu, "
-               "under VRAM pressure %llu, under commit pressure %llu", (unsigned long long)f * 60, nreleased,
-               rel_bytes / 1048576.0, (unsigned long long)n_cap_drops, (unsigned long long)n_pressure_drops,
-               (unsigned long long)n_commit_drops);
-        n_cap_drops = n_pressure_drops = n_commit_drops = 0;
+               "under VRAM pressure %llu, under commit pressure %llu; idle live textures evicted %llu (%.1f MiB)",
+               (unsigned long long)f * 60, nreleased, rel_bytes / 1048576.0, (unsigned long long)n_cap_drops,
+               (unsigned long long)n_pressure_drops, (unsigned long long)n_commit_drops, (unsigned long long)n_evict,
+               n_evict_bytes / 1048576.0);
+        n_cap_drops = n_pressure_drops = n_commit_drops = n_evict = n_evict_bytes = 0;
     }
     unlock();
 }
