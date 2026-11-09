@@ -119,6 +119,9 @@ beside the game.
 - The build copies NVIDIA's DLSS library `nvngx_dlss.dll` (with `nvngx_dlss-NOTICE.txt`, which names its licence)
   and FSR 3.1's `amd_fidelityfx_vk.dll` beside `ocarina.exe` from the kit's `bin\`. To use another DLSS version, put
   your own `nvngx_dlss.dll` there: later builds keep it.
+- A kit with `bin\dlssg\` (made with `tools/make_kit.py --dlssg`) also brings DLSS Frame Generation on GeForce RTX 40
+  and 50 cards: the build copies `nx2navi_dlssg.dll`, NVIDIA Streamline's runtime, `nvngx_dlssg.dll` and their licence
+  texts beside `ocarina.exe`, and Frame generation in the Screen menu then offers DLSS too.
 - Logs are in `logs\`. When reporting a problem, say where you were in the game and which graphics card you have, and
   attach `logs\nx2navi.log`. Never send game files.
 

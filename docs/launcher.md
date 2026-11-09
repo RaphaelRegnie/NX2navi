@@ -268,6 +268,14 @@ game folder is the default `<launcher>\game`. The dump is never touched.
    ship the library; it also asks that a commercial release be announced to NVIDIA first
    (https://developer.nvidia.com/sw-notification) and that the use of DLSS be credited.
 
+   `--dlssg nx2navi_dlssg.dll` (built by `tools/build_dlssg.py`, which needs Visual Studio's C++ compiler) adds DLSS
+   Frame Generation in `bin/dlssg/`: beside it NVIDIA Streamline's runtime (`sl.interposer.dll`, `sl.common.dll`,
+   `sl.dlss_g.dll`, `sl.pcl.dll`, `sl.reflex.dll`) and `nvngx_dlssg.dll`, taken from the Streamline SDK release that
+   `tools/streamline_pin.py` pins. The script downloads that release once (cached in `toolchain/launcher-dl/`), checks
+   the archive's size and sha256 and each file's sha256, and writes `dlssg-NOTICE.txt` with the two licence texts;
+   `make_game.py` copies the whole set beside the game. `--streamline SDK` takes an SDK folder on disk instead (its
+   files must be the pinned ones).
+
    `--prompt-art FOLDER ...` puts the button art in the release (`app/<version>/prompt-art`): folders that hold
    `XGamepad`, `P5Gamepad` and `Keyboard_Mouse` (the Source folders of button prompt art packs), or those three
    folders themselves; a set named itself wins over one found inside a folder named, and the same set twice is
