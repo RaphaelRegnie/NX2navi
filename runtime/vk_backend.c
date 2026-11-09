@@ -224,7 +224,10 @@ static int present_held_on(void) {
 static uint64_t submit_sync(const uint64_t *handles, int n);
 
 // The held work that can go on now, in a submission of its own (vk_exec_record syncs it like any other: held_sync).
+// The present thread first finishes what it was handed: its empty submission replays held work and frees what it
+// replayed (vk_exec_record), which this walk reads. A present ph_flush handed it a moment ago is such a case.
 static int held_resume(void) {
+    vk_present_drain();
     if (!vk_exec_held() || !vk_exec_held_ready()) return 0;
     submit_sync(NULL, 0);
     PH.ran++;
