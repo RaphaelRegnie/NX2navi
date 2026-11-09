@@ -54,6 +54,8 @@ const GfxShader *gfx_shader_await(int stage, const uint8_t *control, const uint8
                                   const GfxShaderAnswers *a);
 uint64_t gfx_shader_async_done(void);                      // translations finished by the background worker
 void gfx_shader_counts(uint64_t *keys, uint64_t *translated);   // distinct keys in memory, translations done (NX2NAVI_TRACE=perf)
+void gfx_shader_disk_counts(uint64_t *sync, uint64_t *sync_ns, uint64_t *bg);   // disk cache reads on the render
+                                                     // thread (count, ns) and by the loaders (gfx_shader.c load_budget)
 // Translator answers for this device (vk_caps.c): shaderFloat64, storage offset rounding, subgroup size per vs/fs/cs.
 void gfx_shader_set_host(int float64, uint32_t sbuf_align, const uint32_t subgroup[3], uint32_t gather_bits, int zero_locals,
                          int bda);

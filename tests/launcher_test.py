@@ -1392,6 +1392,30 @@ class MakeGameTest(Tmp):
         self.assertEqual(sorted(p.name for p in cache.iterdir()), ['shader-cache.pack'])
         self.assertIn('shader cache packed', buf.getvalue())
 
+    def test_carried_update_packs_many_loose_shaders(self):
+        """An update that carries the shaders over packs the cache once it holds PACK_LOOSE_MIN loose translations,
+        and leaves fewer loose."""
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        shutil.copy(ROOT / 'tools' / 'pack_shader_cache.py', kit / 'tools')
+        cache = self.out / 'shader-cache'
+        cache.mkdir(parents=True)
+        for i in range(3):
+            (cache / (f'{i:02x}' * 32 + '.spv')).write_bytes(b'\x03\x02\x23\x07' * 8)
+        for name, value in (('KIT', kit), ('PACK_LOOSE_MIN', 4), ('shader_carry', lambda out: True)):
+            self.addCleanup(setattr, self.mg, name, getattr(self.mg, name))
+            setattr(self.mg, name, value)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.mg.step_shaders(self.out, update=True)
+        self.assertFalse((cache / 'shader-cache.pack').exists())   # 3 loose, under the minimum
+        (cache / ('03' * 32 + '.spv')).write_bytes(b'\x03\x02\x23\x07' * 8)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.mg.step_shaders(self.out, update=True)
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), ['shader-cache.pack'])
+        self.assertIn('stay in use', buf.getvalue())
+        self.assertIn('shader cache packed', buf.getvalue())
+
     def test_romfs_failure_stops_the_build(self):
         ran, lifting, failed = [], threading.Event(), threading.Event()
 

@@ -1363,6 +1363,8 @@ def step_shaders(out, update=False):
             break
     if update and shader_carry(out):
         say('  the shaders prepared before this update stay in use; the game translates them again in the background')
+        if loose_shaders(out) >= PACK_LOOSE_MIN:
+            pack_shader_cache(out)
         return
     cmd = [sys.executable, '-u', str(KIT / 'tools' / 'prepare_shaders.py'), str(out), '--romfs', str(out / 'romfs'),
            '--exefs', str(out / 'exefs'), '--no-list', '--exe', EXE_NAME]
@@ -1413,6 +1415,21 @@ def step_shaders(out, update=False):
     for seed in ('seed-programs.bin', 'seed-answers.bin'):   # translated now: the shader cache holds them
         (out / seed).unlink(missing_ok=True)
     pack_shader_cache(out)
+
+
+# An update that carries the shaders over packs the cache when it has this many loose translations: the game writes
+# each translation it makes in play, and those of its background pass after a translator change (about 42,000), as loose
+# files, and reading one the first time cost 5.6 ms on Windows against a fraction of a millisecond from the pack.
+PACK_LOOSE_MIN = 1000
+
+
+def loose_shaders(out):
+    """The loose translations (<key>.spv) in the game's shader cache."""
+    try:
+        with os.scandir(out / 'shader-cache') as it:
+            return sum(1 for e in it if e.name.endswith('.spv'))
+    except OSError:
+        return 0
 
 
 def pack_shader_cache(out):
