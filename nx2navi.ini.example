@@ -124,6 +124,12 @@
 # With astc = gpu: the compute shader reads the blocks in the game's tiled layout, so the CPU only copies the
 # texture (0 = the CPU untiles the blocks first).
 # astc_gpu_deswizzle = 1
+# With astc = gpu: 1 keeps the decoder's scratch buffer from one upload batch to the next instead of making it again for
+# each, to shorten the hitches when an area loads (0 = one per batch; off until a play test measures it).
+# astc_scratch_keep = 0
+# With astc = gpu: 1 stages a texture's ASTC blocks in the shared staging ranges instead of a buffer of their own
+# (0 = a buffer each; off until a play test measures it).
+# astc_arena = 0
 # Host zstd decoder in place of the game's (0 = the game's), and a check that decodes every call both ways and logs
 # the differences (1 = on; slow).
 # zstd_native = 1
@@ -463,3 +469,7 @@
 # 1: the frame-time summary also splits the replay by op kind (draw, bind, transfer), which says where a stalled frame
 # went. The clock reads cost a fraction of a millisecond a frame, so it is off by default.
 # replay_time = 0
+# A frame whose texture work on the render thread (new textures, uploads, upload submits) takes at least this many ms
+# gets a "texup:" line in the log that splits it: creation, staging, storage copy, ASTC recording, scratch buffers and
+# new device memory (up to 400 lines; 0: none; 16 catches the area-change hitches).
+# texup_log_ms = 0

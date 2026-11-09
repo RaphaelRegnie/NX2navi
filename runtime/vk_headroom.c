@@ -42,7 +42,10 @@ static void VKAPI_PTR on_allocate(VmaAllocator a, uint32_t type, VkDeviceMemory 
         plat_inc64(&H.made);
         return;
     }
-    if (size >= 32ull << 20) plat_inc64(&H.other);
+    if (size >= 32ull << 20) {
+        plat_inc64(&H.other);
+        vk_texstat_add(VK_TS_DEVMEM, 1, size);   // counted when the render or replay thread made it
+    }
     plat_or64(&H.types, (int64_t)(1ull << type));
     plat_event_set(&H.ev);
 }

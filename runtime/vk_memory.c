@@ -2667,6 +2667,7 @@ void *vk_staging(VkDeviceSize size, VkBuffer *buf, VmaAllocation *alloc) {
     VmaAllocation a;
     VkResult r = vmaCreateBuffer(c->vma, &bi, &aci, &b, &a, &info);
     if (r != VK_SUCCESS) rt_fatal("vk: staging buffer of %llu bytes failed (%d)", (unsigned long long)size, (int)r);
+    vk_texstat_add(VK_TS_STG_NEW, 1, bi.size);
     *buf = b;
     if (alloc) *alloc = a;   // the caller destroys it (vmaDestroyBuffer) after vk_upload_flush(1)
     else {
@@ -2704,6 +2705,7 @@ void *vk_staging_at(VkDeviceSize size, VkBuffer *buf, VkDeviceSize *off) {
             if (vmaCreateBuffer(c->vma, &bi, &aci, &k.buf, &k.alloc, &info) != VK_SUCCESS)
                 return vk_staging(size, buf, NULL);
             k.map = info.pMappedData;
+            vk_texstat_add(VK_TS_STG_NEW, 1, ARENA_CHUNK);
             if (arena_made++ < 16) rt_log("vk: staging arena chunk %llu made (%llu MiB)", (unsigned long long)arena_made,
                                           (unsigned long long)(ARENA_CHUNK >> 20));
         }
@@ -2719,6 +2721,7 @@ void *vk_staging_at(VkDeviceSize size, VkBuffer *buf, VkDeviceSize *off) {
 }
 
 uint64_t vk_upload_flush(int wait) {
+    uint64_t f0 = kern_now_ns();
     plat_once(&cmd_once, cmd_init, NULL);
     plat_rmutex_lock(&cmd_lock);
     VkCtx *c = vk_ctx();
@@ -2749,6 +2752,7 @@ uint64_t vk_upload_flush(int wait) {
     }
     if (c) collect_locked(c);
     plat_rmutex_unlock(&cmd_lock);
+    vk_texstat_time(VK_TS_FLUSH, f0);
     return seq;
 }
 

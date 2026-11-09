@@ -25,6 +25,7 @@
 #include "vk.h"
 #include "vk_dlaa.h"
 #include "vk_exec.h"
+#include "prof.h"
 #include "platform/platform.h"
 
 typedef struct {
@@ -892,6 +893,53 @@ static void sweep_pressure(void) {   // tex_lock held
     if (rel_bytes > COMMIT_LOW_KEEP && commit_is_low()) drop_stale(COMMIT_LOW_KEEP, &n_commit_drops);
 }
 
+// ---------------------------------------------------------------- per-frame texture work (vk.h VK_TS_*)
+// Sums for the frame being made, by the render and replay threads (atomics: both may add at once). vk_texstat_frame,
+// called at each present (perf.c ft_frame), takes them; a frame whose texture work (creation, upload and upload flush)
+// reaches NX2NAVI_TEXUP_LOG_MS gets a "texup:" line, so an area change's hitch shows where its time went (default 0:
+// no lines; 16 is a useful value).
+static volatile int64_t ts_ns[VK_TS_N], ts_n[VK_TS_N], ts_bytes[VK_TS_N];
+static int ts_log_ms = -1;
+
+static int ts_thread(void) {
+    uint32_t tid = plat_thread_id();
+    return tid == prof_render_tid || tid == prof_replay_tid;
+}
+
+void vk_texstat_time(int kind, uint64_t t0) {
+    if (!t0 || !ts_thread()) return;
+    plat_add64(&ts_ns[kind], (int64_t)(kern_now_ns() - t0));
+    plat_inc64(&ts_n[kind]);
+}
+
+void vk_texstat_add(int kind, uint64_t n, uint64_t bytes) {
+    if (!ts_thread()) return;
+    plat_add64(&ts_n[kind], (int64_t)n);
+    plat_add64(&ts_bytes[kind], (int64_t)bytes);
+}
+
+void vk_texstat_frame(uint64_t frame, uint64_t d) {
+    if (ts_log_ms < 0) {
+        ts_log_ms = cfg_int("NX2NAVI_TEXUP_LOG_MS");
+        if (ts_log_ms < 0) ts_log_ms = 0;
+    }
+    int64_t ns[VK_TS_N], n[VK_TS_N], b[VK_TS_N];
+    for (int k = 0; k < VK_TS_N; k++)
+        ns[k] = plat_xchg64(&ts_ns[k], 0), n[k] = plat_xchg64(&ts_n[k], 0), b[k] = plat_xchg64(&ts_bytes[k], 0);
+    double work = (ns[VK_TS_CREATE] + ns[VK_TS_UPLOAD] + ns[VK_TS_FLUSH]) / 1e6;
+    static int32_t n_lines;
+    if (!ts_log_ms || work < ts_log_ms || ++n_lines > 400) return;
+    rt_log("texup: frame %llu: %.1f ms frame, texture work %.1f ms; created %lld in %.1f ms; uploads %lld (%.1f MiB) in "
+           "%.1f ms: staging %.1f ms (%lld new buffers, %.1f MiB), storage copy %.1f ms, ASTC record %.1f ms (%lld "
+           "scratch buffers made in %.1f ms); upload flush %lld in %.1f ms; new device memory of 32 MiB or more %lld "
+           "(%.0f MiB)",
+           (unsigned long long)frame, d / 1e6, work, (long long)n[VK_TS_CREATE], ns[VK_TS_CREATE] / 1e6,
+           (long long)n[VK_TS_UPLOAD], b[VK_TS_UPLOAD] / 1048576.0, ns[VK_TS_UPLOAD] / 1e6, ns[VK_TS_STAGE] / 1e6,
+           (long long)n[VK_TS_STG_NEW], b[VK_TS_STG_NEW] / 1048576.0, ns[VK_TS_COPY] / 1e6, ns[VK_TS_ASTC] / 1e6,
+           (long long)n[VK_TS_SCRATCH], ns[VK_TS_SCRATCH] / 1e6, (long long)n[VK_TS_FLUSH], ns[VK_TS_FLUSH] / 1e6,
+           (long long)n[VK_TS_DEVMEM], b[VK_TS_DEVMEM] / 1048576.0);
+}
+
 // ---------------------------------------------------------------- uploads
 static uint32_t texel_alpha_one(int format, uint32_t *elem) {
     switch (format) {
@@ -1017,6 +1065,22 @@ static int astc_bl_regions(const Tex *e, uint32_t levels, uint32_t layers, int b
     return 1;
 }
 
+// NX2NAVI_ASTC_ARENA=1 (default 0 until a play test measured it): the raw ASTC blocks for the GPU decoder stage in a
+// range of the staging arena (vk_staging_at) like the other formats, not in a VkBuffer of their own. vk_astc_record
+// reads its source only through a buffer copy at each region's src, so the range's offset is added to the regions. A
+// buffer per texture cost a vmaCreateBuffer and, after the batch, a vmaDestroyBuffer each; an area load uploads
+// thousands. The check mode keeps its own buffer (astc_check reads the blocks at the regions' src offsets). 0: a buffer
+// per texture.
+static int astc_arena(void) {
+    static int on = -1;
+    if (on < 0) {
+        on = cfg_bool("NX2NAVI_ASTC_ARENA");
+        rt_log("vk: ASTC blocks for the GPU decoder stage in %s (NX2NAVI_ASTC_ARENA=%d)",
+               on ? "the staging arena" : "a buffer per texture", on);
+    }
+    return on;
+}
+
 // Copies the whole storage into the image (every level and layer the image has).
 static void upload(Tex *e) {
     static volatile int32_t n_bad, n_undecoded, n_split;
@@ -1073,10 +1137,14 @@ static void upload(Tex *e) {
         if (gdsw) size = t->L.size;   // the storage as it is (one part: the GPU decoder takes every region at once)
         if (k0) parts++;
         VkCommandBuffer cb = vk_upload_begin();
-        // The CPU path copies from a range of the staging arena (vk_staging_at, its offset added to the regions below);
-        // the GPU decoder binds its source buffer whole, so it keeps a buffer of its own.
+        // The part stages in a range of the staging arena (vk_staging_at, its offset added to the regions below), or in
+        // a buffer of its own at offset 0 when larger than an arena range; the GPU decoder takes one with
+        // NX2NAVI_ASTC_ARENA=0 or in the check mode (astc_arena).
         VkDeviceSize soff = 0;
-        uint8_t *stg = agpu ? vk_staging(size, &sb, NULL) : vk_staging_at(size, &sb, &soff);
+        uint64_t s0 = kern_now_ns();
+        uint8_t *stg = agpu && (acheck || !astc_arena()) ? vk_staging(size, &sb, NULL) : vk_staging_at(size, &sb, &soff);
+        vk_texstat_time(VK_TS_STAGE, s0);
+        uint64_t c0 = kern_now_ns();   // the storage copies and decodes of this part (VK_TS_COPY)
         if (acheck) rmap = vk_staging(decoded, &rbuf, &ralloc);
         // The part's copies out of the storage, with it held mapped (mem_read_hold): the game releases a texture's
         // memory on its own thread, and a decommit in the middle of a copy faulted (tex_bl_copy). Only the copies run
@@ -1137,16 +1205,19 @@ static void upload(Tex *e) {
             free(tmp);
         }
         free(tmps);
+        vk_texstat_time(VK_TS_COPY, c0);
         if (acheck) {
             raw_copy = malloc(size);
             memcpy(raw_copy, stg, size);
         }
         barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         if (agpu) {
+            for (k = 0; k < n; k++) ar[k].src += soff;   // a range of the arena (astc_arena); 0 in a buffer of its own
             uint64_t a0 = perf_begin();
             checked = vk_astc_record(cb, sb, size, ar, (int)n, e->f.astc_bw, e->f.astc_bh, e->f.astc_srgb, e->f.astc_bc,
                                      e->pub.image, e->pub.aspect, rbuf);
             perf_end(PERF_ASTC, a0);
+            vk_texstat_time(VK_TS_ASTC, a0);
             if (!checked)
                 log_limited(&n_undecoded, "ASTC texture %#llx (fmt %#x %ux%u) not decoded on the GPU: left as it was",
                             (unsigned long long)e->pub.addr, d->format, d->width, d->height);
@@ -1190,6 +1261,8 @@ static void upload(Tex *e) {
     e->uploaded = 1;
     e->n_up++;
     perf_end(PERF_TEX, p0);
+    vk_texstat_time(VK_TS_UPLOAD, u0);
+    vk_texstat_add(VK_TS_UPLOAD, 0, t->L.size);
 }
 
 // Whether e's storage fills no 4 KiB page of its own, so the write tracking can only see writes to pages it shares.
@@ -1368,6 +1441,7 @@ static Tex *entry_of(const tex_t *t) {
     Tex *e = nvn_hm_get(&by_key, &k);
     if (!e) {
         if (create_held(&k)) return NULL;
+        uint64_t c0 = kern_now_ns();   // the entry's creation (VK_TS_CREATE): image, memory, first transition
         if (tex_alias < 0) {
             tex_alias = cfg_bool("NX2NAVI_TEX_ALIAS");
             rt_log("vk: texture aliases: %s", tex_alias ? "a new image takes the live image's content" : "a new image starts empty");
@@ -1410,6 +1484,7 @@ static Tex *entry_of(const tex_t *t) {
         nvn_hm_put(&by_key, &k, e);
         n_site[1]++;
         tex_gen_bump(k.addr);
+        vk_texstat_time(VK_TS_CREATE, c0);
     }
     if (e->released) e->released = 0, nreleased--, rel_unlink(e), n_site[2]++, tex_gen_bump(k.addr);
     e->t = *t;

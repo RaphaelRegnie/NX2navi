@@ -436,15 +436,43 @@ static void mem_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 src, VkAccessF
 // The shared scratch and the command buffer it was last recorded into. An upload batch's command buffer is used again
 // only after that batch completed (vk_memory.c: completed batches go to the spare list), so the same handle means the
 // open batch, ordered by a barrier, or a finished one. g_lock held.
-static struct { VkBuffer buf; VmaAllocation alloc; VkDeviceSize size; VkCommandBuffer cb; VkDevice dev; } S;
+static struct { VkBuffer buf; VmaAllocation alloc; VkDeviceSize size; VkCommandBuffer cb; VkDevice dev; uint64_t big_ns; } S;
 static uint64_t n_scratch_new, n_scratch_reuse;
 
-// A scratch of at least need bytes for recording into cb; *reused: earlier work in cb may still use it. 0 on failure.
+// NX2NAVI_ASTC_SCRATCH_KEEP=1 (default 0 until a play test measured it): the scratch outlives its upload batch. Every
+// batch goes to gfx_queue, so the reuse barrier at the start of the next batch's first chunk (vk_astc_record) orders it
+// after the earlier batches' copies and dispatches, as it does between two textures of one batch; it then also waits
+// for their writes (WAW). With
+// a scratch per batch, each submission that uploaded an ASTC texture made a new 64 MiB device buffer and deferred the
+// old one (324 in one Kokiri Forest to Hyrule Field run), and one that found no room in a VMA block allocated a new
+// block on the replay thread during an area load (8-19 ms per block on NVIDIA, vk_headroom.c). A scratch grown past
+// SCRATCH_MIN for a large texture goes back to SCRATCH_MIN once no texture needed more for SCRATCH_SHRINK_NS.
+// 0: a scratch per batch.
+#define SCRATCH_SHRINK_NS 5000000000ull
+static int scratch_keep(void) {
+    static int keep = -1;
+    if (keep < 0) {
+        keep = cfg_bool("NX2NAVI_ASTC_SCRATCH_KEEP");
+        rt_log("vk: ASTC scratch %s (NX2NAVI_ASTC_SCRATCH_KEEP=%d)", keep ? "kept across upload batches" : "made per upload batch",
+               keep);
+    }
+    return keep;
+}
+
+// A scratch of at least need bytes for recording into cb; *reused: earlier work (in cb, or with the keep rule in an
+// earlier batch) may still use it. 0 on failure.
 static VkBuffer scratch_get(VkCtx *c, VkCommandBuffer cb, VkDeviceSize need, int *reused) {
+    int keep = scratch_keep();
     plat_mutex_lock(&g_lock);
-    *reused = S.buf && S.dev == c->device && S.cb == cb && S.size >= need;
+    uint64_t now = kern_now_ns();
+    if (need > SCRATCH_MIN) S.big_ns = now;
+    // with the keep rule, a grown scratch is replaced by a small one after a while without large textures
+    int shrink = keep && S.size > SCRATCH_MIN && now - S.big_ns > SCRATCH_SHRINK_NS;
+    *reused = S.buf && S.dev == c->device && (S.cb == cb || keep) && S.size >= need && !shrink;
     if (!*reused) {
+        uint64_t t0 = now;
         VkDeviceSize size = need < SCRATCH_MIN ? SCRATCH_MIN : need;
+        if (keep && size > SCRATCH_MIN) size = (size + (32ull << 20) - 1) & ~((32ull << 20) - 1);
         VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
                                  .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT};
@@ -459,6 +487,7 @@ static VkBuffer scratch_get(VkCtx *c, VkCommandBuffer cb, VkDeviceSize need, int
         if (S.buf && S.dev == c->device) vk_defer_buffer(S.buf, S.alloc);
         S.buf = b, S.alloc = a, S.size = size, S.dev = c->device;
         n_scratch_new++;
+        vk_texstat_time(VK_TS_SCRATCH, t0);
     } else {
         n_scratch_reuse++;
     }
@@ -578,7 +607,8 @@ int vk_astc_record(VkCommandBuffer cb, VkBuffer src, VkDeviceSize src_size, cons
         vk_crumb(cb, VK_CRUMB_ASTC, ++n_chunks);
         if (chunks || reused)   // the previous chunk's (or texture's) dispatches and copies are done with the scratch
             mem_barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                        VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                            (scratch_keep() ? VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0),
                         VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                         VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         vkCmdCopyBuffer(cb, src, sb, (uint32_t)(i1 - i0), bcp);

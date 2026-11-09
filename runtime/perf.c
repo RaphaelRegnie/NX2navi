@@ -181,6 +181,8 @@ static void ft_report(uint64_t now, const char *tag) {
 }
 
 __attribute__((weak)) void gfx_exit_log(void) {}
+// The renderer's per-frame texture work (vk_texture.c): closes the frame's sums; d is the frame's interval.
+__attribute__((weak)) void vk_texstat_frame(uint64_t frame, uint64_t d) { (void)frame, (void)d; }
 
 void perf_summary_flush(void) {   // at exit (prof_write)
     if (summary_t0) {
@@ -193,6 +195,7 @@ void perf_summary_flush(void) {   // at exit (prof_write)
 // Returns the replay time since the previous present.
 static uint64_t ft_frame(uint64_t frame, uint64_t now, uint64_t d) {
     int64_t rep = plat_xchg64(&frame_replay_ns, 0);
+    vk_texstat_frame(frame, d);
     if (!summary_t0) {   // the first present starts the period; there is no interval yet
         summary_t0 = now;
         ft.t0 = now;

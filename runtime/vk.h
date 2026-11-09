@@ -359,6 +359,16 @@ void *vk_staging(VkDeviceSize size, VkBuffer *buf, VmaAllocation *alloc);
 // between vk_upload_begin and vk_upload_end; a large request gets a buffer of its own at offset 0.
 void *vk_staging_at(VkDeviceSize size, VkBuffer *buf, VkDeviceSize *off);
 uint64_t vk_upload_flush(int wait);
+// Texture work on the render and replay threads, summed per frame (vk_texture.c vk_texstat_frame, the "texup:" line of
+// NX2NAVI_TEXUP_LOG_MS). vk_texstat_time adds the time since t0 (kern_now_ns) and one event; vk_texstat_add adds events
+// and bytes. Other threads are not counted. CREATE: new texture entries (image, memory, first transition); UPLOAD: the
+// whole upload, of which STAGE (staging range or buffer), COPY (storage into staging: copy, untile, CPU decode) and ASTC
+// (vk_astc_record, of which SCRATCH: a new scratch buffer); STG_NEW: staging buffers made by vmaCreateBuffer; DEVMEM: new
+// VkDeviceMemory of 32 MiB or more (VMA blocks, dedicated allocations); FLUSH: vk_upload_flush (submit, retire, frees).
+enum { VK_TS_CREATE, VK_TS_UPLOAD, VK_TS_STAGE, VK_TS_STG_NEW, VK_TS_COPY, VK_TS_ASTC, VK_TS_SCRATCH, VK_TS_DEVMEM,
+       VK_TS_FLUSH, VK_TS_N };
+void vk_texstat_time(int kind, uint64_t t0);
+void vk_texstat_add(int kind, uint64_t n, uint64_t bytes);
 // Deferred destruction: freed once the upload batches recorded so far and the timeline value last noted have completed.
 void vk_defer_image(VkImage img, VmaAllocation alloc);   // alloc NULL: vkDestroyImage only
 void vk_defer_view(VkImageView view);
