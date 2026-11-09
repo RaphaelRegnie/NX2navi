@@ -43,7 +43,7 @@ Rebuild the Game, Settings); settings (update check, Hide Launcher While Playing
 Open Logs Folder, Uninstall, Back); uninstall (keep or remove the built game).
 
 Controls: the mouse (hover moves the cursor, a click selects); the keyboard (arrows, Enter or Space, Esc, F5 checks
-for updates); an XInput gamepad (d-pad or left stick, A, B, Y).
+for updates); an XInput gamepad (d-pad or left stick, A, B, Y) while the window is in front.
 
 `python -m launcher --selftest --shots DIR` draws every screen with made-up states and saves a PNG of each.
 

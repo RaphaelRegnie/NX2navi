@@ -35,6 +35,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -1708,6 +1709,25 @@ def have_display():
 
 
 @unittest.skipUnless(have_display(), 'needs tkinter, numpy and a display')
+class WhilePlayingTest(Tmp):
+    def test_the_games_restart_does_not_bring_the_launcher_back(self):
+        try:
+            from launcher.ui.app import App
+        except ImportError as e:
+            self.skipTest(f'no window toolkit: {e}')
+        a = mock.MagicMock()
+        a.settings = {'game_dir': str(self.tmp)}
+        a.game_proc = mock.MagicMock(returncode=0)
+        a.game_proc.poll.return_value = 0                              # the process started here has ended
+        with mock.patch('launcher.ui.app.saves.game_running', return_value=True):
+            App.watch_game(a)                                          # but the restarted game runs from the same exe
+        a.root.deiconify.assert_not_called()
+        a.root.after.assert_called_once()
+        with mock.patch('launcher.ui.app.saves.game_running', return_value=False):
+            App.watch_game(a)
+        a.root.deiconify.assert_called_once()
+
+
 class WindowTest(Tmp):
     def test_selftest(self):
         r = subprocess.run([sys.executable, '-m', 'launcher', '--root', str(self.tmp / 'w'), '--selftest'],

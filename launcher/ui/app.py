@@ -809,7 +809,9 @@ class App:
         self.root.after(1000, self.watch_game)
 
     def watch_game(self):
-        if self.game_proc and self.game_proc.poll() is None:
+        # The game's own Restart ends the process started here and starts another (gfx_present.c gfx_window_closed)
+        gd = self.settings.get('game_dir')
+        if (self.game_proc and self.game_proc.poll() is None) or (gd and saves.game_running(gd)):
             self.root.after(1000, self.watch_game)
             return
         code = self.game_proc.returncode if self.game_proc else 0
