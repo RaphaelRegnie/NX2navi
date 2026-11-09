@@ -320,6 +320,24 @@ static void free_capture(void) {
     g_cap_valid = 0;
 }
 
+// Destroys g_sc (when there is one: the frame generation paths destroy theirs themselves) with its image views and its
+// images' render-done semaphores; the caller holds the queue lock and the device is idle. The swapchain goes before
+// the semaphores: a present it still holds may wait on one of them.
+static void drop_swapchain_locked(VkCtx *c) {
+    for (uint32_t i = 0; i < g_sc_n; i++) {
+        if (g_sc_view[i]) vkDestroyImageView(c->device, g_sc_view[i], NULL);
+        g_sc_view[i] = VK_NULL_HANDLE;
+    }
+    if (g_sc && vk_dlssg_active()) vk_dlssg_destroy_swapchain(c->device, g_sc);
+    else if (g_sc) vkDestroySwapchainKHR(c->device, g_sc, NULL);
+    for (uint32_t i = 0; i < g_sc_n; i++) {
+        if (g_render_done[i]) vkDestroySemaphore(c->device, g_render_done[i], NULL);
+        g_render_done[i] = VK_NULL_HANDLE;
+    }
+    g_sc = VK_NULL_HANDLE;
+    g_sc_n = 0;
+}
+
 // Returns 1 with a usable swapchain, 0 when the window has no area (minimised) or the create failed, which leaves
 // g_dirty set so the next present tries again. Called with g_pl held. g_dirty is cleared before the window's size is
 // read: a resize that arrives while the swapchain is being made (AMD's frame generation swapchain takes tens of ms)
@@ -385,6 +403,7 @@ static int create_swapchain(void) {
             static volatile int32_t n_fail;
             if (plat_inc32(&n_fail) <= 5) rt_log("gfx: frame generation swapchain %ux%u failed (%d); trying again", ext.width, ext.height, (int)r);
             g_sc = VK_NULL_HANDLE;
+            drop_swapchain_locked(c);   // the old swapchain's views and semaphores
             vk_queue_unlock();
             plat_xchg32(&g_dirty, 1);
             return 0;
@@ -393,19 +412,21 @@ static int create_swapchain(void) {
     if (r != VK_SUCCESS && vk_dlssg_active()) r = vk_dlssg_create_swapchain(c->device, &ci, &g_sc);   // Streamline's hook
     else if (r != VK_SUCCESS) r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
     if (r != VK_SUCCESS) {
-        rt_log("gfx: vkCreateSwapchainKHR failed (%d)", (int)r);
-        g_sc = old;
+        static volatile int32_t n_failed;
+        int32_t nf_log = plat_inc32(&n_failed);
+        if (nf_log <= 8 || !(nf_log & 1023)) rt_log("gfx: vkCreateSwapchainKHR %ux%u failed (%d), %d times", ext.width, ext.height, (int)r, nf_log);
+        // A create with oldSwapchain retires the old swapchain even when it fails: it can no longer acquire or be an
+        // oldSwapchain again. It goes now (the device is idle), and the next present creates one from nothing.
+        g_sc = old;   // NULL when a frame generation path destroyed it already: its views and semaphores still go
+        drop_swapchain_locked(c);
         vk_queue_unlock();
         plat_xchg32(&g_dirty, 1);
         return 0;
     }
-    for (uint32_t i = 0; i < g_sc_n; i++) {
-        vkDestroySemaphore(c->device, g_render_done[i], NULL);
-        if (g_sc_view[i]) vkDestroyImageView(c->device, g_sc_view[i], NULL);
-        g_sc_view[i] = VK_NULL_HANDLE;
-    }
-    if (old && vk_dlssg_active()) vk_dlssg_destroy_swapchain(c->device, old);
-    else if (old) vkDestroySwapchainKHR(c->device, old, NULL);
+    VkSwapchainKHR made = g_sc;
+    g_sc = old;   // as above: NULL when a frame generation path destroyed it
+    drop_swapchain_locked(c);
+    g_sc = made;
     g_sc_fmt = sf.format;
     g_sc_hdr = hdr;
     vk_hdr_set_active(hdr);
