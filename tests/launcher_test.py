@@ -439,6 +439,27 @@ class NetTest(Tmp):
         with self.assertRaises(net.DownloadError):
             net.download(srv.url + 'missing.bin', self.tmp / 'out' / 'm.bin')
 
+    def test_plain_http_redirects_and_oversize(self):
+        with self.assertRaises(net.DownloadError):                        # refused before any connection
+            net.request('http://example.invalid/f.bin')
+        (self.tmp / 'f.bin').write_bytes(b'0123456789')
+        routes = {}
+        srv = Server(self.tmp, routes)
+        self.addCleanup(srv.close)
+        other = srv.url.replace('127.0.0.1', 'localhost')                 # the same server under another host name
+        routes['/same'] = (302, {'Location': srv.url + 'f.bin'}, b'')
+        routes['/away'] = (302, {'Location': other + 'f.bin'}, b'')
+        token = {'Authorization': 'Bearer secret'}
+        self.assertEqual(net.get_bytes(srv.url + 'same', token), b'0123456789')
+        self.assertEqual(srv.hits[-1][1].get('Authorization'), 'Bearer secret')
+        self.assertEqual(net.get_bytes(srv.url + 'away', token), b'0123456789')
+        self.assertEqual(srv.hits[-2][1].get('Authorization'), 'Bearer secret')
+        self.assertIsNone(srv.hits[-1][1].get('Authorization'))           # not sent on to another host
+        dest = self.tmp / 'out' / 'o.bin'
+        with self.assertRaises(net.DownloadError):                        # more than the expected size
+            net.download(srv.url + 'f.bin', dest, size=4)
+        self.assertFalse(dest.exists() or dest.with_name('o.bin.part').exists())
+
     def test_server_clock(self):
         srv = Server(self.tmp)
         self.addCleanup(srv.close)
@@ -536,6 +557,16 @@ def manifest_for(z, ver):
 
 
 class FeedTest(Tmp):
+    def test_asset_needs_a_plain_name_size_and_sha256(self):
+        good = {'name': 'a.zip', 'size': 10, 'sha256': '0' * 64}
+        r = feed.Release({'format': 1, 'version': '1.0.0', 'app': good}, assets={'a.zip': 'https://x/a.zip'})
+        self.assertEqual(r.asset('app')[2:], (10, '0' * 64))
+        for bad in ({'name': 'a.zip'}, dict(good, sha256='x'), dict(good, size=0), dict(good, size='10'),
+                    dict(good, name='../a.zip'), dict(good, name='C:a.zip'), dict(good, name='sub\\a.zip')):
+            r = feed.Release({'format': 1, 'version': '1.0.0', 'app': bad}, assets={bad['name']: 'https://x/a'})
+            with self.assertRaises(feed.FeedError, msg=repr(bad)):
+                r.asset('app')
+
     def serve_github(self):
         self.routes = {}
         srv = Server(self.tmp, self.routes)

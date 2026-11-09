@@ -102,7 +102,9 @@ A release carries `NX2navi-update.json` (version, notes, and the size and sha256
 Preview channel) that has the manifest. A private repository answers only with a token (`github_token` in
 `data/launcher.json`); players need a public one. `feed_repo` in `data/launcher.json` points one launcher at another
 repository for testing; `{"type": "url", "url": ".../NX2navi-update.json"}` in feed.json reads one manifest
-directly.
+directly. Every address is https (plain http only to this PC), a redirect to http is refused, and the token is not
+sent on when a redirect leaves the host it was meant for (`launcher/net.py`). A manifest that does not give a file's
+size and sha256 is refused.
 
 `jobs.UpdateDownloadJob`, before the restart (`launcher/updater.py`):
 
