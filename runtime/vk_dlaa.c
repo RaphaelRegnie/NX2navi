@@ -120,6 +120,13 @@ int vk_dlaa_wanted(void) {
 static int fsr3(void) { return !N.ngx_up && !strcmp(cfg_value("NX2NAVI_TAA"), "fsr3"); }
 int vk_dlaa_fsr3(void) { return vk_dlaa_wanted() && fsr3(); }
 
+// The upscaler the menu has set cannot start in this run: DLSS when NGX was never tried (a device made without its
+// extensions), FSR 3.1 while NGX is up and serves the run. A DLSS this PC could not bring up is not waiting for a restart.
+int vk_dlaa_needs_restart(void) {
+    if (!cfg_bool("NX2NAVI_DLAA")) return 0;
+    return strcmp(cfg_value("NX2NAVI_TAA"), "fsr3") ? !N.ngx_up && !N.tried : N.ngx_up;
+}
+
 static int core_load(void) {
     if (N.tried) return N.loaded;
     N.tried = 1;

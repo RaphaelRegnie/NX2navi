@@ -275,7 +275,7 @@ static void scene_boot(float w, float h, float scale, ImFont *title) {
     char step[160];
     snprintf(step, sizeof step, ui_text(UI_BOOT_PIPELINES), 1603LL, 3235LL);
     skin_boot_panel(ImGui::GetForegroundDrawList(), title, title->FontSize, ImGui::GetFont(), ImGui::GetFontSize(),
-                    ui_text(UI_BOOT_TITLE), step, ui_text(UI_BOOT_HINT), 1603.0f / 3235.0f, 0, w, h, scale);
+                    ui_text(UI_BOOT_TITLE), step, 1603.0f / 3235.0f, 0, w, h, scale);
 }
 
 // ---- the rasteriser: every triangle of the draw lists, its colour times the font atlas, blended over the image

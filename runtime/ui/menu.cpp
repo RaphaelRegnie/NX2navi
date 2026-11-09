@@ -62,6 +62,8 @@ int wide_available(void);
 const char *const *vk_color_preset(const char *name);
 int vk_hdr_wanted(void);
 int vk_hdr_active(void);
+int vk_dlaa_needs_restart(void);
+int vk_dlssg_wanted(void);
 double frame_step_limit_hz(void);
 int frame_limit_adjustable(void);
 int rtss_limit_state(void);
@@ -828,10 +830,9 @@ static void row_upscaling(void) {
     int cur = 0;
     for (int i = 0; i < n; i++)
         if (list[i].kind == now.kind && list[i].mode == now.mode) cur = i;
-    bool temporal = now.kind >= DLSS;
     int nv = opt_choice_index("NX2NAVI_UPSCALER", UI_MENU_UPSCALING, names, n, cur, 1,
                               dlss ? UI_MENU_UPSCALING_DESC : UI_MENU_UPSCALING_DESC_FSR,
-                              temporal && dlss ? menu_text(UI_MENU_UPSCALING_DLSS_NOTE) : nullptr);
+                              dlss && vk_dlaa_needs_restart() ? menu_text(UI_MENU_AFTER_RESTART) : nullptr);
     if (nv < 0 || nv >= n) return;
     const Entry e = list[nv];
     opt_apply("NX2NAVI_UPSCALER", e.kind == FSR1 ? "fsr" : "bilinear");
@@ -842,10 +843,9 @@ static void row_upscaling(void) {
 }
 
 // "in use: off" under the HDR value when the game started with HDR on but the swapchain is not HDR10 (the display or
-// Windows' HDR switch is off, vk_hdr_surface_format); else the restart note.
+// Windows' HDR switch is off, vk_hdr_surface_format). The row's "after restart" comes from the setting itself (cfg.c).
 static const char *hdr_note(void) {
-    const char *restart = menu_text(UI_MENU_HDR_NOTE);
-    if (!vk_hdr_wanted() || vk_hdr_active() || !*gfx_window_present_mode() || !cfg_bool("NX2NAVI_HDR")) return restart;
+    if (!vk_hdr_wanted() || vk_hdr_active() || !*gfx_window_present_mode() || !cfg_bool("NX2NAVI_HDR")) return nullptr;
     static char note[96];
     snprintf(note, sizeof note, menu_text(UI_MENU_PRESENT_IN_USE), menu_text(UI_MENU_FRAMEGEN_OFF));
     return note;
@@ -877,9 +877,11 @@ static void row_framegen(void) {
     // NVIDIA DLSS (vk_dlssg.c, through Streamline and nx2navi_dlssg.dll) is listed on NVIDIA GPUs now that Reflex paces it
     // from the frame's start and generated frames are presented; elsewhere only while it is set
     int n = dlss || cur == 2 ? 3 : 2;
+    // AMD's follows the setting; NVIDIA's is set up with the device, so only a change to or from it waits for a restart
+    const bool restart = dlss && (cur == 2) != (vk_dlssg_wanted() != 0);
     int nv = opt_choice_index("NX2NAVI_FRAMEGEN", UI_MENU_FRAMEGEN, names, n, cur, 0,
                               dlss ? UI_MENU_FRAMEGEN_DESC : UI_MENU_FRAMEGEN_DESC_FSR,
-                              menu_text(dlss ? UI_MENU_FRAMEGEN_NOTE : UI_MENU_FRAMEGEN_NOTE_FSR));
+                              menu_text(restart ? UI_MENU_AFTER_RESTART : dlss ? UI_MENU_FRAMEGEN_NOTE : UI_MENU_FRAMEGEN_NOTE_FSR));
     if (nv >= 0 && nv < n) opt_apply("NX2NAVI_FRAMEGEN", values[nv]);
 }
 
@@ -1516,8 +1518,8 @@ extern "C" void menu_boot_set(int phase, long long done, long long total) {
     g_boot_phase.store(phase, std::memory_order_release);
 }
 
-// A box in the middle of the screen in the menu's look (ui/menu_skin.cpp skin_boot_panel): the title, the step with its
-// count and a bar, and why it happens. The input queue is left alone: keys pressed now reach the menu once the game runs.
+// A box in the middle of the screen in the menu's look (ui/menu_skin.cpp skin_boot_panel): the title and the step with
+// its count and a bar. The input queue is left alone: keys pressed now reach the menu once the game runs.
 extern "C" int menu_boot_frame(const MenuTarget *t) {
     if (g_failed_flag() || g_boot_phase.load(std::memory_order_acquire) < 0) return 0;   // -1: done, a black frame
     if (!g_ctx_ok) make_context();
@@ -1550,7 +1552,7 @@ extern "C" int menu_boot_frame(const MenuTarget *t) {
         snprintf(step, sizeof step, ui_text(phase == 1 ? UI_BOOT_SHADERS : UI_BOOT_PIPELINES), done, total);
     else
         snprintf(step, sizeof step, "%s", ui_text(UI_BOOT_STARTING));
-    const char *title = ui_text(UI_BOOT_TITLE), *hint = ui_text(UI_BOOT_HINT);
+    const char *title = ui_text(UI_BOOT_TITLE);
 
     // the box in the menu's look (ui/menu_skin.cpp): a filled bar while there is a count, else a sweeping segment
     ImFont *body = ImGui::GetFont();
@@ -1560,7 +1562,7 @@ extern "C" int menu_boot_frame(const MenuTarget *t) {
     float frac = -1;
     if ((phase == 1 || phase == 2) && total > 0) frac = done <= 0 ? 0 : done >= total ? 1 : (float)done / (float)total;
     float s = (float)fmod((now - g_boot_t0) / 1e9 * 0.8, 2.0);
-    skin_boot_panel(ImGui::GetForegroundDrawList(), head, head_px, body, body_px, title, step, hint, frac, s < 1 ? s : 2 - s,
+    skin_boot_panel(ImGui::GetForegroundDrawList(), head, head_px, body, body_px, title, step, frac, s < 1 ? s : 2 - s,
                     (float)t->width, (float)t->height, scale);
     ImGui::Render();
     return ImGui::GetDrawData()->TotalVtxCount > 0;

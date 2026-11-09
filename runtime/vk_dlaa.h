@@ -9,6 +9,7 @@
 
 int vk_dlaa_wanted(void);   // the setting is on (the device may still lack DLSS)
 int vk_dlaa_fsr3(void);
+int vk_dlaa_needs_restart(void);   // the menu's upscaler cannot start in this run
 // Frame generation (vk_fg.cpp): the depth and motion vectors of the frame DLSS or FSR 3.1 last ran on, with its jitter
 // and whether its history reset; 1 once per evaluation (0: none since the last call). The images stay valid until the
 // next frame's scene draws over them, after this present.

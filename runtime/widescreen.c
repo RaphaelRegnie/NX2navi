@@ -79,10 +79,9 @@ static unsigned picture_height(void) {
 // picks. The share is written to +240 at every change of the setting (the menu switches the mode live); the set goes on
 // RES_FIXED_AFTER presents after the first, once the controller has filled the fields the fixed path keeps.
 #define RES_FIXED_AFTER 120
-// The share follows the upscaler that runs, not the setting: DLSS and FSR 3.1 start only after a restart
-// (vk_dlaa_wanted is read once) and DLSS only where NGX came up (vk_dlaa_available), so a mode picked in the menu, or one
-// this PC cannot run, no longer shrinks the scene with nothing to scale it back up. A mode change while one runs still
-// applies at once.
+// The share follows the upscaler that runs, not the setting: DLSS starts only after a restart and only where NGX came up
+// (vk_dlaa_available), so a mode picked in the menu, or one this PC cannot run, no longer shrinks the scene with nothing
+// to scale it back up. FSR 3.1 and a mode change while one runs apply at once.
 // dlaa switched off in the menu stops DLSS at once (vk_dlaa.c vk_dlaa_frame reads it each frame), so the share follows
 // the setting too: the scene goes back to the game's own scale instead of staying small with nothing to enlarge it.
 static double dlss_share(void) {
