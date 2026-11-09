@@ -1412,6 +1412,27 @@ def step_shaders(out, update=False):
              'meets them. Run the build again to retry this step')
     for seed in ('seed-programs.bin', 'seed-answers.bin'):   # translated now: the shader cache holds them
         (out / seed).unlink(missing_ok=True)
+    pack_shader_cache(out)
+
+
+def pack_shader_cache(out):
+    """The prepared shader cache folded into shader-cache/shader-cache.pack (tools/pack_shader_cache.py): the
+    preparation leaves four files per shader, about 175,000 for the whole game, which the game looks up one by one at
+    every start (gfx_shader.c gfx_shader_prewarm, the use masks read after it) and which are slow to scan, copy and
+    back up. The game reads the pack first and the loose files after it, so a cache left unpacked still works: a
+    failure here is said and the build goes on."""
+    tool = KIT / 'tools' / 'pack_shader_cache.py'
+    if not tool.is_file() or not (out / 'shader-cache').is_dir():
+        return
+    t0 = time.monotonic()
+    r = subprocess.run([sys.executable, '-u', str(tool), str(out / 'shader-cache')], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+    for line in r.stdout.splitlines():
+        say('  ' + line)
+    if r.returncode:
+        say(f'  packing the shader cache failed (code {r.returncode}); the game reads the loose files instead')
+    else:
+        say(f'  shader cache packed in {time.monotonic() - t0:.0f} s')
 
 
 def prompt_art_dir():

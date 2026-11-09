@@ -1368,6 +1368,29 @@ class MakeGameTest(Tmp):
         self.assertTrue(any(d.startswith('Built 10 of 100') and 'still running' in d for d in details))
         self.assertEqual([e['fraction'] for e in events if e['detail'] == 'Translated 50 of 100 shaders'][0], 0.25)
 
+    def test_shaders_step_packs_the_cache(self):
+        """After the preparation the shaders step folds the loose files of the shader cache into shader-cache.pack
+        (tools/pack_shader_cache.py), as the installer did; a kit without the tool leaves the cache as it is."""
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        (kit / 'tools' / 'prepare_shaders.py').write_text('print("prepare-shaders: progress build 1 1", flush=True)\n')
+        cache = self.out / 'shader-cache'
+        (cache / 'in').mkdir(parents=True)
+        (cache / ('ab' * 32 + '.spv')).write_bytes(b'\x03\x02\x23\x07' * 8)
+        (cache / 'in' / ('cd' * 32 + '.in')).write_bytes(b'TKSI' * 4)
+        self.addCleanup(setattr, self.mg, 'KIT', self.mg.KIT)
+        self.mg.KIT = kit
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.mg.step_shaders(self.out)
+        self.assertFalse((cache / 'shader-cache.pack').exists())   # no tool in the kit
+        shutil.copy(ROOT / 'tools' / 'pack_shader_cache.py', kit / 'tools')
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.mg.step_shaders(self.out)
+        self.assertTrue((cache / 'shader-cache.pack').is_file())
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), ['shader-cache.pack'])
+        self.assertIn('shader cache packed', buf.getvalue())
+
     def test_romfs_failure_stops_the_build(self):
         ran, lifting, failed = [], threading.Event(), threading.Event()
 
