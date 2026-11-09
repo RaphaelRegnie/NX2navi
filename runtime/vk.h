@@ -37,7 +37,8 @@ typedef struct VkCtx {
         has_astc_ldr,                       // textureCompressionASTC_LDR (enabled when reported)
         has_calibrated,                     // VK_KHR/EXT_calibrated_timestamps (GPU idle split in the perf line)
         has_hdr_metadata,                   // VK_EXT_hdr_metadata (vk_hdr.c vk_hdr_metadata)
-        has_mesh_shader, has_mesh_queries, has_vrs;                    // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
+        has_mesh_shader, has_mesh_queries, has_vrs,   // VK_EXT_mesh_shader with taskShader and meshShader (NVN2 task/mesh stages)
+        has_maximal_reconvergence;          // VK_KHR_shader_maximal_reconvergence (vk_pipeline.c spirv_reconverge)
     // Feedback loops (maxwell.md 1.9, vk_exec_draw.c feedback_prepare): a draw samples a target of its open pass that
     // an earlier draw of the pass wrote. NX2NAVI_FEEDBACK=0: VK_FEEDBACK_OFF (sampled in GENERAL without a barrier, the
     // old behaviour); VK_FEEDBACK_LAYOUT with VK_EXT_attachment_feedback_loop_layout and dynamicRenderingLocalRead

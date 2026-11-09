@@ -234,6 +234,7 @@ typedef struct {
     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR lr;
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh;
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR vrs;
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR mrc;
 } FeatureChain;
 
 static int create_device(void) {
@@ -272,6 +273,10 @@ static int create_device(void) {
     OPTIONAL_EXT(has_mesh_shader, VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT);
     // The foliage's far shadow cascades shade one fragment per 2x2 pixels (vk_exec_draw.c mesh_shading_rate)
     OPTIONAL_EXT(has_vrs, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, vrs, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR);
+    // Guest shaders that use warp-wide operations after divergent code run with their threads reconverged
+    // (vk_pipeline.c spirv_reconverge)
+    OPTIONAL_EXT(has_maximal_reconvergence, VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME, mrc,
+                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
     // Feedback loops (vk.h VkCtx.feedback): the layout, and barriers inside dynamic rendering
     int has_fbl = 0, has_lr = 0;
     if (has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME) &&
@@ -365,6 +370,7 @@ static int create_device(void) {
         if (!c->mesh.meshShader || !c->mesh.taskShader) g_vk.has_mesh_shader = 0;
         rt_log("vk: mesh shaders: %s", g_vk.has_mesh_shader ? "VK_EXT_mesh_shader" : "not supported (task/mesh draws are skipped)");
     }   // vkGetDeviceFaultInfoEXT needs the feature, not just the extension
+    if (g_vk.has_maximal_reconvergence && !c->mrc.shaderMaximalReconvergence) g_vk.has_maximal_reconvergence = 0;
     g_vk.has_buffer_device_address = c->f12.bufferDeviceAddress;
     g_vk.has_astc_ldr = h->textureCompressionASTC_LDR;
     {

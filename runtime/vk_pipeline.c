@@ -79,6 +79,7 @@ static struct {
     int cache_control;                 // pipelineCreationCacheControl: a create can ask for the pipeline caches only
     int pv_last;                       // provokingVertexLast enabled: NVN's default is the last vertex
     VkShaderStageFlags sg32_stages;    // stages that accept requiredSubgroupSize = 32 (0: not available)
+    int reconverge;                    // modules with subgroup ops get MaximallyReconvergesKHR (spirv_reconverge)
     VkDynamicState dyn[32];
     uint32_t n_dyn;
     PFN_vkCmdPushDescriptorSetKHR push;
@@ -237,6 +238,11 @@ static int ensure_init(void) {
         rt_log("vk_pipeline: subgroup size %u-%u, requiredSubgroupSizeStages %#x, pinning %u on %#x", p13.minSubgroupSize,
                p13.maxSubgroupSize, (unsigned)p13.requiredSubgroupSizeStages, vk_caps.sg_size, (unsigned)P.sg32_stages);
     }
+    // A warp reconverges where the guest compiler put it back together; Vulkan guarantees that only with maximal
+    // reconvergence (spirv_reconverge). NX2NAVI_VK_RECONVERGE=0 leaves the modules as translated.
+    P.reconverge = c->has_maximal_reconvergence && rt_knob("VK_RECONVERGE", "1") == 1;
+    rt_log("vk_pipeline: maximal reconvergence for shaders with subgroup ops: %s",
+           P.reconverge ? "on" : c->has_maximal_reconvergence ? "off (NX2NAVI_VK_RECONVERGE=0)" : "not supported by the driver");
     P.f_full_subgroups = v13.computeFullSubgroups;
     P.cache_control = v13.pipelineCreationCacheControl;
     P.f_logic_op = f2.features.logicOp;
@@ -867,6 +873,46 @@ static int uses_subgroup_ops(const uint32_t *w, uint64_t words) {
     return 0;
 }
 
+// Guest code runs warp-wide operations (ballot, shuffle, vote) where the guest compiler had the warp reconverged, for
+// example right after a loop that each lane leaves at a different iteration. Vulkan only promises the same lanes at the
+// same point with the MaximallyReconvergesKHR execution mode. Without it a driver may run the lanes that left the loop
+// early through the operations on their own, with a ballot or scan that sees only some of the lanes: a mesh program
+// that hands out output slots from one could give two primitives the same slot. This adds the extension and the mode
+// for each entry point of a module that declares subgroup capabilities. NULL: nothing to change (or no memory).
+static uint32_t *spirv_reconverge(const uint32_t *w, uint64_t n, uint64_t *out_n) {
+    enum { OP_EXTENSION = 10, OP_EXECUTION_MODE = 16, OP_CAPABILITY = 17, MODE_MAXIMALLY_RECONVERGES = 6023 };
+    static const char ext[] = "SPV_KHR_maximal_reconvergence";
+    const uint32_t ext_words = (uint32_t)(sizeof ext + 3) / 4;   // the string with its terminating zero, padded
+    if (n < 5 || !uses_subgroup_ops(w, n)) return NULL;
+    uint64_t caps_end = 0, eps_end = 0;
+    uint32_t eps[16], neps = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, l = w[i] >> 16;
+        if (!l || i + l > n) return NULL;
+        if (op == OP_CAPABILITY) caps_end = i + l;
+        else if (op == SPV_OP_ENTRY_POINT && l >= 3) {
+            if (neps == 16) return NULL;
+            eps[neps++] = w[i + 2], eps_end = i + l;
+        } else if (op == OP_EXECUTION_MODE && l >= 3 && w[i + 2] == MODE_MAXIMALLY_RECONVERGES) return NULL;
+        else if (op == SPV_OP_FUNCTION) break;
+        i += l;
+    }
+    if (!caps_end || !neps || eps_end < caps_end) return NULL;
+    uint64_t on = n + 1 + ext_words + 3ull * neps;
+    uint32_t *o = malloc(on * 4);
+    if (!o) return NULL;
+    uint64_t p = 0;
+    memcpy(o, w, caps_end * 4), p = caps_end;
+    o[p++] = (1 + ext_words) << 16 | OP_EXTENSION;
+    memset(o + p, 0, ext_words * 4);
+    memcpy(o + p, ext, sizeof ext), p += ext_words;
+    memcpy(o + p, w + caps_end, (eps_end - caps_end) * 4), p += eps_end - caps_end;
+    for (uint32_t k = 0; k < neps; k++) o[p++] = 3u << 16 | OP_EXECUTION_MODE, o[p++] = eps[k], o[p++] = MODE_MAXIMALLY_RECONVERGES;
+    memcpy(o + p, w + eps_end, (n - eps_end) * 4), p += n - eps_end;
+    *out_n = p;
+    return o;
+}
+
 // Chain {size 32} into a stage create info when the stage uses subgroup ops and the driver allows the pin.
 static void pin_subgroup32(VkPipelineShaderStageCreateInfo *st, VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *rq,
                            const uint32_t *w, uint64_t words) {
@@ -951,6 +997,12 @@ static VkShaderModule make_module(const uint32_t *w, uint64_t words) {
     if (pooled) {
         free(fixed);
         w = fixed = pooled;
+    }
+    uint64_t rc_n = 0;
+    uint32_t *rc = P.reconverge ? spirv_reconverge(w, words, &rc_n) : NULL;
+    if (rc) {
+        free(fixed);
+        w = fixed = rc, words = rc_n;
     }
     VkShaderModuleCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = (size_t)words * 4, .pCode = w};
     VkShaderModule m = VK_NULL_HANDLE;

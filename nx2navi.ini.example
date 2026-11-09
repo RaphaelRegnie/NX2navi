@@ -123,6 +123,9 @@
 # vk_dyn_a2c = 1
 # Pin the shader subgroup size to 32 when the GPU allows it.
 # vk_subgroup_pin = 1
+# Keep a shader's threads together after divergent code where the game's shaders expect it (maximal reconvergence,
+# when the driver supports it). 0 turns it off; leaves then go missing from the foliage's colour pass.
+# vk_reconverge = 1
 
 [display]
 # Device profile: auto (the Steam Deck when this is one), desktop or deck. On a Steam Deck the keys this file does not
