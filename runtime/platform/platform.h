@@ -306,10 +306,15 @@ void plat_file_mkdir_p(const char *path);                 // creates every missi
 // Whole file into a malloc'd buffer with a NUL after the last byte; NULL when missing, empty or over 1 GiB.
 uint8_t *plat_file_read(const char *path, uint64_t *size);
 int plat_file_write(const char *path, const void *data, size_t n);   // create or truncate; 1 when all n bytes landed
-int plat_file_replace(const char *from, const char *to);  // rename, replacing to (write-through); 1 on success
+// Renames from over to, replacing it; durable: the rename is on the disk at return (written through). 1 on success.
+int plat_file_replace(const char *from, const char *to, int durable);
 // Writes path.<pid>.<tid>.tmp, flushes it to the disk and renames it over path: a crash leaves the old file or the new
 // one, never a torn or zero-filled one. 1 on success.
 int plat_file_write_atomic(const char *path, const void *data, size_t n);
+// The same without waiting for the disk: a crash of the process still leaves the old file or the new one, but a power
+// cut can leave a torn or zero-filled one. For files whose readers check them and that can be made again (the shader
+// cache). Each flush costs 1-5 ms on an NVMe drive and much more on a SATA SSD or a hard drive. 1 on success.
+int plat_file_write_cached(const char *path, const void *data, size_t n);
 // Takes the file at path (made when missing) as a lock no other process can take, held until this process ends:
 // 1 held (again, when this process holds it already), 0 another process holds it, -1 the file cannot be made.
 int plat_lock_file(const char *path);
