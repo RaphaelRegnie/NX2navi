@@ -3624,6 +3624,89 @@ static uint32_t *spv_override(const uint32_t *code, uint64_t words, uint64_t *ou
     return w;
 }
 
+// A skipped froxel's exit in the fog's first compute pass: the block at word at (an OpLabel) makes five image writes, four
+// of (0,0,0,1) and last the mask value (1/255,0,0,0), and returns.
+static int fog_skip_block(const uint32_t *w, uint64_t n, uint64_t at, const uint64_t *def, uint32_t bound) {
+    int writes = 0;
+    for (uint64_t i = at + (w[at] >> 16); i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (!len || i + len > n) return 0;
+        if (op == 253) return writes == 5;              // OpReturn
+        if (op == 248 || op == 249 || op == 250) return 0;   // OpLabel, OpBranch, OpBranchConditional
+        if (op == 99) {                                 // OpImageWrite
+            if (len < 4 || w[i + 3] >= bound || ++writes > 5) return 0;
+            uint64_t c = def[w[i + 3]];
+            if (!c || (w[c] & 0xffff) != 80 || w[c] >> 16 != 7) return 0;   // OpCompositeConstruct of four
+            float v[4];
+            for (int k = 0; k < 4; k++) {
+                uint32_t id = w[c + 3 + k];
+                uint64_t f = id < bound ? def[id] : 0;
+                if (!f || (w[f] & 0xffff) != 43 || w[f] >> 16 != 4) return 0;   // OpConstant of one word
+                memcpy(&v[k], &w[f + 3], 4);
+            }
+            if (writes == 5 ? !(v[0] > 0.0039f && v[0] < 0.0040f && v[1] == 0 && v[2] == 0 && v[3] == 0)
+                            : !(v[0] == 0 && v[1] == 0 && v[2] == 0 && v[3] == 1)) return 0;
+        }
+        i += len;
+    }
+    return 0;
+}
+
+// The volumetric fog's first compute pass skips a froxel behind a coarse depth table and writes it as empty, and the next
+// pass's mask keeps it empty. That table comes from the frame before, so in the columns a near object has just left, every
+// froxel past the object's old depth came out with no fog: a dark block of the fog grid beside the object, which the fog's
+// history then smeared into a trail, and worst at the screen edges, where near objects move fastest. A froxel behind
+// today's depth is never seen, so computing it only costs a little time: the comparison is made never true (x > x).
+// Returns the patched copy of that shader, NULL for any other. Found by its shape rather than a hash, so it holds across
+// translator updates: a branch whose other side is that exit, taken on !(distance > table) || flag.
+// NX2NAVI_FOG_CULL=1 keeps the game's skip.
+static uint32_t *spirv_fog_keep_froxels(const uint32_t *w, uint64_t n) {
+    const char *e = cfg_get("NX2NAVI_FOG_CULL");
+    if (n < 6 || (e && !strcmp(e, "1"))) return NULL;
+    uint32_t bound = w[3];
+    int writes = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t len = w[i] >> 16;
+        if (!len || i + len > n) return NULL;
+        writes += (w[i] & 0xffff) == 99;
+        i += len;
+    }
+    if (writes < 5) return NULL;
+    uint64_t *def = calloc(bound, sizeof *def);   // word of each id's definition, for the instructions looked at below
+    if (!def) return NULL;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (op == 248 && len >= 2 && w[i + 1] < bound) def[w[i + 1]] = i;   // OpLabel
+        else if ((op == 43 || op == 80 || op == 166 || op == 168 || op == 186) && len >= 3 && w[i + 2] < bound) def[w[i + 2]] = i;
+        i += len;
+    }
+    uint64_t cmp = 0, prev = 0;
+    int found = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (op == 250 && len >= 4 && prev && (w[prev] & 0xffff) == 247 && w[prev + 1] == w[i + 3] && w[i + 1] < bound &&
+            w[i + 3] < bound && def[w[i + 3]] && fog_skip_block(w, n, def[w[i + 3]], def, bound)) {   // OpSelectionMerge just before
+            uint64_t c = def[w[i + 1]];
+            for (int k = 0; c && (w[c] & 0xffff) == 166 && k < 2; k++) {                              // OpLogicalOr
+                uint32_t a = w[c + 3 + k];
+                uint64_t no = a < bound ? def[a] : 0;
+                if (!no || (w[no] & 0xffff) != 168 || w[no + 3] >= bound) continue;                  // OpLogicalNot
+                uint64_t gt = def[w[no + 3]];
+                if (gt && (w[gt] & 0xffff) == 186) cmp = gt, found++;                                // OpFOrdGreaterThan
+            }
+        }
+        prev = i;
+        i += len;
+    }
+    free(def);
+    uint32_t *o = found == 1 ? malloc(n * 4) : NULL;
+    if (!o) return NULL;
+    memcpy(o, w, n * 4);
+    o[cmp + 4] = o[cmp + 3];
+    LOG_ONCE("vk_pipeline: fog: froxels behind last frame's depth are computed too");
+    return o;
+}
+
 // A compute pipeline for cs in layout l; VK_NULL_HANDLE on failure. No lock needed (P.cache is driver-synchronised).
 // cached_only (needs P.cache_control): from P.cache or the driver's own disk cache, never compiled; VK_NULL_HANDLE when
 // neither holds it (the driver returns VK_PIPELINE_COMPILE_REQUIRED, a success code, with no pipeline).
@@ -3633,6 +3716,8 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l, int cache
     uint64_t ow = 0;
     uint32_t *over = spv_override(code, words, &ow);
     if (over) code = over, words = ow;
+    uint32_t *fog = spirv_fog_keep_froxels(code, words);
+    if (fog) free(over), over = fog, code = fog;
     VkShaderModule m = make_module(code, words);
     if (!m) return free(over), VK_NULL_HANDLE;
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo rqc;
