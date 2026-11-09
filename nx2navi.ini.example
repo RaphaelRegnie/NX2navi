@@ -21,6 +21,9 @@
 # it, or with frame generation on, the game limits by itself, and also when RTSS's own frame counter shows the game
 # well past the limit (RTSS then hooks the game without holding it back). rtss = 0 always leaves it to the game.
 # rtss = 1
+# 1: asks RTSS's EnumProfiles whether the game's profile exists, instead of looking for its file. EnumProfiles crashes
+# the game (RTSS keeps a pointer of the game's in 32 bits); only for testing an RTSS that fixed it.
+# rtss_enum = 0
 # Older key, read only while fps_limit is unset: fps60 = 0 means a limit of 30.
 # fps60 = 1
 # Real-time frame step: game speed follows the clock instead of the frame count.
