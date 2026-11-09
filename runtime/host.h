@@ -47,6 +47,11 @@ enum { PERF_CNT_PIPE_ASYNC, PERF_CNT_PIPE_SKIP, PERF_CNT_TEX_UP, PERF_CNT_TEX_RE
        PERF_CNT_PIPE_WAIT, PERF_CNT_ONESHOT_WAIT, PERF_CNT_PIPE_BUILT, PERF_CNT_TEX_NEW, PERF_CNT_TEX_ALIAS,
        PERF_CNT_WB, PERF_CNT_WB_SKIP, PERF_CNT_N };
 void perf_count(int kind);
+// NX2NAVI_REPLAY_TIME=1: how long the replay spends in each kind of op (perf.c perf_replay_op reports it with the
+// frame-time summary). Draws and dispatches include their bindings and the vkCmd calls they record; binds are the state
+// and resource binds between them; xfer is copies and clears.
+enum { PERF_RP_DRAW, PERF_RP_BIND, PERF_RP_XFER, PERF_RP_OTHER, PERF_RP_N };
+void perf_replay_op(int cat, uint64_t ns);
 void perf_present(uint64_t frame);
 void perf_summary_flush(void);                  // prints the frame-time summary of the running period (exit); the 60 s lines come from perf_present
 void gfx_exit_log(void);                        // back end's lines for the exit summary (weak no-op in prof_win.c)

@@ -116,13 +116,27 @@ void perf_count(int kind) {
 #define FT_WORST 5
 #define FT_PERIOD_NS 60000000000ull
 typedef struct { uint64_t frame, ns, wait[PERF_N], replay; } FtWorst;
+// What a frame over 25 ms spent its time on, so a count of slow frames says where to look instead of only that they
+// happened. A frame is charged to the largest part when that part is at least a quarter of it, and to "unattributed"
+// otherwise - the part of a slow frame none of the recorded waits explains (the GPU, or a stall outside them).
+enum { FT_C_PIPE, FT_C_XLATE, FT_C_TEX, FT_C_FENCE, FT_C_PACE, FT_C_REPLAY, FT_C_OTHER, FT_C_N };
+static const char *const ft_cause_name[FT_C_N] = { "pipeline", "translation", "texture", "fence", "pacing", "replay",
+                                                   "unattributed" };
 static struct {
     uint64_t t0, frames, sum, over25, over50, over100;
     uint32_t hist[FT_BINS];
+    uint64_t slow_n[FT_C_N], slow_ns[FT_C_N];   // frames over 25 ms by cause
     FtWorst worst[FT_WORST];   // slowest first
     int nworst;
 } ft;
 static uint64_t summary_t0;   // start of the current period (0: not started)
+
+// NX2NAVI_REPLAY_TIME=1: how the replay splits between the kinds of op it walks, reported with the frame-time summary.
+// The replay is recorded on one thread, so these need no atomics. The kinds are PERF_RP_* in host.h.
+static uint64_t rp_ns[PERF_RP_N], rp_n[PERF_RP_N];
+void perf_replay_op(int cat, uint64_t ns) {
+    if ((unsigned)cat < PERF_RP_N) rp_ns[cat] += ns, rp_n[cat]++;
+}
 
 static void ft_report(uint64_t now, const char *tag) {
     if (ft.frames && ft.sum) {
@@ -134,6 +148,24 @@ static void ft_report(uint64_t now, const char *tag) {
         rt_log("frametime: %s: %llu frames in %.1f s, mean %.1f fps, 1%% low %.1f fps, over 25 ms %llu, 50 ms %llu, 100 ms %llu",
                tag, (unsigned long long)ft.frames, (now - ft.t0) / 1e9, ft.frames * 1e9 / ft.sum, low ? 1e9 / low : 0.0,
                (unsigned long long)ft.over25, (unsigned long long)ft.over50, (unsigned long long)ft.over100);
+        if (ft.over25) {
+            char line[512];
+            int n = snprintf(line, sizeof line, "frametime:   over 25 ms by cause:");
+            for (int c = 0; c < FT_C_N && n > 0 && n < (int)sizeof line; c++)
+                if (ft.slow_n[c])
+                    n += snprintf(line + n, sizeof line - n, " %s %llu (%.1f ms avg)", ft_cause_name[c],
+                                  (unsigned long long)ft.slow_n[c], (double)ft.slow_ns[c] / ft.slow_n[c] / 1e6);
+            if (n > 0) rt_log("%s", line);
+        }
+        if (rp_n[PERF_RP_DRAW] || rp_n[PERF_RP_BIND] || rp_n[PERF_RP_XFER] || rp_n[PERF_RP_OTHER]) {
+            uint64_t all = 0;
+            for (int c = 0; c < PERF_RP_N; c++) all += rp_ns[c];
+            rt_log("frametime:   replay ops: %.0f ms in all (%.0f%% of the period); draw %.0f ms (%llu), bind %.0f ms (%llu), "
+                   "xfer %.0f ms (%llu), other %.0f ms (%llu)", all / 1e6, 100.0 * all / (now - ft.t0),
+                   rp_ns[PERF_RP_DRAW] / 1e6, (unsigned long long)rp_n[PERF_RP_DRAW], rp_ns[PERF_RP_BIND] / 1e6,
+                   (unsigned long long)rp_n[PERF_RP_BIND], rp_ns[PERF_RP_XFER] / 1e6, (unsigned long long)rp_n[PERF_RP_XFER],
+                   rp_ns[PERF_RP_OTHER] / 1e6, (unsigned long long)rp_n[PERF_RP_OTHER]);
+        }
         for (int i = 0; i < ft.nworst; i++) {
             const FtWorst *w = &ft.worst[i];
             rt_log("frametime:   worst frame %llu: %.1f ms; shader translation %.1f, pipeline build %.1f, texture upload %.1f (astc %.1f), replay %.1f, fence/present wait %.1f, pacing %.1f",
@@ -143,6 +175,8 @@ static void ft_report(uint64_t now, const char *tag) {
         }
     }
     memset(&ft, 0, sizeof ft);
+    memset(rp_ns, 0, sizeof rp_ns);
+    memset(rp_n, 0, sizeof rp_n);
     ft.t0 = now;
 }
 
@@ -171,6 +205,24 @@ static uint64_t ft_frame(uint64_t frame, uint64_t now, uint64_t d) {
     if (d > 25000000ull) ft.over25++;
     if (d > 50000000ull) ft.over50++;
     if (d > 100000000ull) ft.over100++;
+    if (d > 25000000ull) {   // which part it went to
+        uint64_t part[FT_C_N];
+        part[FT_C_PIPE] = frame_ns[PERF_PIPE];
+        part[FT_C_XLATE] = frame_ns[PERF_XLATE];
+        part[FT_C_TEX] = frame_ns[PERF_TEX];
+        part[FT_C_FENCE] = frame_ns[PERF_FENCE] + frame_ns[PERF_DRAIN];
+        part[FT_C_PACE] = frame_ns[PERF_PACE];
+        part[FT_C_REPLAY] = (uint64_t)rep > 0 ? (uint64_t)rep : 0;
+        uint64_t known = 0;
+        for (int c = 0; c < FT_C_OTHER; c++) known += part[c];
+        part[FT_C_OTHER] = d > known ? d - known : 0;
+        int best = FT_C_OTHER;
+        for (int c = 0; c < FT_C_N; c++)
+            if (part[c] > part[best]) best = c;
+        if (part[best] * 4 < d) best = FT_C_OTHER;   // no recorded part explains a quarter of the frame
+        ft.slow_n[best]++;
+        ft.slow_ns[best] += d;
+    }
     if (d > 25000000ull && (ft.nworst < FT_WORST || d > ft.worst[FT_WORST - 1].ns)) {
         int i = ft.nworst < FT_WORST ? ft.nworst++ : FT_WORST - 1;
         while (i > 0 && ft.worst[i - 1].ns < d) ft.worst[i] = ft.worst[i - 1], i--;

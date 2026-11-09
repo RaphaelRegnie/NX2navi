@@ -4606,6 +4606,10 @@ static void op_dispatch(VkExec *ex, const p_dispatch *d) {
     vk_contact_flush(ex);
     cb_res(ex);
     dummies_init();
+    // A tensor-core program runs the stand-in while NX2NAVI_NATIVE_TENSOR is off, so ask that before translating it.
+    // Translating it anyway recorded four AI-upscaler compute shaders of 0.87-4.4M SPIR-V words that this game never
+    // dispatches natively, and building them cost gigabytes of memory at boot (NX2NAVI_LIB_PREBUILD_BIG, bg_main).
+    if (!native_tensor(ex)) { untranslated_dispatch_fallback(ex); return; }
     int present;
     const GfxShader *cs = shader_for(ex, NVN_STAGE_CS, &present, NULL, 0);   // synchronous: a skipped dispatch changes results
     if (knob_log_cs_binds()) {   // diagnosis: the compute bindings of the first dispatch of each program
@@ -4657,6 +4661,7 @@ static void op_dispatch_ind(VkExec *ex, const p_dispatch_ind *d) {
         return warn_once(W_INDIRECT, "indirect dispatch arguments at %#llx are not backed or not aligned: skipped", (unsigned long long)d->ind);
     cb_res(ex);
     dummies_init();
+    if (!native_tensor(ex)) { untranslated_dispatch_fallback(ex); return; }   // as in op_dispatch: never translate it
     int present;
     const GfxShader *cs = shader_for(ex, NVN_STAGE_CS, &present, NULL, 0);
     if (!cs || !native_tensor(ex)) { untranslated_dispatch_fallback(ex); return; }
@@ -4730,7 +4735,7 @@ static void bind_handles(uint64_t *dst, int cap, const p_bind_handles *b) {
     memcpy(&dst[b->first], b->h, sizeof(uint64_t) * (size_t)b->n);
 }
 
-void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
+static void op_draw_impl(VkExec *ex, uint32_t op, const void *payload) {
     switch (op) {
     case OP_BIND_PROGRAM: {
         const p_bind_program *b = payload;
@@ -4840,3 +4845,27 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
 
 // The last executed list's draws as " <position banks>/<changed banks>:<draws>" (bit n: cn), for NX2NAVI_MV_CHECK's lines.
 const char *vk_mvobj_frame_masks(void) { return fm_last; }
+
+// NX2NAVI_REPLAY_TIME (default 0, off): times each op so the frame-time summary can say how the replay splits between
+// draws, binds and transfers. The clock reads cost a fraction of a millisecond a frame, which is why it is off by
+// default and why the wrapper is the only thing between the walk and the switch.
+static int op_is_draw(uint32_t op) {
+    switch (op) {
+    case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_IDX_IND:
+    case OP_DISPATCH: case OP_DISPATCH_IND:
+    case OP_DRAW_MESH: case OP_DRAW_MESH_IND:
+    case OP_UPDATE_UB:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
+    static int on = -1;
+    if (on < 0) on = cfg_bool("NX2NAVI_REPLAY_TIME");
+    if (!on) { op_draw_impl(ex, op, payload); return; }
+    uint64_t t0 = plat_now_ns();
+    op_draw_impl(ex, op, payload);
+    perf_replay_op(op_is_draw(op) ? PERF_RP_DRAW : PERF_RP_BIND, plat_now_ns() - t0);
+}

@@ -18,13 +18,15 @@ import sys
 from pathlib import Path
 
 SYM = re.compile(r'^([0-9a-f]{8}) +[0-9a-f]{8} +\d+ {2,}(\S+)$')   # In column empty: object lines have a path:(section) there
+SYM_LD = re.compile(r'^\s*0x([0-9a-f]{8,16})\s+(\S+)\s*$')          # a GNU ld map: the address, then the name, no size
 
 
 def load_map(path):
     syms = {}
     with open(path, encoding='utf-8', errors='replace') as f:
         for line in f:
-            m = SYM.match(line.rstrip('\n'))
+            line = line.rstrip('\n')
+            m = SYM.match(line) or SYM_LD.match(line)
             if m and '(' not in m.group(2):
                 syms.setdefault(int(m.group(1), 16), m.group(2))
     addrs = sorted(syms)
@@ -96,16 +98,23 @@ def main():
     prof = load_profile(a.profile)
     addrs, names = load_map(a.map)
     base = prof['base']
+    # The map's addresses include the image base (0x140000000 for an x64 exe); a runtime Rip is an offset from wherever
+    # the loader put the image. The lowest map address aligned down to 64 KiB recovers that base, so a Rip becomes a map
+    # address by adding it back.
+    img_base = addrs[0] & ~0xFFFFF if addrs else 0
     exe = next((m for m in prof['modules'] if m[0] == base), None)
     exe_end = base + exe[1] if exe else base
 
     def in_exe(rip):
         return base <= rip < exe_end
 
+    def sym_at(rip):
+        i = bisect.bisect_right(addrs, img_base + (rip - base)) - 1
+        return names[i] if i >= 0 else '?'
+
     def name_of(rip):
         if in_exe(rip):
-            i = bisect.bisect_right(addrs, rip - base) - 1
-            return names[i] if i >= 0 else '?'
+            return sym_at(rip)
         m = next((m for m in prof['modules'] if m[0] <= rip < m[0] + m[1]), None)
         return f'{Path(m[2]).name}!+{rip - m[0]:#x}' if m else 'unknown'
     total = sum(n for _, n in prof['rips']) or 1

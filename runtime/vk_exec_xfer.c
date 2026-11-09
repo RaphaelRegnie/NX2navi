@@ -34,6 +34,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
+#include "platform/platform.h"
 #include "host.h"
 #include "nvn_api.h"
 #include "nvn_tex.h"
@@ -786,7 +788,7 @@ static void clear_tex(VkExec *ex, const p_clear_tex *p) {
     vk_texture_gpu_written(t);
 }
 
-void vk_exec_op_xfer(VkExec *ex, uint32_t op, const void *payload) {
+static void op_xfer_impl(VkExec *ex, uint32_t op, const void *payload) {
     if (op != OP_RENDER_ENABLE && op != OP_SIGNAL_EVENT) vk_contact_flush(ex);
     switch (op) {
     case OP_COPY_B2B: copy_b2b(ex, payload); break;
@@ -806,4 +808,14 @@ void vk_exec_op_xfer(VkExec *ex, uint32_t op, const void *payload) {
         break;
     default: rt_fatal("vk: op %s is not a transfer", nvn_op_name(op));
     }
+}
+
+// NX2NAVI_REPLAY_TIME: see the note over vk_exec_op_draw in vk_exec_draw.c; transfers are the third kind.
+void vk_exec_op_xfer(VkExec *ex, uint32_t op, const void *payload) {
+    static int on = -1;
+    if (on < 0) on = cfg_bool("NX2NAVI_REPLAY_TIME");
+    if (!on) { op_xfer_impl(ex, op, payload); return; }
+    uint64_t t0 = plat_now_ns();
+    op_xfer_impl(ex, op, payload);
+    perf_replay_op(PERF_RP_XFER, plat_now_ns() - t0);
 }

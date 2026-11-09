@@ -77,6 +77,8 @@ static struct {
     int dyn_vi, dyn_clamp, dyn_poly, dyn_blend_en, dyn_blend_eq, dyn_wmask, dyn_a2c;
     int f_logic_op, f_depth_clamp, f_fill_non_solid, f_dual_src, f_full_subgroups;
     int cache_control;                 // pipelineCreationCacheControl: a create can ask for the pipeline caches only
+    int feedback;                      // NX2NAVI_PIPE_FEEDBACK: 1 count pipeline cache hits, 2 also log each compute build
+    uint64_t cache_loaded;             // bytes of pipeline-cache.bin the driver took at boot
     int pv_last;                       // provokingVertexLast enabled: NVN's default is the last vertex
     VkShaderStageFlags sg32_stages;    // stages that accept requiredSubgroupSize = 32 (0: not available)
     int reconverge;                    // modules with subgroup ops get MaximallyReconvergesKHR (spirv_reconverge)
@@ -138,6 +140,7 @@ static uint64_t fnv(uint64_t h, const void *p, size_t n) {
     return h;
 }
 #define FNV0 0xcbf29ce484222325ull
+static __thread uint64_t mm_hash;   // FNV-1a of the module make_module last created on this thread (PIPE_FEEDBACK 2)
 
 // Hash of a pipeline table key, 8 bytes per step: a draw hashes its whole GKey, and byte-wise FNV over it cost more
 // than the lookup. Only the in-memory table uses it; the key file keeps fnv.
@@ -182,6 +185,18 @@ static void cache_load(VkCtx *c) {
             rt_log("vk_pipeline: %s was written by another device or driver; starting empty", P.cache_path);
             size = 0;
         }
+        // NX2NAVI_PIPELINE_CACHE_MAX_MB (default 512; 0 no limit): a larger file starts the run empty, and the run's
+        // saves replace it. The file only grows: entries of earlier translators and builds stay, and on NVIDIA
+        // (621.01) an entry another executable wrote is neither used nor written again, so a renamed or updated exe
+        // compiles while the file keeps its size (2026-11-09: 650 MB, 15-18 % of the pipelines read from it). The
+        // whole file sits in process memory twice at the boot (this read and the driver's copy) and is copied out
+        // at every save, which a 16 GB machine near its commit limit cannot spare.
+        uint64_t cap = (uint64_t)strtoull(cfg_value("NX2NAVI_PIPELINE_CACHE_MAX_MB"), NULL, 10) << 20;
+        if (size && cap && size > cap) {
+            rt_log("vk_pipeline: %s holds %.0f MB, over NX2NAVI_PIPELINE_CACHE_MAX_MB %llu: starting empty; this run "
+                   "rewrites it", P.cache_path, size / 1048576.0, (unsigned long long)(cap >> 20));
+            size = 0;
+        }
     }
     VkPipelineCacheCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO, .initialDataSize = size,
                                     .pInitialData = size ? data : NULL};
@@ -190,6 +205,14 @@ static void cache_load(VkCtx *c) {
         if (vkCreatePipelineCache(c->device, &ci, NULL, &P.cache) != VK_SUCCESS) P.cache = VK_NULL_HANDLE;
     }
     free(data);
+    // What the driver kept of the file: a driver may drop initial data it does not accept without failing the create,
+    // which leaves every build of the run compiling while the cache file looks valid.
+    size_t kept = 0;
+    if (P.cache && vkGetPipelineCacheData(c->device, P.cache, &kept, NULL) != VK_SUCCESS) kept = 0;
+    P.cache_loaded = kept;
+    if (size)
+        rt_log("vk_pipeline: %s: %.1f MB read, the driver holds %.1f MB of it", P.cache_path, size / 1048576.0,
+               kept / 1048576.0);
 }
 
 static void keys_open(void);
@@ -245,6 +268,8 @@ static int ensure_init(void) {
            P.reconverge ? "on" : c->has_maximal_reconvergence ? "off (NX2NAVI_VK_RECONVERGE=0)" : "not supported by the driver");
     P.f_full_subgroups = v13.computeFullSubgroups;
     P.cache_control = v13.pipelineCreationCacheControl;
+    // Pipeline creation feedback is core in Vulkan 1.3; the driver reports per pipeline whether P.cache held it.
+    P.feedback = c->props.apiVersion >= VK_API_VERSION_1_3 ? atoi(cfg_value("NX2NAVI_PIPE_FEEDBACK")) : 0;
     P.f_logic_op = f2.features.logicOp;
     P.f_depth_clamp = f2.features.depthClamp;
     P.f_fill_non_solid = f2.features.fillModeNonSolid;
@@ -1000,6 +1025,7 @@ static VkShaderModule make_module(const uint32_t *w, uint64_t words) {
         free(fixed);
         w = fixed = rc, words = rc_n;
     }
+    if (P.feedback >= 2) mm_hash = fnv(FNV0, w, (size_t)words * 4);
     VkShaderModuleCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = (size_t)words * 4, .pCode = w};
     VkShaderModule m = VK_NULL_HANDLE;
     VkResult r = vkCreateShaderModule(P.device, &ci, NULL, &m);
@@ -1392,6 +1418,57 @@ static VkPipelineCreateFlags noopt_flag(void) {
     return on ? VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT : 0;
 }
 
+// ---- pipeline creation feedback (NX2NAVI_PIPE_FEEDBACK, default 1; 0 off)
+// Each pipeline, library and compute build asks the driver whether pipeline-cache.bin (P.cache) held it
+// (VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) and how long the create took. The counts appear
+// with the prewarm, the stage library prebuild and every cache save, so a log tells whether a slow boot compiled or
+// read its pipelines: on NVIDIA the driver's own disk cache is kept per executable, so a renamed or new exe gets nothing
+// from it, and only pipeline-cache.bin can make its first boot quick. =2 also logs every compute build with a hash of
+// its final module, so two runs can be compared for a module that changes between them.
+enum { FB_GRAPHICS, FB_LIBRARY, FB_COMPUTE, FB_KINDS };
+static struct {
+    PlatMutex lock;
+    uint64_t n[FB_KINDS], hit[FB_KINDS];
+    double hit_ms[FB_KINDS], miss_ms[FB_KINDS];
+} FB = {.lock = PLAT_MUTEX_INIT};
+
+// Chains fb into a create info's pNext (next: its current pNext). Returns what the create info's pNext becomes.
+static const void *fb_chain(VkPipelineCreationFeedbackCreateInfo *ci, VkPipelineCreationFeedback *fb, const void *next) {
+    if (!P.feedback) return next;
+    memset(fb, 0, sizeof *fb);
+    *ci = (VkPipelineCreationFeedbackCreateInfo){.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,
+                                                 .pNext = next, .pPipelineCreationFeedback = fb};
+    return ci;
+}
+
+static void fb_note(int kind, const VkPipelineCreationFeedback *fb) {
+    if (!P.feedback || !(fb->flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)) return;
+    int hit = (fb->flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0;
+    double ms = (double)fb->duration / 1e6;
+    plat_mutex_lock(&FB.lock);
+    FB.n[kind]++, FB.hit[kind] += (uint64_t)hit;
+    if (hit) FB.hit_ms[kind] += ms;
+    else FB.miss_ms[kind] += ms;
+    plat_mutex_unlock(&FB.lock);
+}
+
+// One line: per kind, builds that came from pipeline-cache.bin of all builds so far, with the average time of each.
+static void fb_log(const char *when) {
+    if (!P.feedback) return;
+    static const char *const kn[FB_KINDS] = {"pipelines", "libraries", "compute"};
+    char line[512];
+    int o = snprintf(line, sizeof line, "vk_pipeline: pipeline-cache.bin hits %s:", when);
+    plat_mutex_lock(&FB.lock);
+    for (int k = 0; k < FB_KINDS && o < (int)sizeof line - 96; k++) {
+        uint64_t miss = FB.n[k] - FB.hit[k];
+        o += snprintf(line + o, sizeof line - o, " %s %llu of %llu (%.0f%%; avg %.2f ms from the file, %.1f ms otherwise)%s", kn[k],
+                      (unsigned long long)FB.hit[k], (unsigned long long)FB.n[k], FB.n[k] ? 100.0 * FB.hit[k] / FB.n[k] : 0.0,
+                      FB.hit[k] ? FB.hit_ms[k] / FB.hit[k] : 0.0, miss ? FB.miss_ms[k] / miss : 0.0, k + 1 < FB_KINDS ? ";" : "");
+    }
+    plat_mutex_unlock(&FB.lock);
+    rt_log("%s", line);
+}
+
 static int uses_src1(const VkPipeState *s) {
     for (uint32_t m = s->color.blend_en & 0xffu; m; m &= m - 1) {
         int i = __builtin_ctz(m);
@@ -1636,6 +1713,9 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                                        .pDynamicState = &dy, .layout = l->layout, .flags = noopt_flag()};
     if (k->fbl & 1) pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     if (k->fbl & 2) pi.flags |= VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+    VkPipelineCreationFeedbackCreateInfo fci;
+    VkPipelineCreationFeedback fb;
+    pi.pNext = fb_chain(&fci, &fb, pi.pNext);
     uint64_t p0 = perf_begin();
     crash_note("a graphics pipeline", s->vs, s->fs, s->ts);
     VkResult r = vkCreateGraphicsPipelines(P.device, P.cache, 1, &pi, NULL, &pipe);
@@ -1646,6 +1726,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
         pipe = VK_NULL_HANDLE;
     } else {
         perf_count(PERF_CNT_PIPE_BUILT);
+        fb_note(FB_GRAPHICS, &fb);
     }
 out:
     if (vm) vkDestroyShaderModule(P.device, vm, NULL);
@@ -1792,9 +1873,13 @@ static VkPipeline lib_create(int kind, const VkPipeState *s, const GKey *k, VkPi
         ri.depthAttachmentFormat = (VkFormat)k->depth, ri.stencilAttachmentFormat = (VkFormat)k->stencil;
         pi.pColorBlendState = &cb, pi.pMultisampleState = &ms;
     }
+    VkPipelineCreationFeedbackCreateInfo fci;
+    VkPipelineCreationFeedback fb;
+    pi.pNext = fb_chain(&fci, &fb, pi.pNext);
     crash_note("a pipeline library", s->vs, s->fs, NULL);
     if (vkCreateGraphicsPipelines(P.device, P.cache, 1, &pi, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
     plat_crash_context(NULL);
+    if (pipe && (kind == LIB_PR || kind == LIB_FS)) fb_note(FB_LIBRARY, &fb);   // the shader libraries: the others compile nothing
 out:
     if (m) vkDestroyShaderModule(P.device, m, NULL);
     free(patched);
@@ -2883,6 +2968,7 @@ static void prewarm_run(void) {
     free(K.file);
     K.file = NULL;
     plat_mutex_unlock(&P.lock);
+    fb_log("after the boot prewarm");
     vk_pipeline_prewarm_marker_clear();   // the boot's share is done; what the pool builds later runs during play
     lb_start(pr_hist, fs_hist);
 }
@@ -3008,9 +3094,18 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l, int cache
     if (P.f_full_subgroups && vk_caps.sg_size && lx && lx % vk_caps.sg_size == 0 && uses_subgroup_ops(code, words))
         ci.stage.flags |= VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;
     VkPipeline pipe = VK_NULL_HANDLE;
+    VkPipelineCreationFeedbackCreateInfo fci;
+    VkPipelineCreationFeedback fb;
+    ci.pNext = fb_chain(&fci, &fb, ci.pNext);
     crash_note("a compute pipeline", cs, NULL, NULL);
     if (vkCreateComputePipelines(P.device, P.cache, 1, &ci, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
     plat_crash_context(NULL);
+    if (pipe) fb_note(FB_COMPUTE, &fb);
+    if (P.feedback >= 2 && (pipe || !cached_only))
+        rt_log("vk_pipeline: compute %016llx: %llu words, module %016llx, %s, %.1f ms", (unsigned long long)fnv(FNV0, code, words * 4),
+               (unsigned long long)words, (unsigned long long)mm_hash,
+               !pipe ? "failed" : fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT ? "from pipeline-cache.bin" : "compiled",
+               (double)fb.duration / 1e6);
     vkDestroyShaderModule(P.device, m, NULL);
     free(over);
     return pipe;
@@ -3226,6 +3321,19 @@ static void cs_flight_remove(const GfxShader *cs) {
         if (cs_flight[i] == cs) cs_flight[i] = NULL;
 }
 
+// The background builder of large compute shaders (comment at bg_main).
+static struct {
+    const GfxShader **cs;
+    uint8_t (*iid)[32];
+    uint64_t *words;
+    size_t n, cap;
+    PlatThread *th;
+    const GfxShader *volatile building;   // the shader on the driver now, NULL between builds
+    volatile int32_t raised;             // a dispatch waited for it and raised the thread
+    uint64_t built, failed, there;
+    double ms;
+} BG;
+
 VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info) {
     if (info) *info = NULL;
     if (!cs || !ensure_init()) return VK_NULL_HANDLE;
@@ -3233,11 +3341,21 @@ VkPipeline vk_pipeline_compute(const GfxShader *cs, const VkPipeInfo **info) {
     uint64_t h = key_hash(&k, sizeof k);
     plat_mutex_lock(&P.lock);
     Pipe *p = pipe_find(&k, sizeof k, h);
+    double w0 = !p && cs_flight_has(cs) ? now_ms() : 0;
+    int bg = 0;
     while (!p && cs_flight_has(cs)) {   // another thread is compiling it: its result, not a second compile
+        if (BG.building == cs && BG.th && !plat_xchg32(&BG.raised, 1))   // the background builder: normal priority now
+            plat_thread_set_priority(BG.th, PLAT_PRIO_NORMAL), bg = 1;
         plat_mutex_unlock(&P.lock);
         plat_sleep_ms(1);
         plat_mutex_lock(&P.lock);
         p = pipe_find(&k, sizeof k, h);
+    }
+    if (w0 && now_ms() - w0 >= 2.0) {
+        static int logs;
+        if (logs++ < 16)
+            rt_log("vk_exec: a dispatch waited %.0f ms for its compute pipeline (%s)", now_ms() - w0,
+                   bg ? "built on the background thread" : "built by another thread");
     }
     if (p) {
         P.stats.hits++;
@@ -3322,6 +3440,177 @@ static void lb_defer(const uint8_t iid[32], uint64_t words) {
            (unsigned long long)LB.big_words);
 }
 
+// ---- large compute shaders on a background thread (NX2NAVI_LIB_PREBUILD_BIG_BG, default 1; 0 leaves them to their
+// first dispatch as before)
+// The boot prebuild leaves a compute shader over LB.big_words that no pipeline cache holds (lb_compute). Its first
+// dispatch then compiled it on the replay thread: frames of 0.65-1.9 s in Kokiri Forest on an RTX 5090 after a
+// translator change. One thread builds them instead, once the boot prebuild is done, one at a time and the smallest
+// first: four compiled side by side grew the process by 16-19 GB on an RTX 4090 (comment at LB_BIG_WORDS). The shader
+// being built is in cs_flight, so a dispatch that needs it waits for this build (vk_pipeline_compute raises the
+// thread to normal priority then) instead of compiling a second copy. What is built is entered for the process, as
+// lb_compute's pipelines are, and lands in pipeline-cache.bin for the next boot.
+
+static int bg_on(void) {
+    static int on = -1;
+    if (on < 0) on = cfg_bool("NX2NAVI_LIB_PREBUILD_BIG_BG");
+    return on;
+}
+
+// A large compute shader no cache holds goes to the background builder (lb_worker threads; under LB.stat).
+static void bg_queue(const GfxShader *cs, const uint8_t iid[32], uint64_t words) {
+    plat_mutex_lock(&LB.stat);
+    if (BG.n == BG.cap) {
+        size_t cap = BG.cap ? BG.cap * 2 : 16;
+        const GfxShader **c = realloc(BG.cs, cap * sizeof *c);
+        if (c) BG.cs = c;
+        uint8_t (*i)[32] = realloc(BG.iid, cap * sizeof *i);
+        if (i) BG.iid = i;
+        uint64_t *w = realloc(BG.words, cap * sizeof *w);
+        if (w) BG.words = w;
+        if (c && i && w) BG.cap = cap;
+    }
+    int ok = BG.n < BG.cap;
+    if (ok) BG.cs[BG.n] = cs, memcpy(BG.iid[BG.n], iid, 32), BG.words[BG.n] = words, BG.n++;
+    plat_mutex_unlock(&LB.stat);
+    if (!ok) {
+        lb_defer(iid, words);
+        return;
+    }
+    rt_log("vk_pipeline: stage library prebuild: compute shader %02x%02x%02x%02x%02x%02x%02x%02x (%llu SPIR-V words) not in "
+           "the pipeline caches: built on the background thread after the prebuild (NX2NAVI_LIB_PREBUILD_BIG_BG)",
+           iid[0], iid[1], iid[2], iid[3], iid[4], iid[5], iid[6], iid[7], (unsigned long long)words);
+}
+
+// NX2NAVI_BIG_BUILD_FREE_MB (default 8192; 0 no check): the system commit headroom a large compute build waits for.
+// A build of one of these shaders took the process up by 1-3 GB on an RTX 5090 and four at once by 16-19 GB on an
+// RTX 4090; started on a machine near its commit limit it can end the game. While the headroom is short the shader
+// waits, and if the game dispatches it first it is built there, as without the background builder.
+static int bg_room(double *used, double *limit) {
+    static double need = -1;
+    if (need < 0) need = strtod(cfg_value("NX2NAVI_BIG_BUILD_FREE_MB"), NULL);
+    double proc;
+    plat_commit_info(&proc, used, limit);
+    return need <= 0 || *limit < 0 || *limit - *used >= need;
+}
+
+// NX2NAVI_BIG_BUILD_MAX_MB (default 4096; 0 no cap): how far the builder may raise the process commit before it stops
+// and leaves the rest to their first dispatch. One of these shaders costs the driver 1-4 GB: on a 31 GB machine four of
+// them took the process from 15 to 29 GB and system commit to 60 of 65 GB, which is where a player feels the game
+// stutter. The builder exists to remove hitches, not to trade them for paging, so a machine that cannot hold them all
+// builds only what it can and pays one hitch per shader later.
+static double bg_growth_cap(void) {
+    static double cap = -1;
+    if (cap < 0) cap = strtod(cfg_value("NX2NAVI_BIG_BUILD_MAX_MB"), NULL);
+    return cap;
+}
+
+static void bg_main(void *arg) {
+    (void)arg;
+    plat_thread_priority(PLAT_PRIO_BELOW_NORMAL);
+    // The queue can grow while this thread builds (bg_queue runs on the replay thread and reallocs these arrays), so
+    // the sort and every read below happen under LB.stat; an entry is copied out before its compile so no pointer into
+    // the arrays is held across it.
+    plat_mutex_lock(&LB.stat);
+    for (size_t i = 1; i < BG.n; i++)   // smallest first: insertion sort of a handful
+        for (size_t j = i; j > 0 && BG.words[j] < BG.words[j - 1]; j--) {
+            const GfxShader *c = BG.cs[j];
+            BG.cs[j] = BG.cs[j - 1], BG.cs[j - 1] = c;
+            uint64_t w = BG.words[j];
+            BG.words[j] = BG.words[j - 1], BG.words[j - 1] = w;
+            uint8_t t[32];
+            memcpy(t, BG.iid[j], 32), memcpy(BG.iid[j], BG.iid[j - 1], 32), memcpy(BG.iid[j - 1], t, 32);
+        }
+    plat_mutex_unlock(&LB.stat);
+    double t_all = now_ms();
+    double c_start, c_used0, c_limit0;
+    plat_commit_info(&c_start, &c_used0, &c_limit0);
+    for (size_t i = 0; !LB.stop; i++) {
+        uint8_t idbuf[32];
+        uint64_t words = 0;
+        const GfxShader *cs;
+        plat_mutex_lock(&LB.stat);
+        int have = i < BG.n;
+        if (have) {
+            cs = BG.cs[i];
+            memcpy(idbuf, BG.iid[i], 32);
+            words = BG.words[i];
+        }
+        plat_mutex_unlock(&LB.stat);
+        if (!have) break;
+        const uint8_t *iid = idbuf;
+        struct { const GfxShader *cs; uint32_t compute; } k = {cs, 1};
+        uint64_t h = key_hash(&k, sizeof k);
+        Bindings B = {0};
+        const char *why = NULL;
+        double used, limit, c_now;
+        plat_commit_info(&c_now, &used, &limit);
+        double cap = bg_growth_cap();
+        if (cap > 0 && c_now - c_start >= cap) {
+            rt_log("vk_pipeline: background compute build: stopping, the process grew %.0f MB in all (NX2NAVI_BIG_BUILD_MAX_MB "
+                   "%.0f); the shaders left build at their first dispatch", c_now - c_start, cap);
+            break;
+        }
+        int waited = 0, no_room = 0;
+        double w0 = now_ms();
+        while (!LB.stop && !bg_room(&used, &limit)) {   // not under P.lock: a dispatch builds it meanwhile
+            if (!waited++)
+                rt_log("vk_pipeline: background compute build: waiting for commit headroom (system %.0f of %.0f MB, "
+                       "NX2NAVI_BIG_BUILD_FREE_MB %s)", used, limit, cfg_value("NX2NAVI_BIG_BUILD_FREE_MB"));
+            if (now_ms() - w0 > 30000.0) {   // waiting is only useful when the headroom will come back
+                rt_log("vk_pipeline: background compute build: no commit headroom after %.0f s; the shaders left build at "
+                       "their first dispatch", (now_ms() - w0) / 1000.0);
+                no_room = 1;
+                break;
+            }
+            plat_sleep_ms(2000);
+        }
+        if (LB.stop || no_room) break;
+        plat_mutex_lock(&P.lock);
+        int there = cs_flight_has(cs) || pipe_find(&k, sizeof k, h);   // a dispatch got to it first
+        Layout *l = there ? NULL : compute_layout(cs, &B, &why);
+        int flight = l ? cs_flight_add(cs) : 0;
+        if (l) BG.building = cs;
+        plat_mutex_unlock(&P.lock);
+        if (!l) {
+            if (there) BG.there++;
+            else BG.failed++, rt_log("vk_pipeline: background compute build: %s", why ? why : "no layout");
+            continue;
+        }
+        double t0 = now_ms();
+        VkPipeline pipe = compute_create(cs, l, 0);
+        double ms = now_ms() - t0;
+        plat_mutex_lock(&P.lock);
+        if (flight) cs_flight_remove(cs);
+        BG.building = NULL;
+        if (pipe && !pipe_find(&k, sizeof k, h)) {
+            pipe_add(&k, sizeof k, h, pipe, l, &B, VK_PIPELINE_BIND_POINT_COMPUTE, 0);
+            P.stats.compute++;
+        } else if (pipe) {
+            vkDestroyPipeline(P.device, pipe, NULL);
+        }
+        plat_mutex_unlock(&P.lock);
+        if (plat_xchg32(&BG.raised, 0)) plat_thread_priority(PLAT_PRIO_BELOW_NORMAL);
+        if (pipe) BG.built++, BG.ms += ms;
+        else BG.failed++;
+        double c_proc, c_used, c_limit;
+        plat_commit_info(&c_proc, &c_used, &c_limit);
+        rt_log("vk_pipeline: background compute build: %02x%02x%02x%02x%02x%02x%02x%02x (%llu SPIR-V words) %s in %.0f ms; "
+               "commit: process %.0f MB, system %.0f of %.0f MB", iid[0], iid[1], iid[2], iid[3], iid[4], iid[5], iid[6],
+               iid[7], (unsigned long long)words, pipe ? "built" : "failed", ms, c_proc, c_used, c_limit);
+    }
+    rt_log("vk_pipeline: background compute builds %s: %llu built (%.0f ms in all), %llu failed, %llu dispatched before "
+           "their turn; %.0f ms after the prebuild", LB.stop ? "stopped" : "done", (unsigned long long)BG.built, BG.ms,
+           (unsigned long long)BG.failed, (unsigned long long)BG.there, now_ms() - t_all);
+}
+
+// The last boot prebuild worker starts the builder when it queued anything.
+static void bg_start(void) {
+    if (!BG.n || LB.stop || BG.th) return;
+    if (!(BG.th = plat_thread_new(bg_main, NULL, "big compute")))
+        rt_log("vk_pipeline: cannot start the background compute builder; %zu large compute shaders build at their first "
+               "dispatch", BG.n);
+}
+
 static void lb_compute(const GfxShader *cs, const uint8_t iid[32]) {
     struct { const GfxShader *cs; uint32_t compute; } k = {cs, 1};
     uint64_t h = key_hash(&k, sizeof k);
@@ -3331,7 +3620,8 @@ static void lb_compute(const GfxShader *cs, const uint8_t iid[32]) {
     gfx_shader_spirv(cs, &words);
     int big = LB.big_words && words > LB.big_words;   // only from the caches (LB_BIG_WORDS)
     if (big && !P.cache_control) {
-        lb_defer(iid, words);
+        if (bg_on()) bg_queue(cs, iid, words);
+        else lb_defer(iid, words);
         return;
     }
     lb_lock();
@@ -3359,7 +3649,8 @@ static void lb_compute(const GfxShader *cs, const uint8_t iid[32]) {
         have = 1;
     }
     lb_unlock();
-    if (!pipe && big) lb_defer(iid, words);
+    if (!pipe && big && bg_on()) bg_queue(cs, iid, words);
+    else if (!pipe && big) lb_defer(iid, words);
     else lb_count(2, pipe ? have : 2, ms);
 }
 
@@ -3438,8 +3729,8 @@ static void lb_report(const char *how) {
            "%llu there; fragment %llu built (avg %.1f ms), %llu there; compute %llu built (avg %.1f ms), %llu there; driver "
            "cache only: vertex %llu (avg %.1f ms), fragment %llu (avg %.1f ms), compute %llu (avg %.1f ms); %llu failed, %llu not in the shader cache, "
            "%llu vertex/fragment skipped (graphics pipeline library off), %llu skipped (the driver crashed on them before, "
-           "shader-prepare-skip.txt), %llu large compute shaders left to their first dispatch (NX2NAVI_LIB_PREBUILD_BIG); "
-           "process working set %.0f MB", how, (unsigned long long)LB.done, LB.n,
+           "shader-prepare-skip.txt), %llu large compute shaders left to their first dispatch (NX2NAVI_LIB_PREBUILD_BIG), %zu "
+           "queued for the background builder (NX2NAVI_LIB_PREBUILD_BIG_BG); process working set %.0f MB", how, (unsigned long long)LB.done, LB.n,
            now_ms() - LB.t0, (unsigned long long)LB.built[0], LB.built[0] ? LB.ms[0] / LB.built[0] : 0.0,
            (unsigned long long)LB.have[0], (unsigned long long)LB.built[1], LB.built[1] ? LB.ms[1] / LB.built[1] : 0.0,
            (unsigned long long)LB.have[1], (unsigned long long)LB.built[2], LB.built[2] ? LB.ms[2] / LB.built[2] : 0.0,
@@ -3448,7 +3739,7 @@ static void lb_report(const char *how) {
            (unsigned long long)LB.warmed[2], LB.warmed[2] ? LB.warm_ms[2] / LB.warmed[2] : 0.0,
            (unsigned long long)(LB.fail[0] + LB.fail[1] + LB.fail[2]),
            (unsigned long long)LB.noshader, (unsigned long long)LB.nolib, (unsigned long long)LB.skipped,
-           (unsigned long long)LB.deferred, (double)mem_proc);
+           (unsigned long long)LB.deferred, BG.n, (double)mem_proc);
     plat_mutex_unlock_shared(&LB.stat);
 }
 
@@ -3483,7 +3774,11 @@ static void lb_worker(void *arg) {
         LB.done++;
         plat_mutex_unlock(&LB.stat);
     }
-    if (!plat_dec32(&LB.running)) lb_report(LB.stop ? "stopped" : "done");
+    if (!plat_dec32(&LB.running)) {
+        lb_report(LB.stop ? "stopped" : "done");
+        fb_log("after the stage library prebuild");
+        bg_start();
+    }
     return;
 }
 
@@ -3551,6 +3846,7 @@ static void lb_stop(void) {
     for (int i = 0; i < LB.threads; i++)
         if (LB.th[i]) plat_thread_join(LB.th[i]), LB.th[i] = NULL;
     LB.threads = 0;
+    if (BG.th) plat_thread_join(BG.th), BG.th = NULL;   // after its current build, if one runs
 }
 
 // Preparation: one prepared variant at a time into the driver's disk cache (private shader copy, nothing kept). arg is
@@ -3857,6 +4153,12 @@ void vk_pipeline_save(void) {
     if (vkGetPipelineCacheData(P.device, P.cache, &size, NULL) == VK_SUCCESS && size && (data = malloc(size)) &&
         vkGetPipelineCacheData(P.device, P.cache, &size, data) == VK_SUCCESS) {
         if (!plat_file_write_atomic(P.cache_path, data, size)) rt_log("vk_pipeline: cannot write %s", P.cache_path);
+        else if (P.feedback) {
+            char when[96];
+            snprintf(when, sizeof when, "at a save of %.1f MB (%+.1f MB since the boot)", size / 1048576.0,
+                     ((double)size - (double)P.cache_loaded) / 1048576.0);
+            fb_log(when);
+        }
     }
     free(data);
     plat_mutex_unlock(&save_lock);

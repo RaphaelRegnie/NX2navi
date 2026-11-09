@@ -70,6 +70,19 @@
 # the CPU threads).
 # lib_prebuild = 1
 # lib_prebuild_threads = 4
+# 1: very large compute shaders that no cache holds are built on one background thread after the start. 0: each is
+# built when the game first uses it, which can hold that frame for a second or two.
+# lib_prebuild_big_bg = 1
+# The commit headroom in MB those background builds wait for (0: no check).
+# big_build_free_mb = 8192
+# How far those background builds may raise the process commit in MB before the rest wait for their first use instead
+# (0: no limit). Each large shader costs the driver 1-4 GB; on a 31 GB machine four of them took the process from 15 to
+# 29 GB and the game stuttered, so raise this only on a machine with room to spare.
+# big_build_max_mb = 4096
+# 1: the log says how many pipelines came from pipeline-cache.bin; 2 also logs every compute pipeline built. 0: off.
+# pipe_feedback = 1
+# pipeline-cache.bin larger than this (MB) starts empty and is rewritten (0: no limit).
+# pipeline_cache_max_mb = 512
 # Build known pipelines ahead of time.
 # pipe_prebuild = 1
 # 1: the start waits until every known pipeline is built. Default 0: with the graphics pipeline library the start
@@ -411,3 +424,9 @@
 # names each dirty target that stays on the GPU ("fence write-back skipped-drawn-every-frame") and each one over 65536
 # bytes that went back ("over-default"). Raising it costs a copy per such target and wait.
 # wb_fence_limit = 65536
+# Log kernel services that block longer than this many ms, with the service number (0: off). A stalled frame shows up as
+# time in the replay; this says whether the guest was waiting in a service, and which one.
+# svc_slow_ms = 0
+# 1: the frame-time summary also splits the replay by op kind (draw, bind, transfer), which says where a stalled frame
+# went. The clock reads cost a fraction of a millisecond a frame, so it is off by default.
+# replay_time = 0

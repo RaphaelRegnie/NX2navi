@@ -101,14 +101,21 @@ def prepare_sources() -> Path:
     patches = sorted((XLATE / "patches").glob("*.patch"))
     if len(patches) != 35:
         sys.exit(f"expected 35 patches, found {len(patches)}")
+    # build/xlate is inside this checkout, and git inside a repository reads a "diff --git" patch's paths from the
+    # repository's top: those hunks fall outside the directory handed to --directory, git skips every file of the patch
+    # and still exits 0. 0021-prmt-byte-permute.patch is the only one written in that form, so it used to be skipped in
+    # silence and every byte permute stayed a no-op. GIT_CEILING_DIRECTORIES stops git from walking up to the checkout,
+    # so it reads the patch as it would outside a repository, and a "Skipped patch" line fails the build.
+    env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(BUILD.parent), LC_ALL="C")
     for patch in patches:
-        # git apply works outside a repository when given a directory; --check first so a failure names the patch.
         for extra in (["--check"], []):
             r = subprocess.run(
-                ["git", "apply", *extra, "--whitespace=nowarn", "--directory", str(src.relative_to(BUILD)), str(patch)],
-                cwd=BUILD, capture_output=True, text=True,
+                ["git", "apply", *extra, "--verbose", "--whitespace=nowarn",
+                 "--directory", str(src.relative_to(BUILD)), str(patch)],
+                cwd=BUILD, capture_output=True, text=True, env=env,
             )
-            if r.returncode != 0:
+            skipped = "Skipped patch" in r.stdout or "Skipped patch" in r.stderr
+            if r.returncode != 0 or skipped:
                 sys.exit(f"patch does not apply: {patch.name}\n{r.stdout}{r.stderr}")
         print(f"applied {patch.name}")
     return src

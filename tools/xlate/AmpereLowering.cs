@@ -1594,8 +1594,9 @@ static class AmpereLowering
         // HFMA2.RELU (79) clamps each lane at zero where the predicate in bits 87-90 holds; only PT is lowered. Measured
         // on an NVIDIA GPU (tests/tensor_lowering_check.py): a negative result or -0 becomes +0, +inf stays, -inf
         // becomes 0, a NaN result stays NaN (0x7fff). The sum goes to TexOut and integer operations build the mask of
-        // the half lanes to clear. Maxwell PRMT would be the obvious tool, but the translator emits nothing for it
-        // (Instructions/InstEmit.cs: PrmtR only logs "not implemented").
+        // the half lanes to clear. Maxwell PRMT would do that in one instruction and the translator implements it
+        // (xlate/patches/0021-prmt-byte-permute.patch, Instructions/InstEmitPermute.cs PrmtR); this keeps the integer
+        // form, which is what was measured.
         // F32 results (78), the H0_NH1 source (86) and absolute values where Maxwell has none are not lowered. HADD2's
         // second operand is B, or C for forms 2/3.
         void Half(ulong maxwell)

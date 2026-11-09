@@ -13,6 +13,7 @@
 #include "cfg.h"
 #include "host.h"
 #include "kernel.h"
+#include "prof.h"
 #include "platform/platform.h"
 
 #define R_OK 0u
@@ -1675,7 +1676,7 @@ static void cv_hook(void) {
     if (h) h();
 }
 
-int kern_svc(Cpu *c, uint32_t imm) {
+static int kern_svc_inner(Cpu *c, uint32_t imm) {
     uint64_t *x = c->x;
     if (g_diag > 0 && tcur) tcur->dg_svc = imm;
     switch (imm) {
@@ -2397,3 +2398,21 @@ HOST_OVERRIDE(KERN_SYM_INITIALIZE_FIBER, kern_fiber_initialize);
 HOST_OVERRIDE(KERN_SYM_FINALIZE_FIBER, kern_fiber_finalize);
 HOST_OVERRIDE(KERN_SYM_SWITCH_TO_FIBER, kern_fiber_switch);
 HOST_OVERRIDE(KERN_SYM_GET_CURRENT_FIBER, kern_fiber_current);
+
+// NX2NAVI_SVC_SLOW_MS (default 0, off): logs each kernel service that blocks longer than that, with the service number.
+// A stalled frame shows up as time in the replay; this says whether the guest was waiting in a service, and which one,
+// instead of leaving it to a sampler to find.
+int kern_svc(Cpu *c, uint32_t imm) {
+    static double lim = -1;
+    if (lim < 0) lim = strtod(cfg_value("NX2NAVI_SVC_SLOW_MS"), NULL);
+    if (lim <= 0) return kern_svc_inner(c, imm);
+    uint64_t t0 = plat_now_ns();
+    int r = kern_svc_inner(c, imm);
+    double ms = (plat_now_ns() - t0) / 1e6;
+    if (ms >= lim) {
+        uint32_t tid = plat_thread_id();
+        rt_log("kernel: service %#x blocked %.1f ms on thread %u%s", imm, ms, tid,
+               tid == prof_replay_tid ? " (the replay thread)" : "");
+    }
+    return r;
+}
