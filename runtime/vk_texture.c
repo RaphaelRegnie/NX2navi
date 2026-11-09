@@ -43,6 +43,8 @@ typedef struct Tex {
     VmaAllocation bound_to;       // the pool memory it is bound into
     uint32_t wgen;                // page generation of the last upload check
     uint32_t checked;             // submit_epoch of the last check from a draw binding
+    uint32_t use_ep;              // submit_epoch when a lookup last reached it (touch)
+    uint64_t use_frame;           // gfx_counters.frames then
     int uploaded, released;
     uint32_t rel_serial;          // reg_serial when it was released: slots registered before then are stale (slot_resolve)
     uint64_t rel_frame;           // gfx_counters.frames when it was released (drop_stale)
@@ -676,6 +678,17 @@ static uint64_t n_pressure_drops;
 
 static int comes_back_intact(const Tex *e) { return e->pub.mirrored && !e->pub.gpu_owned && !e->gpu_dirty; }
 
+// When a lookup last reached an entry: entry_of (every texture get and slot resolution) and the per-submit check of a
+// slot lookup (vk_texture_by_id_locked). The texture pool refresh looks every registered slot up once per submission
+// (vk_exec_draw.c pool_sync_entries), so an entry no lookup reached for IDLE_SUBMITS submissions and STALE_FRAMES
+// presents (below) has no live descriptor naming it: the game keeps the texture object, nothing samples it.
+#define IDLE_SUBMITS 240
+static void touch(Tex *e) {
+    e->use_ep = submit_epoch;
+    e->use_frame = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+}
+static int idle(const Tex *e, uint64_t now);
+
 // NX2NAVI_TEX_RELEASED_MB (default a sixteenth of the installed memory, 1 to 4 GiB; 0 = no limit) bounds the own memory
 // of the released entries: RELEASED_MAX alone kept 5-7 GiB of released render targets and decoded textures after an
 // hour of play at a 2160p game resolution, device memory the driver also charges to the system's commit (the process's
@@ -735,6 +748,10 @@ static int commit_is_low(void) {
 // young ones destroyed 2160p render targets about every frame for whole sessions. Frame generation also reads a frame's
 // depth target at the host present (vk_dlssg.c vk_dlssg_frame tags it), after the blit deferred destruction waits for.
 #define STALE_FRAMES 120
+static int idle(const Tex *e, uint64_t now) {
+    return submit_epoch - e->use_ep >= IDLE_SUBMITS && now - e->use_frame >= STALE_FRAMES;
+}
+
 static void drop_stale(uint64_t keep, uint64_t *count) {
     uint64_t now = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
     int dropped = 0;
@@ -1249,6 +1266,7 @@ static Tex *entry_of(const tex_t *t) {
     }
     if (e->released) e->released = 0, nreleased--, rel_unlink(e), n_site[2]++, tex_gen_bump(k.addr);
     e->t = *t;
+    touch(e);
     return e;
 }
 
@@ -1569,6 +1587,7 @@ const VkTexImage *vk_texture_by_id_locked(int id, view_t *view, int *has_view) {
         if (!e->uploaded || e->checked != submit_epoch) {
             make_fresh_snap(e);
             e->checked = submit_epoch;
+            touch(e);
         }
         s->cepoch = submit_epoch;
     }
@@ -2348,6 +2367,71 @@ void vk_texture_census(VkTexCensus *s) {
         else s->live++, s->own_live += e->alloc != NULL, s->bytes_live += bytes;
     }
     unlock();
+}
+
+// With NX2NAVI_TRACE=perf every 600 frames, after vk_memory.c's vram line: what the live entries' own memory holds. By
+// kind: decoded ASTC (as BC3 or RGBA8) and other textures whose content the CPU provides, all of which a re-upload
+// brings back (comes_back_intact), and the GPU-written ones (render targets, textures the GPU drew or copied into),
+// whose content lives only in the image. "idle" is the part no lookup reached for IDLE_SUBMITS submissions and
+// STALE_FRAMES presents (touch). Then the entries that share their storage address with another live entry (each
+// descriptor of the same storage gets an image of its own), the formats holding the most, and the largest entries.
+void vk_texture_census_log(uint64_t frame) {
+    enum { K_BC3, K_RGBA8, K_CPU, K_GPU, K_N };
+    static const char *const kn[K_N] = {"ASTC as BC3", "ASTC as RGBA8", "other CPU-written", "GPU-written"};
+    uint64_t n[K_N] = {0}, b[K_N] = {0}, in[K_N] = {0}, ib[K_N] = {0}, bound = 0, dup_n = 0, dup_b = 0;
+    struct { int fmt; uint64_t n, b; } fm[48];
+    int nfm = 0;
+    struct { uint64_t b; uint32_t w, h, d, levels; int fmt, gpu; } big[4] = {{0}};   // copied: read after unlock
+    const double M = 1048576.0;
+    lock();
+    uint64_t now = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+    for (uint32_t i = 0; i < by_key.cap; i++) {
+        const Tex *e = by_key.vals[i];
+        if (!e || e->released) continue;
+        if (!e->bytes) { bound += e->bound_to != NULL; continue; }
+        int k = !comes_back_intact(e) ? K_GPU : e->f.astc_bw ? (e->f.astc_bc ? K_BC3 : K_RGBA8) : K_CPU;
+        n[k]++, b[k] += e->bytes;
+        if (idle(e, now)) in[k]++, ib[k] += e->bytes;
+        int j = 0;
+        while (j < nfm && fm[j].fmt != (int)e->f.vk) j++;
+        if (j == nfm && nfm < 48) fm[nfm++] = (typeof(fm[0])){(int)e->f.vk, 0, 0};
+        if (j < nfm) fm[j].n++, fm[j].b += e->bytes;
+        for (int q = 0; q < 4; q++)
+            if (e->bytes > big[q].b) {
+                memmove(big + q + 1, big + q, sizeof *big * (size_t)(3 - q));
+                big[q] = (typeof(big[0])){e->bytes, e->pub.width, e->pub.height, e->pub.layers * e->pub.depth,
+                                          e->pub.levels, (int)e->f.vk, k == K_GPU};
+                break;
+            }
+    }
+    for (uint32_t i = 0; i < by_addr.cap; i++) {   // live entries with own memory at one address, beyond the largest
+        uint64_t cnt = 0, sum = 0, most = 0;
+        for (const Tex *p = by_addr.vals[i]; p; p = p->next_at)
+            if (!p->released && p->bytes) cnt++, sum += p->bytes, most = p->bytes > most ? p->bytes : most;
+        if (cnt > 1) dup_n += cnt - 1, dup_b += sum - most;
+    }
+    unlock();
+    char line[1024];
+    int o = snprintf(line, sizeof line, "mem: textures frame %llu: live with own memory by kind, idle part in brackets:",
+                     (unsigned long long)frame);
+    for (int k = 0; k < K_N; k++)
+        o += snprintf(line + o, sizeof line - (size_t)o, " %s %llu %.0f MiB (%llu %.0f MiB);", kn[k], (unsigned long long)n[k],
+                      b[k] / M, (unsigned long long)in[k], ib[k] / M);
+    snprintf(line + o, sizeof line - (size_t)o, " bound into pool memory %llu; sharing an address with another %llu %.0f MiB",
+             (unsigned long long)bound, (unsigned long long)dup_n, dup_b / M);
+    rt_log("%s", line);
+    for (int x = 0; x < nfm; x++)   // by bytes, largest first
+        for (int y = x + 1; y < nfm; y++)
+            if (fm[y].b > fm[x].b) { typeof(fm[0]) t = fm[x]; fm[x] = fm[y], fm[y] = t; }
+    o = snprintf(line, sizeof line, "mem: textures frame %llu: VkFormats holding the most:", (unsigned long long)frame);
+    for (int x = 0; x < nfm && x < 8; x++)
+        o += snprintf(line + o, sizeof line - (size_t)o, " %d: %llu %.0f MiB;", fm[x].fmt, (unsigned long long)fm[x].n,
+                      fm[x].b / M);
+    o += snprintf(line + o, sizeof line - (size_t)o, " largest:");
+    for (int q = 0; q < 4 && big[q].b; q++)
+        o += snprintf(line + o, sizeof line - (size_t)o, " %ux%ux%u fmt %d %u levels %.0f MiB%s;", big[q].w, big[q].h,
+                      big[q].d, big[q].fmt, big[q].levels, big[q].b / M, big[q].gpu ? " (GPU-written)" : "");
+    rt_log("%s", line);
 }
 
 void vk_texture_shutdown(void) {

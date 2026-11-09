@@ -2182,6 +2182,32 @@ static void heap_log(VkCtx *c, uint64_t frame, const VmaBudget *vb) {
     if (!j || !plat_thread_spawn(census_main, j, "mem census", 0)) free(j), plat_xchg32(&census_busy, 0);
 }
 
+// After the vram line: the imported pools the GPU reached through a resolve (a binding, copy or texture placement) and
+// those it never did, which hold host memory the driver counts in the host heap all the same (the 4.3 GiB imported
+// at the title screen exceed the 3.9 GiB host heap of an integrated GPU with 16 GB of RAM); then the VRAM mirrors no
+// submission synced for MIRROR_IDLE submissions, which a scene that needs the room could take back.
+#define MIRROR_IDLE 120
+static void pool_census_log(uint64_t frame) {
+    uint64_t un = 0, ub = 0, nn = 0, nb = 0, mn = 0, mb = 0, in = 0, ib = 0;
+    uint32_t sub = __atomic_load_n(&msub, __ATOMIC_RELAXED);   // the replay's; a log line may read it a submission late
+    plat_mutex_lock_shared(&pool_lock);
+    for (int i = 0; i < pool_index.n; i++) {
+        const PoolRec *r = pool_index.e[i].buf;
+        if (r->kind != POOL_IMPORT || !r->buf) continue;
+        uint64_t n = r->import_hi - r->import_lo;
+        if (__atomic_load_n(&r->used, __ATOMIC_RELAXED)) un++, ub += n;
+        else nn++, nb += n;
+        if (r->mstate != MS_ON) continue;
+        mn++, mb += n;
+        if (sub - r->acc_sub >= MIRROR_IDLE) in++, ib += n;
+    }
+    plat_mutex_unlock_shared(&pool_lock);
+    const double M = 1048576.0;
+    rt_log("mem: pools frame %llu: imported %llu %.0f MiB resolved by the GPU, %llu %.0f MiB never; mirrors %llu %.0f MiB, "
+           "idle for %d submissions %llu %.0f MiB", (unsigned long long)frame, (unsigned long long)un, ub / M,
+           (unsigned long long)nn, nb / M, (unsigned long long)mn, mb / M, MIRROR_IDLE, (unsigned long long)in, ib / M);
+}
+
 // With NX2NAVI_TRACE=perf every 600 frames: what holds device-local memory, to see what grows over a long session.
 // VMA's blocks and allocations on the device-local heaps, texture entries with their own memory, the VRAM mirrors and
 // the objects waiting for their last submission to retire.
@@ -2204,6 +2230,8 @@ static void vram_log(uint64_t frame) {
            alloc_bytes / M, (unsigned long long)t.live, (unsigned long long)t.own_live, t.bytes_live / M,
            (unsigned long long)t.released, (unsigned long long)t.own_released, t.bytes_released / M, (long long)m_live_n,
            m_live_bytes / M, dead_pending());
+    vk_texture_census_log(frame);
+    pool_census_log(frame);
     heap_log(c, frame, vb);
 }
 

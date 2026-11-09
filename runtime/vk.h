@@ -474,6 +474,7 @@ void vk_texture_stats(uint64_t *images, uint64_t *uploads, uint64_t *reuploads);
 // (images not bound into pool memory).
 typedef struct { uint64_t live, released, own_live, own_released, bytes_live, bytes_released; } VkTexCensus;
 void vk_texture_census(VkTexCensus *s);
+void vk_texture_census_log(uint64_t frame);         // vk_memory.c vram_log: the live entries' memory by kind and format
 void vk_texture_shutdown(void);                     // vk_mem_shutdown calls it
 void vk_texture_new_submit(void);                   // a queue submit starts: draw bindings check storage again
 uint32_t vk_texture_epoch(void);                    // the write-watch snapshot epoch vk_texture_new_submit started
