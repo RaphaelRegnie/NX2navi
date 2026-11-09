@@ -2013,6 +2013,8 @@ static void unpack_answers(const uint8_t *p, GfxShaderAnswers *a) {
 }
 
 // Reads a record file's body (after its header) into *body; 0 when absent, and a file with another header is removed.
+static volatile int32_t rec_kept;   // a record file rec_read could not read and kept: nothing is appended to it this run
+
 static int rec_read(const char *path, const char *magic, uint32_t version, uint32_t rec_size, uint8_t **body, size_t *n) {
     *body = NULL, *n = 0;
     FILE *f = fopen(path, "rb");
@@ -2021,8 +2023,9 @@ static int rec_read(const char *path, const char *magic, uint32_t version, uint3
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    int ok = len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, magic, 8) &&
-             h.version == version && h.rec_size == rec_size;
+    int head = len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1;
+    int format = head && !memcmp(h.magic, magic, 8) && h.version == version && h.rec_size == rec_size;
+    int ok = format;
     if (ok && len > (long)sizeof h) {
         *n = (size_t)len - sizeof h;
         ok = (*body = malloc(*n)) && fread(*body, 1, *n, f) == *n;
@@ -2030,7 +2033,10 @@ static int rec_read(const char *path, const char *magic, uint32_t version, uint3
     fclose(f);
     if (!ok) {
         free(*body), *body = NULL, *n = 0;
-        if (len > 0) rt_log("gfx_shader: %s has another format or version; it is rewritten", path), remove(path);
+        // Only a file of another format or version is deleted. A read that failed (no memory for the body when the
+        // system commit runs low, a short read) keeps the file: it holds every program and answer met in play.
+        if ((head && !format) || (len > 0 && len < (long)sizeof h)) rt_log("gfx_shader: %s has another format or version; it is rewritten", path), remove(path);
+        else if (len > 0) rt_log("gfx_shader: cannot read %s (%ld bytes); kept as it is", path, len), plat_xchg32(&rec_kept, 1);
     }
     return ok;
 }
@@ -2066,6 +2072,7 @@ void gfx_shader_record_at(const char *keys_path) {
     snprintf(RC.prg_path, sizeof RC.prg_path, "%.*sshader-programs.bin", dir, keys_path);
     uint8_t *b;
     size_t n;
+    plat_xchg32(&rec_kept, 0);
     if (rec_read(RC.ans_path, "NX2NSANS", ANS_VERSION, ANS_REC, &b, &n)) {
         for (size_t o = 0; o + ANS_REC <= n; o += ANS_REC) set_add(&RC.pairs, hash8(b + o + 36));
         if (n % ANS_REC) truncate_to(RC.ans_path, sizeof(RecHeader) + n / ANS_REC * ANS_REC);
@@ -2076,6 +2083,12 @@ void gfx_shader_record_at(const char *keys_path) {
         if (whole != n) truncate_to(RC.prg_path, sizeof(RecHeader) + whole);
     }
     free(b);
+    if (plat_xchg32(&rec_kept, 0)) {   // without what it holds, appends would repeat its records after a possibly torn tail
+        rt_log("gfx_shader: answers met in play are not recorded this run (%s or %s could not be read)", RC.ans_path,
+               RC.prg_path);
+        plat_mutex_unlock(&RC.lock);
+        return;
+    }
     rt_log("gfx_shader: recording answers met in play to %s (%u records, %u programs recorded before)", RC.ans_path,
            RC.pairs.n, RC.progs.n);
     plat_xchg32(&RC.on, 1);
