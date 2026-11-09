@@ -409,9 +409,13 @@ static void restbl_collect(void) {
         if (restbl_rel[0] && !strcmp(overlays[k].name, restbl_rel)) shipped_add(overlays[k].path, overlays[k].mod, 0);
 }
 
-typedef struct { int k, prio; const char *dir, *rel; } ModWalk;
+typedef struct { int k, prio, depth; const char *dir, *rel; } ModWalk;
 
-static void mod_walk(int k, int prio, const char *dir, const char *rel);
+// Folders nest at most this deep in a mod's RomFS folder: each level costs a stack frame (two 4 KiB paths here and
+// the listing's own), and no RomFS path of the game is deeper.
+#define MOD_WALK_DEPTH 32
+
+static void mod_walk(int k, int prio, int depth, const char *dir, const char *rel);
 
 // One entry of a mod's RomFS folder (mod_walk).
 static int mod_walk_cb(const char *leaf, int kind, uint64_t size, void *ctx) {
@@ -425,7 +429,8 @@ static int mod_walk_cb(const char *leaf, int kind, uint64_t size, void *ctx) {
         return 1;
     }
     if (kind == PLAT_FS_DIR) {
-        mod_walk(w->k, w->prio, file, path);
+        if (w->depth >= MOD_WALK_DEPTH) rt_log("mods: %s: %s nests too deep; left out", m->name, file);
+        else mod_walk(w->k, w->prio, w->depth + 1, file, path);
         return 1;
     }
     if (kind != PLAT_FS_FILE) return 1;
@@ -453,8 +458,8 @@ static int mod_walk_cb(const char *leaf, int kind, uint64_t size, void *ctx) {
 }
 
 // The files under dir (a mod's RomFS root; rel: the RomFS path of dir, "" at the root) as overlays of mod k.
-static void mod_walk(int k, int prio, const char *dir, const char *rel) {
-    ModWalk w = {k, prio, dir, rel};
+static void mod_walk(int k, int prio, int depth, const char *dir, const char *rel) {
+    ModWalk w = {k, prio, depth, dir, rel};
     // a folder that cannot be listed (no permission, a path longer than Windows allows) loses its files: say so
     if (plat_fs_list(dir, mod_walk_cb, &w) != PLAT_FS_OK)
         rt_log("mods: %s: cannot list %s (error %d); its files are left out", mods_at(k)->name, dir,
@@ -507,7 +512,7 @@ static void mods_overlay_init(void) {
     for (int k = 0; k < n; k++) {
         const ModInfo *m = mods_at(k);
         // a mod with ExeFS patches waits for the rebuild that applies them: half of a mod is worse than none
-        if (m->enabled && (m->kind & MOD_ROMFS) && m->problem == MOD_OK) mod_walk(k, 2 + (n - k), m->romfs, "");
+        if (m->enabled && (m->kind & MOD_ROMFS) && m->problem == MOD_OK) mod_walk(k, 2 + (n - k), 0, m->romfs, "");
     }
 }
 
