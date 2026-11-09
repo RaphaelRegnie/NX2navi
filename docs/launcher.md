@@ -305,7 +305,8 @@ pruning, unsafe archives, the background update (a release staged beside the run
 `staged.json` marker, a staged release installed after a restart, no install while the game runs, the install once
 it exited, nothing by itself with Install Updates Automatically off, a failed staging tried again after the next
 check), the font decoding on a system font wrapped like the game's, `make_game.py` on a synthetic
-`.nup` (events, skipped steps, `--rebuild` without the dump, step keys), the RomFS step beside the lift and compile
+`.nup` (events, skipped steps, `--rebuild` without the dump, step keys, the shaders key following the translator the
+build uses), the RomFS step beside the lift and compile
 and its failure stopping the build, the prompts step with a stand-in prompt tool (when it runs again, and that it
 makes no other step run), the button art a release copies and the packages and tools the prompts need in a release,
 the compile step's object cache with the system's C compiler and its

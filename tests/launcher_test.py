@@ -14,7 +14,8 @@ Run: python tests/launcher_test.py   (Python 3.14 for the zstd tests; the window
 - gamefiles: the .bfotf font wrapping and zstd dictionaries, on a font of this system made into a fake RomFS
 - the button art of a release: the files tools/prompt_art.py copies, and the packages and tools the prompts need
 - make_game.py: a synthetic .nup through the check, exefs and romfs steps with --events, skipped steps on a second
-  run, --rebuild without the game files, the prompts step with a stand-in prompt tool, the object cache of the compile
+  run, --rebuild without the game files, the shaders key following the translator the build uses (the kit's bin/ or
+  a source checkout's build/xlate/), the prompts step with a stand-in prompt tool, the object cache of the compile
   step with the system's C compiler, and its windres call under folders with spaces (a script in windres's place)
 - jobs: an install driven by a fake make_game.py, with and without the prompts row
 - the window: --selftest draws every screen (skipped without a display)
@@ -1412,6 +1413,37 @@ class MakeGameTest(Tmp):
         steps = json.loads((self.out / 'build-cache' / 'state.json').read_text())['steps']
         self.assertNotIn('romfs', steps)
 
+    def test_shaders_key_names_the_translator_the_build_uses(self):
+        """A source checkout has its translator in build/xlate/ (tools/build_xlate.py), not in the kit's bin/: the
+        shaders key follows its identity, so a rebuilt translator prepares the shaders again. A kit's bin/ comes first
+        when both exist, and a kit with no translator is refused with the way to build one."""
+        from unittest import mock
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        (kit / 'tools' / 'prepare_shaders.py').write_text('')
+        xlate = kit / 'build' / 'xlate'
+        xlate.mkdir(parents=True)
+        (xlate / self.mg.XLATE_NAME).write_bytes(b'')
+        (xlate / 'nx2navi_xlate.id').write_text('xlate 1\n')
+
+        def key():
+            return self.mg.step_key('shaders', 'game', self.out)
+        with mock.patch.object(self.mg, 'KIT', kit):
+            first = key()
+            (xlate / 'nx2navi_xlate.id').write_text('xlate 2\n')
+            self.assertNotEqual(key(), first)
+            (kit / 'bin').mkdir()
+            (kit / 'bin' / self.mg.XLATE_NAME).write_bytes(b'')
+            (kit / 'bin' / 'nx2navi_xlate.id').write_text('xlate 3\n')
+            from_bin = key()
+            (xlate / 'nx2navi_xlate.id').write_text('xlate 4\n')
+            self.assertEqual(key(), from_bin)
+            shutil.rmtree(kit / 'bin')
+            shutil.rmtree(xlate)
+            with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+                key()
+            self.assertIn('tools/build_xlate.py', err.getvalue())
+
     def test_prompts_step(self):
         """With button art in the kit, the last step draws the button prompts (a fake tools/pad_prompts.py), one
         progress event per folder. It runs again only when the art, the bind_ lines or a folder changed, and then no
@@ -1420,6 +1452,7 @@ class MakeGameTest(Tmp):
         kit = self.tmp / 'kit'
         (kit / 'tools').mkdir(parents=True)
         (kit / 'bin').mkdir()
+        (kit / 'bin' / self.mg.XLATE_NAME).write_bytes(b'')   # the translator the shaders key names (xlate_source)
         (kit / 'bin' / 'nx2navi_xlate.id').write_text('xlate 1\n')
         (kit / 'tools' / 'prepare_shaders.py').write_text('')
         for name in ('prompt_art.py', 'button_icons.py'):

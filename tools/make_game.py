@@ -1543,8 +1543,10 @@ def step_key(step, identity, out=None):
                    f'|cpu {cpu_tag()}')
     if step == 'compile':
         return compile_key
-    # shaders: the built game and the translator that prepared them
-    return f'shaders-1|{compile_key}|{sha256_file(KIT / "tools" / "prepare_shaders.py")}|{sha256_file(KIT / "bin" / "nx2navi_xlate.id")}'
+    # shaders: the built game and the translator that prepared them, the one xlate_source finds (the kit's bin/, or a
+    # source checkout's build/xlate/)
+    return (f'shaders-1|{compile_key}|{sha256_file(KIT / "tools" / "prepare_shaders.py")}'
+            f'|{sha256_file(xlate_source() / "nx2navi_xlate.id")}')
 
 
 def main():
