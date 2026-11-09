@@ -63,6 +63,7 @@ typedef struct PoolRec {
     VmaAllocation malloc_;
     uint32_t acc_sub;                  // replay: the last submission that synced the mirror (mirror_sync)
     uint32_t wb_sub;                   // replay: the last submission that wrote mirror bytes back to guest memory
+    uint32_t refused_sub;              // replay: the submission that refused its mirror for the VRAM budget, 0 none
     uint32_t vd_wrote_sub, vd_use_sub; // verify mode: the last submission that bound it written / used its mirror
     uint64_t vd_wrote_n;               // verify mode: written bindings of it so far
     uint32_t mgen;                     // gen_lock: every page write stamped up to this generation is in the mirror
@@ -1363,14 +1364,103 @@ static void mbarrier(VkCommandBuffer cb, VkPipelineStageFlags2 ss, VkAccessFlags
 
 static void refuse(PoolRec *r, int why, const char *what) {
     r->mstate = MS_REFUSED;
+    r->refused_sub = why == MR_BUDGET ? (msub ? msub : 1) : 0;
     uint64_t n = r->import_hi - r->import_lo;
-    if (plat_inc64(&m_refused_n[why]) <= 4) {
+    static volatile int32_t logged;   // budget refusals are asked again (vk_mem_use): a few lines in all
+    if (plat_inc64(&m_refused_n[why]) <= 4 && plat_inc32(&logged) <= 12) {
         char f[160];
         flag_names(r->flags, f, sizeof f);
         rt_log("mem: pool %#llx+%#llx (%s) stays imported: %s", (unsigned long long)r->lo, (unsigned long long)r->size,
                f, what);
     }
     plat_add64(&m_refused_bytes[why], (int64_t)n);
+}
+
+// ---- eviction (NX2NAVI_MIRROR_EVICT, default on; 0 = a pool over the budget stays imported, as before)
+// A pool whose mirror would not fit the VRAM budget stayed imported for good: in a scene that streams in more pools
+// than fit, whichever pool came last lost its mirror, however hot, while mirrors of pools nothing had used for minutes
+// kept their VRAM. Now the mirrors no submission synced for MIRROR_IDLE submissions make room, least recently synced
+// first (mirror_evict), and a pool refused for the budget asks again after RETRY_SUBS submissions (vk_mem_use). Above
+// the texture threshold (NX2NAVI_TEX_VRAM_PRESSURE, 90% of the budget) mirrors idle for EVICT_IDLE_PRESSURE submissions
+// also go on their own every 8 submissions (vk_mem_mirror_begin), so the textures get the room.
+// A victim was neither synced, used nor written back in the submission being recorded (it has nothing in the copy,
+// write-back or snapshot lists), and every GPU write to it went back to guest memory at the end of the submission that
+// made it (vk_mem_mirror_end), so the imported buffer holds everything. The device address table moves its pages back
+// to the imported buffer (vk_gpa_remap_plain); a shader of a submission in flight that reads the old record still finds
+// the mirror, destroyed only once the submission being recorded is done (vk_defer_buffer). The pool is mirrored again,
+// from a whole copy, on its next buffer use. Its freed bytes count as room at once (evict_room): VMA places the next
+// mirror into the holes before the driver's budget shows the release.
+#define MIRROR_IDLE 120
+#define RETRY_SUBS 600
+#define EVICT_IDLE_PRESSURE 600
+static int mirror_evict_on = -1;
+static int64_t m_evicted_n, m_evicted_bytes, m_retries;
+static uint64_t room_bytes, room_fence;   // replay: bytes evicted that the budget may still count, until room_fence
+
+static int evict_enabled(void) {
+    if (mirror_evict_on < 0) {
+        mirror_evict_on = rt_knob("MIRROR_EVICT", "1");
+        rt_log("mem: idle mirrors %s (NX2NAVI_MIRROR_EVICT=%d)", mirror_evict_on ? "make room for new ones and for textures under VRAM pressure"
+                                                                               : "stay; a pool over the VRAM budget stays imported", mirror_evict_on);
+    }
+    return mirror_evict_on;
+}
+
+static uint64_t evict_room(void) {
+    if (room_bytes && vk_sync_fence_done() >= room_fence) room_bytes = 0;
+    return room_bytes;
+}
+
+// Replay thread: evicts mirrors idle for at least min_idle submissions, least recently synced first, until need bytes
+// are freed. Returns the bytes freed.
+static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) {
+    enum { MAXV = 64 };
+    PoolRec *v[MAXV];
+    int nv = 0;
+    plat_mutex_lock(&pool_lock);
+    for (int i = 0; i < nm; i++) {   // the MAXV least recently synced candidates, oldest first
+        PoolRec *r = mlist[i];
+        uint32_t age = msub - r->acc_sub;
+        if (age < min_idle || r->wb_sub == msub || msub - r->wb_sub < 2) continue;
+        int at = nv;
+        while (at > 0 && msub - v[at - 1]->acc_sub < age) at--;
+        if (at == MAXV) continue;
+        if (nv < MAXV) nv++;
+        memmove(v + at + 1, v + at, sizeof *v * (size_t)(nv - 1 - at));
+        v[at] = r;
+    }
+    uint64_t freed = 0;
+    uint32_t idle_for[MAXV];
+    VkBuffer dead[MAXV];
+    VmaAllocation dead_a[MAXV];
+    int n = 0;
+    // All under the exclusive lock: vk_pool_fini, on another thread, takes a pool off the list under it, so a victim is
+    // still a live pool here, and a finalize that follows finds it imported, its table pages on the imported buffer.
+    for (; n < nv && freed < need; n++) {
+        PoolRec *r = v[n];
+        idle_for[n] = msub - r->acc_sub;
+        mirror_forget(r);   // off the list, mirror_gen bumped: no buffer use gets the mirror from here on
+        r->mstate = MS_NONE, r->acc_sub = 0, r->refused_sub = 0;
+        dead[n] = r->mbuf, dead_a[n] = r->malloc_;
+        r->mbuf = VK_NULL_HANDLE, r->malloc_ = NULL;
+        plat_mutex_lock(&flush_lock);   // flushes not copied yet: the next mirror starts from a whole copy
+        __atomic_store_n(&r->fl_n, 0, __ATOMIC_RELEASE);
+        r->fl_calls = r->fl_sum = 0;
+        plat_mutex_unlock(&flush_lock);
+        if (r->gpa_rec) r->gpa_rec = vk_gpa_remap_plain(r->import_lo, r->import_hi, r->gpa_rec, r->buf, r->import_lo);
+        freed += r->import_hi - r->import_lo;
+        if (m_evicted_n + n < 8)
+            rt_log("mem: mirror of pool %#llx+%#llx (%.1f MiB) evicted, idle for %u submissions: %s", (unsigned long long)r->lo,
+                   (unsigned long long)r->size, (r->import_hi - r->import_lo) / 1048576.0, idle_for[n], why);
+    }
+    plat_mutex_unlock(&pool_lock);
+    for (int i = 0; i < n; i++) vk_defer_buffer(dead[i], dead_a[i]);   // after the submission being recorded
+    if (n) {
+        plat_add64(&m_evicted_n, n);
+        plat_add64(&m_evicted_bytes, (int64_t)freed);
+        room_bytes += freed, room_fence = vk_sync_issued() + 2;
+    }
+    return freed;
 }
 
 // Replay thread: the pool's mirror on its first buffer use.
@@ -1392,11 +1482,21 @@ static void mirror_create(PoolRec *r) {
     if (r1 >= SNAP_REGIONS) return refuse(r, MR_UNTRACKED, "outside the write-watched address space");
     uint64_t used, budget;
     int exact;
-    if (vk_mem_vram(&used, &budget, &exact) && used + n + budget / 8 > budget) {
-        char why[128];
-        snprintf(why, sizeof why, "its %.1f MiB mirror does not fit the VRAM budget (%.0f of %.0f MiB in use)",
-                 n / 1048576.0, used / 1048576.0, budget / 1048576.0);
-        return refuse(r, MR_BUDGET, why);
+    if (vk_mem_vram(&used, &budget, &exact)) {
+        uint64_t room = evict_room();
+        used = used > room ? used - room : 0;
+        if (used + n + budget / 8 > budget && evict_enabled()) {   // room from mirrors nothing synced for a while
+            char why[96];
+            snprintf(why, sizeof why, "room for a %.1f MiB mirror", n / 1048576.0);
+            uint64_t f = mirror_evict(used + n + budget / 8 - budget, MIRROR_IDLE, why);
+            used = used > f ? used - f : 0;
+        }
+        if (used + n + budget / 8 > budget) {
+            char why[128];
+            snprintf(why, sizeof why, "its %.1f MiB mirror does not fit the VRAM budget (%.0f of %.0f MiB in use)",
+                     n / 1048576.0, used / 1048576.0, budget / 1048576.0);
+            return refuse(r, MR_BUDGET, why);
+        }
     }
     plat_mutex_lock(&gen_lock);
     mrep.sync_queries += snap_regions(r0, r1, mepoch);
@@ -1522,6 +1622,12 @@ static void mirror_sync(PoolRec *r) {
 
 void vk_mem_use(VkMemSpan *sp) {
     PoolRec *r = sp->pool;
+    if (r->mstate == MS_REFUSED && r->refused_sub && msub - r->refused_sub >= RETRY_SUBS && evict_enabled()) {
+        plat_dec64(&m_refused_n[MR_BUDGET]);   // counted again if refused again
+        plat_add64(&m_refused_bytes[MR_BUDGET], -(int64_t)(r->import_hi - r->import_lo));
+        plat_inc64(&m_retries);
+        r->mstate = MS_NONE, r->refused_sub = 0;   // refuse sets it again
+    }
     if (r->mstate == MS_NONE) mirror_create(r);
     if (r->mstate != MS_ON) return;
     if (r->acc_sub != msub) mirror_sync(r);
@@ -1891,6 +1997,19 @@ void vk_mem_mirror_begin(void) {
     msub = msub + 1 ? msub + 1 : 1;
     __atomic_add_fetch(&mirror_gen, 1, __ATOMIC_RELEASE);
     mepoch = vk_texture_epoch();
+    if (!(msub & 7) && nm && evict_enabled()) {   // VRAM pressure: idle mirrors make room for the textures
+        static int pressure = -1;   // the textures' threshold (vk_texture.c sweep_pressure)
+        if (pressure < 0) {
+            const char *e = cfg_get("NX2NAVI_TEX_VRAM_PRESSURE");
+            pressure = e && *e ? atoi(e) : 90;
+            if (pressure < 0 || pressure > 100) pressure = 90;
+        }
+        uint64_t used, budget, room = evict_room();
+        int exact;
+        if (pressure && vk_mem_vram(&used, &budget, &exact) && used > room &&
+            used - room > budget / 100 * (uint64_t)pressure)
+            mirror_evict(used - room - budget / 100 * (uint64_t)pressure + budget / 50, EVICT_IDLE_PRESSURE, "VRAM pressure");
+    }
     uint64_t q = 0, run0 = 0, run1 = 0;
     int have = 0;
     plat_mutex_lock_shared(&pool_lock);
@@ -2112,14 +2231,16 @@ static void mirror_log(uint64_t frame) {
            "%lld, overlapping %lld, failed %lld; per frame: submits %.2f, syncs %.1f, upload %.3f MiB in %.1f ranges, "
            "first use %.2f pools %.3f MiB, write-back %.3f MiB in %.1f ranges, merge %.3f MiB in %.1f dispatches "
            "(snapshots %.3f MiB, new buffers %.2f), flush calls %.1f (%.3f MiB), queries "
-           "%.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu %.3f ms (pre-snap %.3f, syncs %.3f)%s",
+           "%.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu %.3f ms (pre-snap %.3f, syncs %.3f); so far "
+           "evicted %lld (%.1f MiB), budget refusals asked again %lld%s",
            (unsigned long long)frame, (long long)m_live_n, m_live_bytes / M, (long long)m_refused_n[MR_BUDGET],
            m_refused_bytes[MR_BUDGET] / M, (long long)m_refused_n[MR_UNTRACKED], (long long)m_refused_n[MR_OVERLAP],
            (long long)m_refused_n[MR_ALLOC], a.subs / f, a.syncs / f, a.upload_bytes / f / M, a.upload_copies / f,
            a.first_n / f, a.first_bytes / f / M, a.wb_bytes / f / M, a.wb_copies / f, a.merge_bytes / f / M,
            a.merge_dispatches / f, a.snap_bytes / f / M, a.snap_allocs / f, fc / f, fb / f / M,
            a.presnap_queries / f, a.presnap_bytes / f / M, a.sync_queries / f, a.prologues / f, qpc_ms(a.presnap_t + a.sync_t) / f,
-           qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, ver);
+           qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, (long long)m_evicted_n, m_evicted_bytes / M, (long long)m_retries,
+           ver);
     rt_log("mem: mirror frame %llu: upload sources per frame, overlaps counted twice: written pages %.3f MiB; flush ranges "
            "%.2f, %.3f MiB, from %.1f flushes of %.3f MiB", (unsigned long long)frame, a.page_bytes / f / M, a.flush_n / f,
            a.flush_bytes / f / M, a.flush_calls / f, a.flush_sum / f / M);
@@ -2207,7 +2328,6 @@ static void heap_log(VkCtx *c, uint64_t frame, const VmaBudget *vb) {
 // those it never did, which hold host memory the driver counts in the host heap all the same (the 4.3 GiB imported
 // at the title screen exceed the 3.9 GiB host heap of an integrated GPU with 16 GB of RAM); then the VRAM mirrors no
 // submission synced for MIRROR_IDLE submissions, which a scene that needs the room could take back.
-#define MIRROR_IDLE 120
 static void pool_census_log(uint64_t frame) {
     uint64_t un = 0, ub = 0, nn = 0, nb = 0, mn = 0, mb = 0, in = 0, ib = 0;
     uint32_t sub = __atomic_load_n(&msub, __ATOMIC_RELAXED);   // the replay's; a log line may read it a submission late
