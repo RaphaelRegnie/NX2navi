@@ -501,12 +501,27 @@ static void pb_log(const char *when) {
 // Vk*PipelineCreateInfo. With binaries on: from the stored binaries of its pipeline key when there are any, else
 // compiled with P.cache and its binaries captured. The create info is restored before returning.
 typedef struct { VkStructureType sType; const void *pNext; VkPipelineCreateFlags flags; } PipeCiHead;
+
+// Builds into P.cache against reads of its data. Every create with P.cache holds this shared (pipe_create_in); the
+// copy of the data in cache_save holds it exclusively and only takes it when no build is running. The Vulkan rules
+// allow reading a cache created without VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT while pipelines are
+// built into it, but Intel's Windows driver (101.8991 on an Arc 140V) crashed inside vkGetPipelineCacheData during the
+// copy, reading through a null entry, with compute and library builds running beside the autosave.
+static PlatMutex cache_rw = PLAT_MUTEX_INIT;
+
+static VkResult pipe_create_in(int kind, void *ci, VkPipeline *pipe, VkPipelineCache cache) {
+    if (cache) plat_mutex_lock_shared(&cache_rw);
+    VkResult r = kind == 2 ? vkCreateComputePipelines(P.device, cache, 1, ci, NULL, pipe)
+                           : vkCreateGraphicsPipelines(P.device, cache, 1, ci, NULL, pipe);
+    if (cache) plat_mutex_unlock_shared(&cache_rw);
+    return r;
+}
+
 static VkResult pipe_create(int kind, void *ci, VkPipeline *pipe) {
     PipeCiHead *hd = ci;
     VkResult r;
     pb_last = 0;
-#define PIPE_CREATE(cache) (kind == 2 ? vkCreateComputePipelines(P.device, cache, 1, ci, NULL, pipe) \
-                                      : vkCreateGraphicsPipelines(P.device, cache, 1, ci, NULL, pipe))
+#define PIPE_CREATE(cache) pipe_create_in(kind, ci, pipe, cache)
     if (!PB.on) return PIPE_CREATE(P.cache);
     VkPipelineCreateInfoKHR kci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_INFO_KHR, .pNext = ci};
     VkPipelineBinaryKeyKHR key = {.sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
@@ -2635,7 +2650,8 @@ static VkPipeline gpl_link(const VkPipeState *s, const GKey *k, const Layout *lc
 // shaders (gfx_shader_get results) live for the process (gfx_shader_drop_memory is the shader probe's, which builds no
 // pipelines), layouts until vk_pipeline_shutdown, which drains the queue first. Workers call vkCreateGraphicsPipelines
 // without P.lock: P.cache is created without VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT, so the driver
-// synchronises it, vkGetPipelineCacheData in vk_pipeline_save included. Compute pipelines stay synchronous: a skipped
+// synchronises builds into it; only the copy of its data in cache_save is kept apart from them (cache_rw). Compute
+// pipelines stay synchronous: a skipped
 // dispatch can change what the game computes.
 //
 // Two queues: draws' misses (A.head) and the boot prebuild (A.low, see "pipeline keys" below). Workers take the low
@@ -4657,7 +4673,50 @@ void vk_pipeline_stats(VkPipeStats *s) {
 
 static PlatMutex save_lock = PLAT_MUTEX_INIT;   // one cache save at a time; shutdown takes it to destroy the cache
 
-void vk_pipeline_save(void) {
+// Copies P.cache's data into pipeline-cache.bin, with cache_rw held exclusively for the copy only (not the file write).
+// The lock is only ever tried, never waited for: a waiting exclusive request would hold back every new build
+// (a shared request queues behind it), so a pending save could stall the replay. wait_ms: how long to keep trying
+// while builds run (0: one try). Returns 0 when no build-free moment came, 1 otherwise (saved, or nothing to save).
+static int cache_save(uint32_t wait_ms) {
+    if (!P.ready || !P.cache || !P.cache_path[0]) return 1;
+    // Not under P.lock: holding P.lock through the copy and the file write (about 60 ms on the 1.4.3 fight) stopped
+    // every pipeline lookup of the replay, a freeze at each 20 s autosave.
+    plat_mutex_lock(&save_lock);
+    if (!P.cache) {   // vk_pipeline_shutdown destroyed it
+        plat_mutex_unlock(&save_lock);
+        return 1;
+    }
+    uint64_t until = plat_now_ms() + wait_ms;
+    while (!plat_mutex_trylock(&cache_rw)) {
+        if (plat_now_ms() >= until) {
+            plat_mutex_unlock(&save_lock);
+            return 0;
+        }
+        plat_sleep_ms(2);
+    }
+    size_t size = 0;
+    void *data = NULL;
+    int got = vkGetPipelineCacheData(P.device, P.cache, &size, NULL) == VK_SUCCESS && size && (data = malloc(size)) &&
+              vkGetPipelineCacheData(P.device, P.cache, &size, data) == VK_SUCCESS;
+    plat_mutex_unlock(&cache_rw);
+    if (got) {
+        if (!plat_file_write_atomic(P.cache_path, data, size)) rt_log("vk_pipeline: cannot write %s", P.cache_path);
+        else if (P.feedback) {
+            char when[96];
+            snprintf(when, sizeof when, "at a save of %.1f MB (%+.1f MB since the boot)", size / 1048576.0,
+                     ((double)size - (double)P.cache_loaded) / 1048576.0);
+            fb_log(when);
+        }
+    }
+    free(data);
+    plat_mutex_unlock(&save_lock);
+    return 1;
+}
+
+// Builds still running after this long at a save that waits (exit, the shader preparation) leave the file as it was.
+#define SAVE_WAIT_MS 5000
+
+static void save_with(uint32_t wait_ms) {
     if (P.ready) keys_flush(), pb_flush();
     if (P.ready && P.gpl) {
         rt_log("vk_pipeline: gpl: %llu fast links (%llu by workers; avg %.2f ms, max %.2f ms, %llu failed), %llu draws "
@@ -4685,28 +4744,13 @@ void vk_pipeline_save(void) {
     }
     gfx_shader_record_flush(1);
     if (P.ready && !P.cache) pb_log("at a save");   // with P.cache the line comes with its own save below
-    if (!P.ready || !P.cache || !P.cache_path[0]) return;
-    // Not under P.lock: the driver synchronises P.cache, and holding P.lock through the copy and the file write (about
-    // 60 ms on the 1.4.3 fight) stopped every pipeline lookup of the replay, a freeze at each 20 s autosave.
-    plat_mutex_lock(&save_lock);
-    if (!P.cache) {   // vk_pipeline_shutdown destroyed it
-        plat_mutex_unlock(&save_lock);
-        return;
-    }
-    size_t size = 0;
-    void *data = NULL;
-    if (vkGetPipelineCacheData(P.device, P.cache, &size, NULL) == VK_SUCCESS && size && (data = malloc(size)) &&
-        vkGetPipelineCacheData(P.device, P.cache, &size, data) == VK_SUCCESS) {
-        if (!plat_file_write_atomic(P.cache_path, data, size)) rt_log("vk_pipeline: cannot write %s", P.cache_path);
-        else if (P.feedback) {
-            char when[96];
-            snprintf(when, sizeof when, "at a save of %.1f MB (%+.1f MB since the boot)", size / 1048576.0,
-                     ((double)size - (double)P.cache_loaded) / 1048576.0);
-            fb_log(when);
-        }
-    }
-    free(data);
-    plat_mutex_unlock(&save_lock);
+    if (!cache_save(wait_ms) && wait_ms)
+        rt_log("vk_pipeline: %s not saved: pipeline builds kept running for %u ms", P.cache_path, (unsigned)wait_ms);
+}
+
+// The save at exit and after the shader preparation: it waits up to SAVE_WAIT_MS for a moment with no build running.
+void vk_pipeline_save(void) {
+    save_with(SAVE_WAIT_MS);
 }
 
 // The game never shuts the device down (boot.c and the window end the process), so the cache is saved while it
@@ -4725,8 +4769,14 @@ static void autosave_once(void) {
     VkPipeStats s;
     vk_pipeline_stats(&s);
     if (s.graphics + s.compute == last_n) return;
+    // Only at a moment with no build running (cache_save): while one runs the save waits for the next tick, 500 ms
+    // on, before it logs or flushes anything, so a busy stretch does not repeat the statistics lines every tick.
+    if (P.cache && P.cache_path[0]) {
+        if (!plat_mutex_trylock(&cache_rw)) return;
+        plat_mutex_unlock(&cache_rw);
+    }
     last_n = s.graphics + s.compute, last_ms = now;
-    vk_pipeline_save();
+    save_with(0);
 }
 
 // On its own thread: the save (vkGetPipelineCacheData and the file write, about 60 ms) and the key appends (a flush to
