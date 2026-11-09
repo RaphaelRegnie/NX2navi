@@ -9,10 +9,11 @@ Run: python tests/launcher_test.py   (Python 3.14 for the zstd tests; the window
 - feed: GitHub releases (stable, preview, private with a token) and a plain manifest URL, served locally
 - updater: staging a release, switching, rollback, pruning, refusing unsafe archives
 - gamefiles: the .bfotf font wrapping and zstd dictionaries, on a font of this system made into a fake RomFS
+- the button art of a release: the files tools/prompt_art.py copies, and the packages and tools the prompts need
 - make_game.py: a synthetic .nup through the check, exefs and romfs steps with --events, skipped steps on a second
-  run, --rebuild without the game files, the object cache of the compile step with the system's C compiler, and its
-  windres call under folders with spaces (a script in windres's place)
-- jobs: an install driven by a fake make_game.py
+  run, --rebuild without the game files, the prompts step with a stand-in prompt tool, the object cache of the compile
+  step with the system's C compiler, and its windres call under folders with spaces (a script in windres's place)
+- jobs: an install driven by a fake make_game.py, with and without the prompts row
 - the window: --selftest draws every screen (skipped without a display)
 """
 import contextlib
@@ -702,6 +703,77 @@ class FontTest(Tmp):
         self.assertEqual(gamefiles.cached_fonts(self.layout)['title'][1], 'DejaVu Sans')
 
 
+# ---------------------------------------------------------------- the button art of a release
+
+class PromptArtTest(Tmp):
+    def make_art(self):
+        """Every picture tools/prompt_art.py names, the pads in one pack's folder and the keys in another's, with two
+        keys and two pictures the tool never reads. Returns (prompt_art, pads, keys, the files a release takes)."""
+        import prompt_art as pa
+        pads, keys = self.tmp / 'pack' / 'Source', self.tmp / 'keys' / 'Source'
+        wanted = {rel for style in pa.STYLES.values() for part in style.values() for rel in part.values()
+                  if rel != pa.OPTIONS}
+        wanted |= {pa.SHARE, *pa.BLANKS.values(), f'{pa.KM}Dark/T_E_Key_Dark.png', f'{pa.KM}White/T_E_Key_White.png',
+                   f'{pa.KM}Dark/T_F12_Key_Dark.png'}
+        for rel in wanted | {'XGamepad/Default/T_X_Unused.png', f'{pa.KM}Retro/T_E_Key_Retro.png'}:
+            path = (keys if rel.startswith(pa.KM) else pads) / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(rel.encode())
+        return pa, pads, keys, wanted
+
+    def test_art_files(self):
+        """A release takes the pictures pad_prompts.py reads and every key, from folders that hold the art's sets or
+        are those sets; a set named twice, a set missing or a picture missing stops it."""
+        pa, pads, keys, wanted = self.make_art()
+        for folders in ([pads, keys], [pads, keys / 'Keyboard_Mouse'], [pads / 'XGamepad', pads / 'P5Gamepad', keys]):
+            self.assertEqual(set(pa.art_files(folders)), wanted)
+        dest = self.tmp / 'release' / pa.FOLDER
+        n, size = pa.copy_art([pads, keys], dest)
+        copied = {p.relative_to(dest).as_posix(): p.read_bytes() for p in dest.rglob('*') if p.is_file()}
+        self.assertEqual(copied, {rel: rel.encode() for rel in wanted})
+        self.assertEqual((n, size), (len(wanted), sum(len(rel) for rel in wanted)))
+        # a set named itself wins over one inside a folder named; the same set twice at one rank is refused
+        other = self.tmp / 'other' / 'Keyboard_Mouse'
+        other.mkdir(parents=True)
+        self.assertEqual(pa.art_roots([pads, keys, other])['Keyboard_Mouse'], other.parent)
+        self.assertEqual(pa.art_roots([pads, keys])['Keyboard_Mouse'], keys)
+        for folders, says in (([pads, keys, other.parent], 'in both'),
+                              ([pads, keys / 'Keyboard_Mouse', other], 'in both'),
+                              ([pads], 'no Keyboard_Mouse folder'), ([self.tmp / 'release'], 'holds none of')):
+            with self.assertRaises(SystemExit) as e:
+                pa.art_files(folders)
+            self.assertIn(says, str(e.exception.code))
+        (pads / pa.SHARE).unlink()
+        with self.assertRaises(SystemExit) as e:
+            pa.art_files([pads, keys])
+        self.assertIn('T_X_Share-1.png', str(e.exception.code))
+
+    def test_release_carries_what_the_prompts_need(self):
+        """The release's Python has every package tools/pad_prompts.py imports, and the launcher release and the build
+        kit carry every tool it imports."""
+        import ast
+        import make_kit
+        import make_launcher
+        pip = {'PIL': 'pillow', 'fontTools': 'fonttools'}
+        local, packages = set(), set()
+        for tool in ('pad_prompts.py', 'button_icons.py', 'prompt_art.py'):
+            for node in ast.walk(ast.parse((ROOT / 'tools' / tool).read_text(encoding='utf-8'))):
+                names = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                    [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+                for root in (n.split('.')[0] for n in names):
+                    if (ROOT / 'tools' / f'{root}.py').is_file():
+                        local.add(f'{root}.py')
+                    elif root not in sys.stdlib_module_names:
+                        packages.add(pip.get(root, root))
+        self.assertEqual(packages, {'zstandard', 'pillow', 'fonttools'})
+        reqs = (ROOT / 'tools' / 'requirements-launcher.txt').read_text(encoding='utf-8')
+        pinned = {ln.split('==')[0].strip().lower() for ln in reqs.splitlines()
+                  if '==' in ln and not ln.startswith('#')}
+        self.assertLessEqual(packages, pinned)
+        for tools in (make_launcher.TOOLS, make_kit.TOOLS):
+            self.assertLessEqual(local | {'pad_prompts.py'}, set(tools))
+
+
 # ---------------------------------------------------------------- make_game.py
 
 def nso(build_id=b'\0' * 16, size=0x300):
@@ -809,6 +881,24 @@ text = open(a[a.index('-i') + 1]).read()
 for name in re.findall(r'^\s*\w+\s+\w+\s+"([^"]+)"', text, re.M):
     open(name, 'rb').close()
 open(a[a.index('-o') + 1], 'wb').write(b'coff')
+'''
+
+# Stands in for tools/pad_prompts.py: counts its runs in the game folder and writes every overlay folder's manifest,
+# printing the line the real tool prints for each and its closing report.
+FAKE_PAD_PROMPTS = r'''
+import json, sys
+from pathlib import Path
+import prompt_art
+a = sys.argv[1:]
+art, game = Path(a[a.index('--art') + 1]), Path(a[a.index('--game') + 1])
+assert (art / 'XGamepad').is_dir(), art
+with open(game / 'prompt-runs.txt', 'a') as f:
+    f.write('run\n')
+for name in prompt_art.OVERLAYS:
+    (game / name).mkdir(exist_ok=True)
+    (game / name / 'manifest.tsv').write_text('# path\n')
+    print(f'{game / name}: 3 files, the font grew by 12 bytes', flush=True)
+print(json.dumps({'status': 'pass', 'folders': []}))
 '''
 
 
@@ -1001,6 +1091,81 @@ class MakeGameTest(Tmp):
         steps = json.loads((self.out / 'build-cache' / 'state.json').read_text())['steps']
         self.assertNotIn('romfs', steps)
 
+    def test_prompts_step(self):
+        """With button art in the kit, the last step draws the button prompts (a fake tools/pad_prompts.py), one
+        progress event per folder. It runs again only when the art, the bind_ lines or a folder changed, and then no
+        other step runs; a step before it that runs does not make it run; a kit without art skips it."""
+        from unittest import mock
+        kit = self.tmp / 'kit'
+        (kit / 'tools').mkdir(parents=True)
+        (kit / 'bin').mkdir()
+        (kit / 'bin' / 'nx2navi_xlate.id').write_text('xlate 1\n')
+        (kit / 'tools' / 'prepare_shaders.py').write_text('')
+        for name in ('prompt_art.py', 'button_icons.py'):
+            shutil.copy2(ROOT / 'tools' / name, kit / 'tools' / name)
+        (kit / 'tools' / 'pad_prompts.py').write_text(FAKE_PAD_PROMPTS)
+        art = kit / 'prompt-art' / 'XGamepad' / 'Default'
+        art.mkdir(parents=True)
+        (art / 'T_X_A_White.png').write_bytes(b'picture one')
+        ran = []
+
+        def fake(name):
+            def step(*args, **kw):
+                ran.append(name)
+            return step
+
+        def build():
+            """One build; (the other steps that ran, the prompts step's events, the prompt tool's runs so far)."""
+            ran.clear()
+            buf = io.StringIO()
+            argv = ['make_game.py', '--nup', str(self.nup), '--out', str(self.out), '--msys', str(self.msys),
+                    '--events']
+            with mock.patch.object(sys, 'argv', argv), contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.mg.main()
+            events = [json.loads(ln[2:]) for ln in buf.getvalue().splitlines() if ln.startswith('@@')]
+            log = self.out / 'prompt-runs.txt'
+            runs = log.read_text().count('run') if log.exists() else 0
+            return sorted(ran), [e for e in events if e.get('step') == 'prompts'], runs
+
+        def states(events):
+            return [e['state'] for e in events if e['ev'] == 'step']
+
+        sys.path.insert(0, str(self.layout.pydeps))   # the fake zbic
+        self.addCleanup(sys.path.remove, str(self.layout.pydeps))
+        with mock.patch.multiple(self.mg, KIT=kit, PROMPT_PACKAGES={}, EVENTS=False, step_romfs=fake('romfs'),
+                                 step_lift=fake('lift'), step_compile=fake('compile'), step_shaders=fake('shaders')):
+            others, ev, runs = build()
+            self.assertEqual((others, runs), (['compile', 'lift', 'romfs', 'shaders'], 1))
+            self.assertEqual(states(ev), ['start', 'done'])
+            fractions = [e['fraction'] for e in ev if e['ev'] == 'progress']
+            self.assertEqual(fractions, [0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+            details = [e['detail'] for e in ev if e['ev'] == 'progress']
+            self.assertEqual(details[-1], 'Drew 5 of 5 sets of button prompts')
+            self.assertIn('prompts', json.loads((self.out / 'build-cache' / 'state.json').read_text())['steps'])
+            self.assertEqual(build(), ([], [{'ev': 'step', 'step': 'prompts', 'state': 'skip'}], 1))
+            # a setting that is no key binding changes nothing; a binding draws the prompts again, and only them
+            (self.out / 'nx2navi.ini').write_text('vsync = on\n')
+            self.assertEqual(build()[2], 1)
+            (self.out / 'nx2navi.ini').write_text('vsync = on\nbind_a = key:f   # jump\n')
+            others, ev, runs = build()
+            self.assertEqual((others, states(ev), runs), ([], ['start', 'done'], 2))
+            # a folder gone, or new art: drawn again
+            shutil.rmtree(self.out / 'romfs-patches-pc')
+            self.assertEqual(build()[2], 3)
+            (art / 'T_X_B_White.png').write_bytes(b'picture two')
+            self.assertEqual(build()[2], 4)
+            # the lift running again makes the compile and the shaders run, not the prompts
+            st = json.loads((self.out / 'build-cache' / 'state.json').read_text())
+            del st['steps']['lift']
+            (self.out / 'build-cache' / 'state.json').write_text(json.dumps(st))
+            others, ev, runs = build()
+            self.assertEqual((others, states(ev), runs), (['compile', 'lift', 'shaders'], ['skip'], 4))
+            # a kit without art: skipped, the folders an earlier build drew stay
+            shutil.rmtree(kit / 'prompt-art')
+            self.assertEqual(build(), ([], [{'ev': 'step', 'step': 'prompts', 'state': 'skip'}], 4))
+            self.assertTrue((self.out / 'romfs-patches-xbox' / 'manifest.tsv').is_file())
+
     @unittest.skipIf(os.name == 'nt', 'uses a POSIX script as the compiler')
     def test_largest_source_compiles_first(self):
         src, obj = self.tmp / 'src', self.tmp / 'obj'
@@ -1146,7 +1311,7 @@ import json, sys, time
 def ev(**k): print('@@' + json.dumps(k), flush=True)
 if '--fail' in open(sys.argv[0] + '.mode').read():
     ev(ev='step', step='check', state='start'); ev(ev='error', message='this is not game version 1.1.1'); sys.exit(1)
-for s in ('check', 'exefs', 'romfs', 'lift', 'compile', 'shaders'):
+for s in ('check', 'exefs', 'romfs', 'lift', 'compile', 'shaders', 'prompts'):
     ev(ev='step', step=s, state='start')
     if s == 'compile':
         ev(ev='progress', step=s, done=5, total=10, unit='files'); ev(ev='phase', step=s, phase='link')
@@ -1184,6 +1349,18 @@ class JobTest(Tmp):
         self.assertEqual(j.step('check').value, 'Version 1.1.1')
         self.assertTrue(any('working on lift' in ln for ln in j.lines))
         self.assertEqual(j.overall(), 1.0)
+        self.assertIsNone(j.step('prompts'))   # a version without button art draws no prompts: no row
+
+    def test_install_job_with_button_art(self):
+        """A version with button art shows the prompts step as a row of its own, after the shaders."""
+        self.patch_tools()
+        ctx = self.make_ctx('ok')
+        (ctx.layout.app / 'prompt-art').mkdir()
+        j = jobs.InstallJob(ctx, self.tmp / 'g.nup', self.tmp / 'game').run_inline()
+        self.assertEqual(j.result, 'ok', j.error)
+        self.assertEqual([s.id for s in j.steps][-3:], ['shaders', 'prompts', 'ready'])
+        self.assertEqual(j.step('prompts').state, jobs.DONE)
+        self.assertEqual([s.id for s in jobs.RebuildJob(ctx, self.tmp / 'game').steps][-2:], ['shaders', 'prompts'])
 
     def test_failed_job(self):
         self.patch_tools()

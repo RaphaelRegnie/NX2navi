@@ -35,7 +35,7 @@ A, B, X and Y show the button the *Button layout* presses: with `nintendo` (by p
 
 The game reads the font and the interface textures once at start, so a change shows after a restart (the row says so; the menu's Restart button restarts). A button or key remapped on this tab keeps its old prompt until the folders are made again.
 
-The prompts live in overlay folders next to the exe, `romfs-patches-xbox`, `romfs-patches-xbox-label`, `romfs-patches-playstation` and `romfs-patches-playstation-label` (by position and by label) and `romfs-patches-pc`, which `runtime/romfs.c` loads in place of the game's files. `tools/pad_prompts.py` draws them on the player's machine from the player's own RomFS and a folder of button art, which the repository does not hold:
+The prompts live in overlay folders next to the exe, `romfs-patches-xbox`, `romfs-patches-xbox-label`, `romfs-patches-playstation` and `romfs-patches-playstation-label` (by position and by label) and `romfs-patches-pc`, which `runtime/romfs.c` loads in place of the game's files. `tools/pad_prompts.py` draws them on the player's machine from the player's own RomFS and a folder of button art, which the repository does not hold. A launcher release or build kit made with `--prompt-art` carries that art (`prompt-art`, `tools/prompt_art.py`), and `tools/make_game.py` draws every folder in its last step, again whenever the art, the tools or the `bind_` lines change (so a rebuild after rebinding keys brings the keyboard prompts up to date). By hand:
 
 ```
 python tools\pad_prompts.py --art <art pack>\Source --game <install folder>

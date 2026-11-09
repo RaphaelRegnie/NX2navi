@@ -4,10 +4,11 @@ player's machine.
     python tools/pad_prompts.py --art FOLDER --game FOLDER [--style xbox|playstation|pc] [--layout position|label]
                                 [--binds nx2navi.ini]
 
---art is a folder of button art with the file names of STYLES and KEY_ART below: the Source folder of a button prompt
-art pack, which holds XGamepad/Default, XGamepad/Light, P5Gamepad/Default, P5Gamepad/Light, Keyboard_Mouse/Dark and
-Keyboard_Mouse/White (128x128 PNGs: a dark button or key with a white label, or a light one with a dark or coloured
-label). The art is read where it lies and never enters the repository.
+--art is a folder of button art with the file names of STYLES (tools/prompt_art.py) and KEY_ART below: the Source
+folder of a button prompt art pack, which holds XGamepad/Default, XGamepad/Light, P5Gamepad/Default, P5Gamepad/Light,
+Keyboard_Mouse/Dark and Keyboard_Mouse/White (128x128 PNGs: a dark button or key with a white label, or a light one
+with a dark or coloured label), or a release's prompt-art folder, which holds the same files (tools/make_game.py runs
+this tool on it). The art is read where it lies and never enters the repository.
 --game is the folder of the port's exe and romfs-index.bin. The RomFS is read from its romfs folder (index.json and
 romfs.bin, as the setup writes them); --romfs names another, which may also be a folder of extracted files. Each pad
 style and layout becomes the overlay folder <game>/romfs-patches-<style> (layout position) or
@@ -39,7 +40,8 @@ What changes, the rest of each file staying as it is:
   game sizes the buffer it loads a file into from the table, so the font's entry is raised by as much
   (button_icons.grow_restbl).
 
-Needs fontTools, Pillow and zstandard (tools/requirements-py314.txt).
+Needs fontTools, Pillow and zstandard (tools/requirements-py314.txt; the launcher's Python has them,
+tools/requirements-launcher.txt).
 """
 import argparse
 import hashlib
@@ -56,6 +58,7 @@ from fontTools.ttLib import TTFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import button_icons  # noqa: E402  (bfotf_decode, bfotf_encode, redraw_font, grow_restbl)
+from prompt_art import BLANKS, KM, OPTIONS, SHARE, STYLES, overlay_folder  # noqa: E402  (the art, the folders)
 
 FONT = 'Font2/Scalable/External.Nin_Ounce_NVN2.bfotf.zs'
 TEXTURES = 'UI/Layout2Archive/Common.Product.100.Nin_Ounce_NVN2.bntx.zs'
@@ -78,51 +81,6 @@ FACE = {'position': {'A': 'east', 'B': 'south', 'X': 'north', 'Y': 'west'},
         'label': {'A': 'south', 'B': 'east', 'X': 'west', 'Y': 'north'}}
 
 
-def _sticks(folder, stick, press, rotate):
-    """The stick pictures of one style: <stick>_<direction> for L and R."""
-    out = {}
-    for side, name in (('L', stick[0]), ('R', stick[1])):
-        base = f'{folder}{name}'
-        out.update({f'{side}STICK': f'{base}.png', f'{side}STICK_UP': f'{base}_UP.png',
-                    f'{side}STICK_DOWN': f'{base}_Down.png', f'{side}STICK_LEFT': f'{base}_Left.png',
-                    f'{side}STICK_RIGHT': f'{base}_Right.png', f'{side}STICK_UPDOWN': f'{base}_Y.png',
-                    f'{side}STICK_LEFTRIGHT': f'{base}_X.png', f'{side}STICK_PRESS': f'{folder}{press[side == "R"]}'})
-    out['RSTICK_ROTATE'] = f'{folder}{rotate}'
-    return out
-
-
-def _dpad(folder, name, up):
-    return {'DPAD': f'{folder}{name}.png', 'DPAD_UP': f'{folder}{name}_{up}.png', 'DPAD_DOWN': f'{folder}{name}_Down.png',
-            'DPAD_LEFT': f'{folder}{name}_Left.png', 'DPAD_RIGHT': f'{folder}{name}_Right.png',
-            'DPAD_UPDOWN': f'{folder}{name}_Y.png', 'DPAD_LEFTRIGHT': f'{folder}{name}_X.png'}
-
-
-# Per style: glyph, the dark pictures the button font and the action prompt's letter are drawn from (by Switch button,
-# the face buttons by their place on the pad); note, the light ones the ocarina's note buttons are drawn from. A
-# value of OPTIONS is drawn here (options_art): the art shows PlayStation's Options button as its word over a small
-# pill, which is unreadable at text size, so the prompt is the Create button's pill with three bars, as on the pad.
-X, XL, P, PL = 'XGamepad/Default/T_X_', 'XGamepad/Light/T_X_', 'P5Gamepad/Default/T_P5_', 'P5Gamepad/Light/T_P5_'
-OPTIONS = 'options'
-STYLES = {
-    'xbox': {
-        'glyph': {'south': f'{X}A_White.png', 'east': f'{X}B_White.png', 'west': f'{X}X_White.png',
-                  'north': f'{X}Y_White.png', 'L': f'{X}LB.png', 'R': f'{X}RB.png', 'ZL': f'{X}LT.png',
-                  'ZR': f'{X}RT.png', 'PLUS': f'{X}X.png', 'MINUS': f'{X}Share.png',   # Menu (three bars), View
-                  **_dpad(X, 'Dpad', 'Up'), **_sticks(X, ('L', 'R'), ('Left_Stick_Click.png', 'Right_Stick_Click.png'),
-                                                      'R_2D.png')},
-        'note': {'south': f'{XL}A_Color_Light.png', 'east': f'{XL}B_Color_Light.png', 'west': f'{XL}X_Color_Light.png',
-                 'north': f'{XL}Y_Color_Light.png', 'L': f'{XL}LB_Light.png', 'R': f'{XL}RB_Light.png'},
-    },
-    'playstation': {
-        'glyph': {'south': f'{P}Cross.png', 'east': f'{P}Circle.png', 'west': f'{P}Square.png',
-                  'north': f'{P}Triangle.png', 'L': f'{P}L1.png', 'R': f'{P}R1.png', 'ZL': f'{P}L2.png',
-                  'ZR': f'{P}R2.png', 'PLUS': OPTIONS, 'MINUS': 'XGamepad/Default/T_X_Share-1.png',   # a share pill
-                  **_dpad(P, 'Dpad', 'UP'), **_sticks(P, ('L', 'R'), ('L3.png', 'R3.png'), 'R_2D.png')},
-        'note': {'south': f'{PL}Cross_Color_Light.png', 'east': f'{PL}Circle_Color_Light.png',
-                 'west': f'{PL}Square_Color_Light.png', 'north': f'{PL}Triangle_Color_Light.png',
-                 'L': f'{PL}L1_Light.png', 'R': f'{PL}R1_Light.png'},
-    },
-}
 # The textures drawn again: the action prompt's letter masks and the ocarina's note buttons, by Switch button.
 MASKS = {'KeyTexFontA_00': 'A', 'KeyTexFontB_00': 'B', 'KeyTexFontX_00': 'X', 'KeyTexFontY_00': 'Y'}
 NOTES = {'OcarinaButtonA_00': 'A', 'OcarinaButtonB_00': 'B', 'OcarinaButtonX_00': 'X', 'OcarinaButtonY_00': 'Y',
@@ -155,7 +113,6 @@ KEY_ART = {'space': 'Space', 'tab': 'Tab', 'lshift': 'Shift', 'rshift': 'Shift',
 # What a blank key shows for a key the art has no picture of (label_art); any other shows its name.
 KEY_LABELS = {'comma': ',', 'period': '.', 'equals': '=', 'num_decimal': '.', 'backslash': '\\', 'mouse_x1': 'M4',
               'mouse_x2': 'M5'}
-KM = 'Keyboard_Mouse/'
 
 
 def pc_keys(ini_text=None):
@@ -312,7 +269,7 @@ def grid_art(art, cells):
 
 def label_art(art, key, shade):
     """A key the art has no picture of: its blank key with the key's name written on it."""
-    blank = load_art(art, f'{KM}Blanks/T_Blank_{"Black" if shade == "Dark" else "White"}_Normal.png')
+    blank = load_art(art, BLANKS[shade])
     name = KEY_LABELS.get(key, key.upper())
     d = ImageDraw.Draw(blank)
     x0, y0, x1, y1 = blank.getchannel('A').point(lambda a: 255 if a > 127 else 0).getbbox()
@@ -331,7 +288,7 @@ def label_art(art, key, shade):
 def options_art(art):
     """PlayStation's Options button as the art draws its Create button's neighbour on the pad: the dark pill of the
     share picture with three white bars, drawn four times larger and scaled down for smooth edges."""
-    share = load_art(art, 'XGamepad/Default/T_X_Share-1.png')
+    share = load_art(art, SHARE)
     x0, y0, x1, y1 = share.getchannel('A').point(lambda a: 255 if a > 127 else 0).getbbox()
     k = 4
     big = Image.new('RGBA', (share.width * k, share.height * k), (0, 0, 0, 0))
@@ -859,7 +816,7 @@ def main():
     for style in [args.style] if args.style else sorted(STYLES) + ['pc']:
         # the keyboard follows no pad layout: one folder, romfs-patches-pc
         for layout in [None] if style == 'pc' else [args.layout] if args.layout else sorted(FACE):
-            out = args.out or args.game / f'romfs-patches-{style}{"-label" if layout == "label" else ""}'
+            out = args.out or args.game / overlay_folder(style, layout)
             glyph, note = pc_pictures(args.art, keys) if style == 'pc' else pad_pictures(style, layout)
             new_otf = draw_font(otf, glyph, traced, style != 'pc')
             blob = button_icons.bfotf_encode(new_otf, key, font_blob)

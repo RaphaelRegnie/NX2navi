@@ -1,7 +1,7 @@
 """Build a release of the NX2navi launcher (docs/launcher.md, "Releases").
 
     python tools/make_launcher.py --xlate build/xlate [--ffx amd_fidelityfx_vk.dll] [--dlss nvngx_dlss.dll | --no-dlss]
-                                  [--out build/launcher-release]
+                                  [--prompt-art FOLDER [FOLDER ...]] [--out build/launcher-release]
                                   [--feed owner/name]
                                   [--notes notes.md] [--publish]
 
@@ -22,6 +22,8 @@ The release folder (--out) holds:
                                   pins, downloaded from NVIDIA's DLSS SDK repository and checked, or --dlss; not with
                                   --no-dlss),
                                   lib/libnx2navirt.a (the runtime, prebuilt with the release's compiler),
+                                  prompt-art/ with --prompt-art (the button art make_game.py draws the Xbox,
+                                  PlayStation and keyboard and mouse prompts from, tools/prompt_art.py art_files),
                                   toolchain.lock.json (the MSYS2 packages of today, pinned), feed.json, VERSION, the
                                   licence files
     NX2navi-Setup-<version>.exe   launcher/native/setup.c with the folder above appended as a zip: the one file
@@ -29,6 +31,10 @@ The release folder (--out) holds:
     NX2navi-app-<version>.zip     app/<version> alone: what the launcher downloads to update itself
     NX2navi-runtime-<id>.zip      python/ alone: downloaded only when a release changes the Python
     NX2navi-update.json           the manifest the launcher reads (launcher/feed.py)
+
+--prompt-art names the button art: folders that hold XGamepad, P5Gamepad and Keyboard_Mouse, or those three folders
+themselves. Only the pictures tools/pad_prompts.py reads are copied; the art stays out of the repository. Without it
+the release has no prompt-art folder and builds the game with the game's own prompts only.
 
 --publish uploads the four files as GitHub release v<version> of the --feed repository with the gh CLI (a draft
 first is wiser: add --draft). check_content runs over everything before it is packed: the release holds no game data.
@@ -49,6 +55,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tools'))
 import check_content  # noqa: E402
 import dlss_pin  # noqa: E402
+import prompt_art  # noqa: E402
 from launcher import toolchain  # noqa: E402
 from launcher.paths import Layout  # noqa: E402
 
@@ -64,7 +71,7 @@ PINS = {
               'ac87609db3f715404dd41a989c2f1706ea1512f3d86217f938d11c63af8eb505'),
 }
 TOOLS = ('make_game.py', 'nup.py', 'romfs_index.py', 'check_content.py', 'hostmem.py', 'prepare_shaders.py',
-         'shader_census.py', 'shader_list.py', 'zstd_compat.py')
+         'shader_census.py', 'shader_list.py', 'zstd_compat.py', 'pad_prompts.py', 'prompt_art.py', 'button_icons.py')
 TOP = ('LICENSE', 'LICENSE-ADDITIONS', 'THIRD_PARTY_NOTICES.md', 'nx2navi.ini.example')
 SKIP_DIRS = {'__pycache__', '.pytest_cache', 'native'}
 SKIP_SUFFIXES = {'.o', '.obj', '.pyc', '.exe', '.dll', '.a', '.lib'}
@@ -163,7 +170,7 @@ def build_python(py):
 
 # ---------------------------------------------------------------- app/<version>/
 
-def build_app(app, ver, xlate, feed_repo, lock, ffx=None, dlss=None):
+def build_app(app, ver, xlate, feed_repo, lock, ffx=None, dlss=None, art=None):
     copy_tree(ROOT / 'launcher', app / 'launcher')
     for d in ('runtime', 'recomp'):
         copy_tree(ROOT / d, app / d)
@@ -183,6 +190,9 @@ def build_app(app, ver, xlate, feed_repo, lock, ffx=None, dlss=None):
         shutil.copy2(ffx, app / 'bin' / 'amd_fidelityfx_vk.dll')
     if dlss:   # DLSS: NGX loads it from beside the game (runtime/vk_dlaa.c); make_game.py copies it there
         dlss_pin.place(dlss, app / 'bin')
+    if art:   # make_game.py draws the button prompts from it (its prompts step)
+        n, size = prompt_art.copy_art(art, app / prompt_art.FOLDER)
+        say(f'button art: {n} pictures, {size / 1e6:.1f} MB')
     (app / 'toolchain.lock.json').write_text(json.dumps(lock, indent=1), encoding='utf-8')
     (app / 'feed.json').write_text(json.dumps({'type': 'github', 'repo': feed_repo}, indent=1), encoding='utf-8')
 
@@ -295,6 +305,8 @@ def main():
     ap.add_argument('--dlss', type=Path, help=f"NVIDIA's nvngx_dlss.dll (DLSS {dlss_pin.VERSION}) from disk instead of "
                                                "downloading it from NVIDIA's DLSS SDK repository")
     ap.add_argument('--no-dlss', action='store_true', help='leave NVIDIA DLSS out of the release')
+    ap.add_argument('--prompt-art', type=Path, nargs='+', metavar='FOLDER',
+                    help='the button art: folders holding XGamepad, P5Gamepad and Keyboard_Mouse, or those folders')
     ap.add_argument('--out', type=Path, default=MAIN_ROOT / 'build' / 'launcher-release')
     ap.add_argument('--feed', default=DEFAULT_FEED, help='the GitHub repository the launcher looks for releases in')
     ap.add_argument('--notes', type=Path, help='release notes (markdown) for the manifest and the GitHub release')
@@ -310,6 +322,8 @@ def main():
     ver, build = version()
     if a.version:
         ver, build = a.version, a.version + build[len(ver):]
+    if a.prompt_art:
+        prompt_art.art_files(a.prompt_art)   # the art is all there before anything is downloaded or built
     out = a.out
     shutil.rmtree(out, ignore_errors=True)
     folder = out / 'NX2navi'
@@ -320,7 +334,7 @@ def main():
         + (f' (CLANG64 clang left out: {lock["fast_skipped"]})' if lock.get('fast_skipped') else ''))
     dlss = None if a.no_dlss else dlss_pin.resolve(a.dlss, DL)
     say(f'NVIDIA DLSS {dlss_pin.VERSION}: {dlss}' if dlss else 'NVIDIA DLSS left out (--no-dlss)')
-    build_app(folder / 'app' / ver, ver, a.xlate, a.feed, lock, a.ffx, dlss)
+    build_app(folder / 'app' / ver, ver, a.xlate, a.feed, lock, a.ffx, dlss, a.prompt_art)
     (folder / 'app' / 'current.txt').write_text(ver + '\n', encoding='utf-8')
     build_python(folder / 'python')
     cc, windres = native_compiler(lock)

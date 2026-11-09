@@ -21,6 +21,12 @@ def command(layout, args):
             '--events']
 
 
+def has_prompt_art(layout):
+    """True when this version holds button art (app/<version>/prompt-art, tools/prompt_art.py FOLDER): make_game.py
+    then draws the button prompts in a step of its own, and the jobs show a row for it."""
+    return (layout.app / 'prompt-art').is_dir()
+
+
 def install_args(layout, dump, game_dir):
     dump = str(dump)
     if os.path.isdir(dump):

@@ -19,6 +19,13 @@ Steps, each skipped when a run before finished it for the same inputs (state in 
               GPU driver build done once into the driver's own cache, so play stops for them far less often
               (`ocarina.exe --prepare-shaders`); variants met in play with another bind state are still translated
               then, and the driver cache is per executable and is lost when the driver clears it
+  7. prompts  only with button art in the kit (<kit>/prompt-art, tools/make_launcher.py and make_kit.py
+              --prompt-art): tools/pad_prompts.py draws the Xbox, PlayStation and keyboard and mouse button prompts
+              from it into <out>/romfs-patches-* (the Controls menu's Button prompts loads them), the keys as the
+              bind_ lines of <out>/nx2navi.ini give them. Its key names everything it reads (the RomFS, the art, the
+              tools, those lines), so it runs again only when one of them changed or a folder is gone, and running
+              it makes no other step run again. It is last: a failure here leaves the game and its shaders complete.
+              Without art the step is skipped and the game shows its own prompts, as before
 
 The exefs and romfs steps depend only on the game files; lift and compile depend on this kit's code too. A newer kit
 therefore lifts and compiles again but keeps the unpacked game files, and --rebuild needs no game files at all. The
@@ -36,9 +43,9 @@ version (fast_clang: the same objects, about a fifth faster).
 
 Nothing is written outside --out (but for --make-runtime-lib DIR, which writes DIR). The game folder then holds
 only what this PC built from the player's files: never
-share it. Needs Python 3.10+ with numpy, lz4, zstandard and zbic (pip), and MSYS2 UCRT64's clang and libraries
-(README-BuildKit.md lists the commands). Delete <out>/build-cache afterwards to free about 5 GB; the next build then
-compiles everything again.
+share it. Needs Python 3.10+ with numpy, lz4, zstandard and zbic (pip), with fonttools and pillow too when the kit has
+button art, and MSYS2 UCRT64's clang and libraries (README-BuildKit.md lists the commands). Delete <out>/build-cache
+afterwards to free about 5 GB; the next build then compiles everything again.
 
 --events adds one machine-readable line per step and progress change to stdout, each starting with "@@" and followed
 by a JSON object (launcher/build.py reads them): {"ev": "step", "step": ..., "state": "start" | "done" | "skip"},
@@ -62,6 +69,7 @@ from pathlib import Path
 KIT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(KIT / 'tools'))
 import nup  # noqa: E402
+import prompt_art  # noqa: E402
 
 TITLE_ID = 0x0400486024DEC000
 MAIN_BUILD_ID = 'e0f3ccfaf50065ae4ea01eb5aeb13b1a'   # main of game 1.1.1
@@ -69,7 +77,14 @@ EXEFS_FILES = ('main', 'main.npdm', 'sdk', 'subsdk0', 'rtld')
 MODULES = ('main', 'sdk', 'subsdk0', 'rtld')
 ALIGN = 16
 STATE_VERSION = 2
-STEPS = ('exefs', 'romfs', 'lift', 'compile', 'shaders')
+STEPS = ('exefs', 'romfs', 'lift', 'compile', 'shaders', 'prompts')
+# Steps whose key names every input they read rather than the step before them: a step before them that runs does
+# not make them run again, and they make no step after them run again.
+OWN_KEY_STEPS = ('prompts',)
+# The Python packages tools/pad_prompts.py imports (pip name: import name), checked before a build with button art.
+PROMPT_PACKAGES = {'zstandard': 'zstandard', 'fonttools': 'fontTools', 'pillow': 'PIL'}
+# The line tools/pad_prompts.py prints for each overlay folder it wrote.
+PROMPTS_WRITTEN = re.compile(r'^.+: \d+ files, the font grew by -?\d+ bytes$')
 
 # Bring-up fixes in the lifted SDK, each anchored on exact generated text that must occur once.
 LIFT_FIXES = [
@@ -1099,6 +1114,52 @@ def step_shaders(out):
         (out / seed).unlink(missing_ok=True)
 
 
+def prompt_art_dir():
+    """The kit's button art (<kit>/prompt-art, tools/prompt_art.py), or None when the kit has none."""
+    art = KIT / prompt_art.FOLDER
+    return art if art.is_dir() else None
+
+
+def bind_lines(out):
+    """The bind_ lines of the game folder's nx2navi.ini, comments cut off: the keys the keyboard and mouse prompts
+    show (tools/pad_prompts.py pc_keys reads the same lines)."""
+    try:
+        text = (out / 'nx2navi.ini').read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return []
+    lines = (ln.split('#')[0].split(';')[0].strip() for ln in text.splitlines())
+    return [ln for ln in lines if ln.lower().startswith('bind_')]
+
+
+def step_prompts(out):
+    """The button prompts drawn from the kit's art into the game folder: tools/pad_prompts.py writes one overlay
+    folder per style and layout (prompt_art.OVERLAYS), which runtime/romfs.c loads in place of the game's button font
+    and prompt textures when the Controls menu's Button prompts is Xbox, PlayStation or Keyboard and mouse. Its lines
+    go on to the log, each folder written is a progress event."""
+    total = len(prompt_art.OVERLAYS)
+    proc = subprocess.Popen(py_cmd(KIT / 'tools' / 'pad_prompts.py', '--art', prompt_art_dir(), '--game', out),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                            errors='replace', bufsize=1)
+    done = 0
+    emit('progress', step='prompts', fraction=0.0, detail=f'Drawing {total} sets of button prompts')
+    try:
+        for line in proc.stdout:
+            line = line.rstrip('\n')
+            if line.startswith('{'):   # its closing report, one long JSON line
+                continue
+            say(f'  {line}')
+            if PROMPTS_WRITTEN.match(line):
+                done += 1
+                emit('progress', step='prompts', fraction=round(done / total, 4),
+                     detail=f'Drew {done} of {total} sets of button prompts')
+    finally:
+        rc = proc.wait()
+        proc.stdout.close()
+    if rc:
+        fail('drawing the button prompts failed (the lines above say why); the game still runs. Run the build again '
+             'to retry this step')
+
+
 def keep_awake():
     """Hold off sleep for this process's life (Windows): the build runs for many minutes with no input, and a PC that
     sleeps in the middle stops the compiles. The hold ends with the process."""
@@ -1143,9 +1204,17 @@ def cpu_tag():
 
 def step_key(step, identity, out=None):
     """What a step's output depends on. exefs and romfs: the game files only; lift: the unpacked ExeFS and the
-    lifter; compile: the lift, the runtime sources, this script and the processor (cpu_tag)."""
+    lifter; compile: the lift, the runtime sources, this script and the processor (cpu_tag); prompts: the game files,
+    the kit's button art, the tools that draw it, the bind_ lines of nx2navi.ini, and whether every folder it writes
+    is still there."""
     if step in ('exefs', 'romfs'):
         return f'{step}-1|{identity}'
+    if step == 'prompts':
+        tools = tree_digest(KIT / 'tools', ('pad_prompts.py', 'prompt_art.py', 'button_icons.py'))
+        binds = sha256_bytes(json.dumps(bind_lines(out)).encode())
+        written = all((out / f / 'manifest.tsv').is_file() for f in prompt_art.OVERLAYS)
+        return (f'prompts-1|{identity}|{tree_digest(prompt_art_dir(), ("**/*.png",))}|{tools}|{binds}'
+                f'|{"written" if written else "missing"}')
     lift = f'lift|{exefs_digest(out)}|{lift_digest()}'
     if step == 'lift':
         return lift
@@ -1202,11 +1271,14 @@ def main():
     for need in ('bin/clang.exe', 'bin/clang++.exe', 'bin/SDL3.dll', 'lib/libSDL3.dll.a', 'include/vma'):
         if not (msys / need).exists():
             fail(f'{msys / need} is missing: install MSYS2 and the packages README-BuildKit.md lists')
-    for mod in ('numpy', 'lz4') + (() if a.rebuild else ('zbic',)):
+    packages = {'numpy': 'numpy', 'lz4': 'lz4', **({} if a.rebuild else {'zbic': 'zbic'}),
+                **(PROMPT_PACKAGES if prompt_art_dir() else {})}
+    for pip_name, mod in packages.items():
         try:
             __import__(mod)
         except ImportError:
-            fail(f'the Python package {mod} is missing: pip install numpy lz4 zstandard zbic')
+            extra = ' fonttools pillow' if prompt_art_dir() else ''
+            fail(f'the Python package {pip_name} is missing: pip install numpy lz4 zstandard zbic{extra}')
     cache.mkdir(parents=True, exist_ok=True)
     reset = state.get('version') != STATE_VERSION or state.get('input') != src.identity
     if reset:
@@ -1217,7 +1289,7 @@ def main():
     romfs_job = None
     runs = {'exefs': lambda: step_exefs(src, out), 'romfs': lambda: step_romfs(src, out, min(a.jobs, 8)),
             'lift': lambda: step_lift(out, cache), 'compile': lambda: step_compile(out, cache, msys, a.jobs, romfs_job),
-            'shaders': lambda: step_shaders(out)}
+            'shaders': lambda: step_shaders(out), 'prompts': lambda: step_prompts(out)}
     state_lock = threading.Lock()   # the RomFS step records itself from its own thread
 
     def save():
@@ -1244,18 +1316,22 @@ def main():
 
     try:
         for name in STEPS:
-            key = step_key(name, src.identity, out)
-            if state['steps'].get(name) == key:
+            if name == 'prompts' and not prompt_art_dir():
+                say('prompts: none to draw, the kit has no button art')
+                emit('step', step=name, state='skip')
+            elif state['steps'].get(name) == step_key(name, src.identity, out):
                 say(f'{name}: done before')
                 emit('step', step=name, state='skip')
             else:
-                # a step that runs makes every step after it run too: their keys hash its output, not its key
+                # a step that runs makes every step after it run too: their keys hash its output, not its key (but
+                # for OWN_KEY_STEPS, whose keys name their inputs)
                 with state_lock:
                     for later in STEPS[STEPS.index(name):]:
-                        state['steps'].pop(later, None)
+                        if later == name or not {name, later} & set(OWN_KEY_STEPS):
+                            state['steps'].pop(later, None)
                 say(f'{name}:')
                 emit('step', step=name, state='start')
-                if name == 'shaders' and romfs_job:   # the shaders come out of the RomFS image
+                if name in ('shaders', 'prompts') and romfs_job:   # they read the RomFS image
                     romfs_job.join()
                 if name == 'romfs' and a.until != 'romfs':
                     # The RomFS image is mostly disk work, the lift and the compile are processor work: they run side

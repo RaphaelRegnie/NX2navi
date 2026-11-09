@@ -51,10 +51,12 @@ for updates); an XInput gamepad (d-pad or left stick, A, B, Y).
 
 ```
 NX2navi.exe              launcher/native/nx2navi.c: swaps in a staged Python, starts app\<current>\launcher\start.pyw
-python/                  python.org's embeddable Python 3.14.9 with tkinter, numpy, lz4, zstandard and truststore
+python/                  python.org's embeddable Python 3.14.9 with tkinter, numpy, lz4, zstandard, fonttools, pillow
+                         and truststore
 app/current.txt          the version the stub starts; app/previous.txt the one before it
 app/<version>/           launcher/, runtime/, recomp/, tools/, bin/nx2navi_xlate.exe, VERSION,
-                         toolchain.lock.json (the pinned build tools), feed.json (where updates come from)
+                         toolchain.lock.json (the pinned build tools), feed.json (where updates come from), and in a
+                         release made with --prompt-art, prompt-art/ (the button art the prompts are drawn from)
 pydeps/                  zbic, downloaded from PyPI on this PC
 toolchain/msys64/ucrt64  MSYS2's clang and libraries, downloaded from the MSYS2 repository on this PC
 toolchain/pkgs/          the downloaded package files
@@ -88,7 +90,7 @@ A path the Windows ANSI code page cannot hold breaks the MSYS2 tools, so the too
      (it reads UCRT64's headers; `make_game.py` `fast_clang` checks that both report the same version and target).
    - The lifted code is compiled for the processor's own level, x86-64-v3 (AVX2, FMA) or v2 (`cpu_level`): the game
      runs on the PC that builds it, and a generic build would do every fused multiply-add of the game in software.
-3. **Prepare the Shaders**: make_game.py's last step translates every shader of the game, in its default bind state,
+3. **Prepare the Shaders**: make_game.py translates every shader of the game, in its default bind state,
    into the game's shader cache and builds its stage library or compute pipeline into the driver's own cache
    (`tools/prepare_shaders.py`), so play stops for them far less often. Variants met in play with another bind state are
    still translated then, full pipelines are still linked in play (quickly, from the cached parts), and the driver's
@@ -96,7 +98,14 @@ A path the Windows ANSI code page cannot hold breaks the MSYS2 tools, so the too
    follows the game's own counts, printed every 2 s: the translation fills the first half, the build into the
    driver's cache the second. An update every 10 s keeps the step's text current while nothing is printed, and after
    3 minutes without a count moving it says so, and that the step is still running.
-4. The game's Cetra Display is decoded for the window.
+4. **Draw the Button Prompts**, only when the version holds button art (`app/<version>/prompt-art`, a release made
+   with `--prompt-art`; `build.has_prompt_art`): make_game.py's last step runs `tools/pad_prompts.py` on that art
+   and writes the Xbox, PlayStation and keyboard and mouse prompts into `romfs-patches-*` beside the game (about
+   30 s), which the game's Controls > Button prompts loads. The keyboard and mouse prompts show the keys of
+   `nx2navi.ini`'s `bind_` lines, so Rebuild the Game after rebinding keys draws them again; the step's key names
+   all it reads (the RomFS, the art, the tools, those lines), so it runs again only when one changed or a folder is
+   gone, and runs no other step again. Without art the row is not shown and the game keeps its own prompts.
+5. The game's Cetra Display is decoded for the window.
 
 ## Updating
 
@@ -137,7 +146,9 @@ The stub swaps `python.next` in while no Python runs, then starts the new versio
 6. **Swap In the New Build**: lld links `ocarina.exe.new`, which replaces `ocarina.exe` only once it is complete. A
    failed rebuild leaves the old build playable; Rebuild the Game tries again.
 7. **Prepare the Shaders** again for the new build; shaders the translator already prepared come from the cache.
-8. Every version but the current and the previous one is deleted.
+8. **Draw the Button Prompts**, with button art in the new version: only when the art, the prompt tools or the key
+   bindings changed, or a prompt folder is missing (a first version with art draws them all).
+9. Every version but the current and the previous one is deleted.
 
 When the new version fails to start (exit code 86 from `start.pyw`, or any error within six seconds), the stub sets
 `current.txt` back to `previous.txt`'s version and starts it with `--rolled-back`. The game is never rebuilt while it
@@ -205,6 +216,15 @@ game folder is the default `<launcher>\game`. The dump is never touched.
    ship the library; it also asks that a commercial release be announced to NVIDIA first
    (https://developer.nvidia.com/sw-notification) and that the use of DLSS be credited.
 
+   `--prompt-art FOLDER ...` puts the button art in the release (`app/<version>/prompt-art`): folders that hold
+   `XGamepad`, `P5Gamepad` and `Keyboard_Mouse` (the Source folders of button prompt art packs), or those three
+   folders themselves; a set named itself wins over one found inside a folder named, and the same set twice is
+   refused. Only the pictures `tools/pad_prompts.py` reads are copied (`tools/prompt_art.py`
+   `art_files`: the pad pictures it names and every key of `Keyboard_Mouse/Dark` and `/White`, about 280 PNGs and
+   1 MB), and it stops first naming any that are missing. The art goes into the release only, never into the
+   repository (`.gitignore` has `/prompt-art/`). Without it the release has no art and the build draws no prompts.
+   `tools/make_kit.py` takes the same option for the build kit.
+
    On Linux it cross-compiles the two programs with clang, lld and llvm-windres against the same MSYS2 packages and
    unpacks Tcl/Tk with msiextract (msitools). It writes into `build/launcher-release`: `NX2navi-Setup-<version>.exe`
    (the setup program with the launcher folder appended as a zip), `NX2navi-app-<version>.zip` (with the prebuilt
@@ -223,11 +243,13 @@ local fake repository, resumed and checked downloads, the certificate checks aga
 certificates made with the `openssl` command), the GitHub and URL feeds, staging, switching, rollback and
 pruning, unsafe archives, the font decoding on a system font wrapped like the game's, `make_game.py` on a synthetic
 `.nup` (events, skipped steps, `--rebuild` without the dump, step keys), the RomFS step beside the lift and compile
-and its failure stopping the build, the compile step's object cache with the system's C compiler and its
+and its failure stopping the build, the prompts step with a stand-in prompt tool (when it runs again, and that it
+makes no other step run), the button art a release copies and the packages and tools the prompts need in a release,
+the compile step's object cache with the system's C compiler and its
 largest-first order, its windres call under folders with spaces in their names, CLANG64's clang in the lock and the
 install, the save import (the account folder, the save folders it recognises, backup, the commit journal, the saves
 folder, refusals), the install job with a fake
-`make_game.py`, and the window's selftest when a display is there.
+`make_game.py` (with and without the prompts row), and the window's selftest when a display is there.
 
 ## Requirements and limits
 
