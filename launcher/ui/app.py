@@ -717,7 +717,8 @@ class App:
             except (saves.SaveError, OSError) as e:
                 self.save_message = f'The save was not imported: {e}'
             else:
-                self.save_message = (f'Save imported: {r["files"]} files from {r["source"].name}.'
+                self.save_message = ((f'Save imported into {r["slot"]}.' if r['slot'] else
+                                      f'Save imported: {r["files"]} files from {r["source"].name}.')
                                      + (f' Your old save is in saves\\{r["backup"].name}.' if r['backup'] else ''))
         self.show('home', self.focus)
 

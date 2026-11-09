@@ -14,6 +14,10 @@ save taken from saves/ moves to saves/imported <time>, so nothing is lost and no
 A save folder can come from a Switch save backup (the save's files), an emulator (nested folders named by user and
 title ids, gone down while each holds only one folder), another NX2navi game folder or its profile folder (the
 account folder inside).
+
+A whole save is account.sav, option.sav and the folders slot_00 to slot_05, each with progress.sav and caption.sav. A
+folder with progress.sav at its top is one slot: it replaces that slot (the slot named by its folder, else slot_00) and
+the rest of the current save stays, as the game reads progress.sav only inside a slot folder.
 """
 import os
 import re
@@ -38,6 +42,7 @@ README = '''NX2navi saves folder
 
 To import a save, put it here and select Import Saves in the NX2navi launcher (next to Game Folder):
 - the files of a Switch save backup, or the folder that holds them
+- one save slot (a folder such as slot_00): only that slot is replaced
 - an emulator's save folder for the game
 - the profile folder (or the whole game folder) of another NX2navi install
 
@@ -47,6 +52,8 @@ Before a save is imported, the game's current save is copied here into a folder 
 imported save moves into a folder named "imported" and the date. The game itself keeps its save in profile\\save.
 '''
 HEX32 = re.compile(r'^[0-9a-fA-F]{32}$')
+SLOT = re.compile(r'^slot_\d\d$')
+SLOT_FILES = ('progress.sav', 'caption.sav')
 MAX_FILES, MAX_BYTES = 4000, 1 << 30   # a save is a few files of a few MB; more is a folder picked by mistake
 OURS = re.compile(r'^(backup|imported) \d{4}-\d\d-\d\d')   # what this module writes into saves/
 
@@ -119,7 +126,16 @@ def find_save(folder):
         if len(entries) != 1 or len(dirs) != 1:
             break
         p = dirs[0]
-    return (p, ()) if _has_file(p) else (None, ())
+    # a backup this module wrote keeps the replaced save's journal beside it, which is not part of the save
+    return (p, ('save-tx',) if (p / 'save-tx').is_dir() else ()) if _has_file(p) else (None, ())
+
+
+def _one_slot(src):
+    """The slot folder the files of src belong in when src is a single slot, None when it is a whole save."""
+    p = Path(src)
+    if not (p / 'progress.sav').is_file() or any(e.is_dir() and SLOT.match(e.name) for e in p.iterdir()):
+        return None
+    return p.name if SLOT.match(p.name) else 'slot_00'
 
 
 def waiting(game):
@@ -212,11 +228,16 @@ def import_save(game, folder=None, log=print):
     tx.mkdir(parents=True, exist_ok=True)
     stage = tx / 'import'
     shutil.rmtree(stage, ignore_errors=True)
+    slot = _one_slot(src)
+    if slot and current is not None:   # the rest of the save stays; a slot's files left at the top by mistake do not
+        shutil.copytree(current, stage, ignore=lambda d, _names: SLOT_FILES if Path(d) == Path(current) else ())
+        _rmtree(stage / slot)
+    target = stage / slot if slot else stage
     for rel in files:
-        (stage / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(Path(src) / rel, stage / rel)
+        (target / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(Path(src) / rel, target / rel)
         # a save copied from read-only media keeps the attribute through copy2; the game rewrites its files
-        os.chmod(stage / rel, stat.S_IREAD | stat.S_IWRITE)
+        os.chmod(target / rel, stat.S_IREAD | stat.S_IWRITE)
     # The journal of the replaced save goes out of save-tx (the game would load a finished commit first, or complete an
     # interrupted one): what holds files moves into the backup, beside the save it was copied from, so a copy the
     # backup's own choice missed (an interrupted commit's other half) is kept too.
@@ -267,6 +288,6 @@ def import_save(game, folder=None, log=print):
             top = [Path(src).relative_to(saves).parts[0]]
         for name in top:
             shutil.move(str(saves / name), str(done / name))
-    log(f'saves: imported {len(files)} files from {src} into {account}' + (f'; the old save is in {backup}' if backup
-                                                                          else ''))
-    return {'files': len(files), 'source': Path(src), 'backup': backup}
+    log(f'saves: imported {len(files)} files from {src} into {account / slot if slot else account}' +
+        (f'; the old save is in {backup}' if backup else ''))
+    return {'files': len(files), 'source': Path(src), 'backup': backup, 'slot': slot}

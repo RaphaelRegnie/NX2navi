@@ -1178,6 +1178,58 @@ class SavesTest(unittest.TestCase):
         self.assertTrue((self.game / 'saves' / 'README.txt').is_file())
         self.assertTrue((src / 'save.dat').is_file())                  # a picked folder is left as it was
 
+    def test_one_slot_replaces_only_that_slot(self):
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'account.sav': b'a', 'option.sav': b'o', 'slot_00/progress.sav': b'old0',
+                          'slot_01/progress.sav': b'old1', 'slot_01/extra.sav': b'e'})
+        src = self.files(self.tmp / 'slot_01', {'slot_01/progress.sav': b'new1', 'slot_01/caption.sav': b'c1'})   # nested
+        r = saves.import_save(self.game, src, log=lambda m: None)
+        self.assertEqual(r['slot'], 'slot_01')
+        self.assertEqual((acct / 'slot_01' / 'progress.sav').read_bytes(), b'new1')
+        self.assertEqual((acct / 'slot_01' / 'caption.sav').read_bytes(), b'c1')
+        self.assertFalse((acct / 'slot_01' / 'extra.sav').exists())    # the slot is replaced, not mixed
+        self.assertFalse((acct / 'progress.sav').exists())             # the game reads it only inside a slot
+        for name, data in (('slot_00/progress.sav', b'old0'), ('account.sav', b'a'), ('option.sav', b'o')):
+            self.assertEqual((acct / name).read_bytes(), data)
+        self.assertEqual((r['backup'] / 'slot_01' / 'progress.sav').read_bytes(), b'old1')
+
+    def test_a_slot_under_another_name_is_the_first_slot(self):
+        src = self.files(self.tmp / 'my save', {'progress.sav': b'p', 'caption.sav': b'c'})
+        r = saves.import_save(self.game, src, log=lambda m: None)      # a game that never ran has no save to keep
+        acct = saves.account_dir(self.game)
+        self.assertEqual(r['slot'], 'slot_00')
+        self.assertIsNone(r['backup'])
+        self.assertEqual((acct / 'slot_00' / 'progress.sav').read_bytes(), b'p')
+
+    def test_a_slot_clears_a_slot_left_at_the_top_of_the_save(self):
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'progress.sav': b'stray', 'caption.sav': b'stray', 'option.sav': b'o'})
+        src = self.files(self.tmp / 'slot_02', {'progress.sav': b'p'})
+        r = saves.import_save(self.game, src, log=lambda m: None)
+        self.assertFalse((acct / 'progress.sav').exists())
+        self.assertFalse((acct / 'caption.sav').exists())
+        self.assertEqual((acct / 'option.sav').read_bytes(), b'o')
+        self.assertEqual((acct / 'slot_02' / 'progress.sav').read_bytes(), b'p')
+        self.assertEqual((r['backup'] / 'progress.sav').read_bytes(), b'stray')
+
+    def test_a_whole_save_replaces_the_save(self):
+        acct = saves.account_dir(self.game)
+        self.files(acct, {'slot_00/progress.sav': b'old', 'slot_03/progress.sav': b'old3', 'option.sav': b'o'})
+        src = self.files(self.tmp / 'whole', {'account.sav': b'a', 'option.sav': b'n', 'slot_00/progress.sav': b'new'})
+        r = saves.import_save(self.game, src, log=lambda m: None)
+        self.assertIsNone(r['slot'])
+        self.assertEqual((acct / 'slot_00' / 'progress.sav').read_bytes(), b'new')
+        self.assertEqual((acct / 'option.sav').read_bytes(), b'n')
+        self.assertFalse((acct / 'slot_03').exists())
+
+    def test_a_backup_comes_back_without_its_journal(self):
+        src = self.files(self.tmp / 'backup 2026-11-09 05.42.06', {'option.sav': b'o', 'slot_00/progress.sav': b'p',
+                                                                   'save-tx/work/option.sav': b'w'})
+        saves.import_save(self.game, src, log=lambda m: None)
+        acct = saves.account_dir(self.game)
+        self.assertEqual((acct / 'slot_00' / 'progress.sav').read_bytes(), b'p')
+        self.assertFalse((acct / 'save-tx').exists())
+
     def test_import_from_the_saves_folder(self):
         d = saves.ensure_saves_dir(self.game)
         self.assertIsNone(saves.waiting(self.game)[0])                 # README.txt alone is no save

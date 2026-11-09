@@ -145,8 +145,9 @@ Import Saves (home, under Game Folder; `launcher/saves.py`) makes another save t
 a `saves` folder with a README for it: a save put there (its files, or the folder that holds them) is taken first,
 and the row then reads "From the Saves Folder"; otherwise selecting the row asks for the folder. It recognises a
 Switch save backup (the save's files), an emulator's save folder (nested folders named by user and title ids), and
-another NX2navi game folder or its profile folder (the account folder inside). A folder with more than 4,000 files
-or 1 GB is refused as picked by mistake.
+another NX2navi game folder or its profile folder (the account folder inside). A folder with `progress.sav` at its
+top is one save slot: it replaces that slot (`slot_00` to `slot_05`, by the folder's name, else `slot_00`) and the rest
+of the current save stays. A folder with more than 4,000 files or 1 GB is refused as picked by mistake.
 
 The game keeps its save in `profile/save/<account>`, named after `profile/account.uid` (made as the game would when
 it never ran). The import copies the save the game would load now (a finished commit still waiting in
