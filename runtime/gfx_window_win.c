@@ -252,11 +252,17 @@ static void to_utf8(const wchar_t *w, char *out, size_t n) {
     if (!WideCharToMultiByte(CP_UTF8, 0, w, -1, out, (int)n, NULL, NULL)) out[0] = 0;
 }
 
-// GetDpiForMonitor lives in shcore.dll, which the build does not link; 0 when it is missing.
+// GetDpiForMonitor lives in shcore.dll, which the build does not link; 0 when it is missing. The library is loaded once
+// and kept: the monitor list asks for every monitor's DPI each time it is built.
 static UINT monitor_dpi(HMONITOR mon) {
     typedef HRESULT(WINAPI * GetDpiForMonitorFn)(HMONITOR, int, UINT *, UINT *);
-    HMODULE lib = LoadLibraryExW(L"shcore.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    GetDpiForMonitorFn fn = lib ? (GetDpiForMonitorFn)(void *)GetProcAddress(lib, "GetDpiForMonitor") : NULL;
+    static GetDpiForMonitorFn fn;
+    static int looked;
+    if (!looked) {
+        HMODULE lib = LoadLibraryExW(L"shcore.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        fn = lib ? (GetDpiForMonitorFn)(void *)GetProcAddress(lib, "GetDpiForMonitor") : NULL;
+        looked = 1;
+    }
     UINT x = 0, y = 0;
     if (!fn || fn(mon, 0 /* MDT_EFFECTIVE_DPI */, &x, &y) != S_OK) x = 0;
     return x;
