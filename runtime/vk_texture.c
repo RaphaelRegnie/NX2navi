@@ -872,6 +872,22 @@ static void evict_idle(uint64_t want, uint64_t used, uint64_t budget) {   // tex
     }
 }
 
+// NX2NAVI_TEX_COMMIT_EVICT (default on; 0 = off): while the system's commit is low (commit_is_low), idle live textures
+// go as under VRAM pressure (evict_idle), COMMIT_EVICT_STEP at a time, once the released entries are down to
+// COMMIT_LOW_KEEP. The driver charges device memory to the commit too, and the eviction above starts only at
+// NX2NAVI_TEX_VRAM_PRESSURE of the device's budget: on a 16-32 GB card the textures of every area visited stayed until
+// the commit ran out (27-37 GB processes, then a failed allocation or a device lost, #177 #203 #215), as nothing else
+// gave them back while they stayed below that share of the video memory.
+#define COMMIT_EVICT_STEP ((uint64_t)256 << 20)
+static int commit_evict_on = -1;
+static void commit_evict(void) {   // tex_lock held
+    if (commit_evict_on < 0) commit_evict_on = rt_knob("TEX_COMMIT_EVICT", "1") == 1;
+    if (!commit_evict_on || !tex_evict || rel_bytes > COMMIT_LOW_KEEP || !commit_is_low()) return;
+    uint64_t used = 0, budget = 0;
+    vk_mem_vram_live(&used, &budget);
+    evict_idle(COMMIT_EVICT_STEP, used, budget);
+}
+
 static void sweep_pressure(void) {   // tex_lock held
     if (vram_pressure < 0) {
         const char *s = cfg_get("NX2NAVI_TEX_VRAM_PRESSURE");
@@ -901,10 +917,12 @@ static void sweep_pressure(void) {   // tex_lock held
         }
         if (tex_evict && freed < over) evict_idle(over - freed, used, budget);
     }
-    if (!rel_head) return;
-    uint64_t cap = released_cap_bytes();
-    if (rel_bytes > cap) drop_stale(cap, &n_cap_drops);
-    if (rel_bytes > COMMIT_LOW_KEEP && commit_is_low()) drop_stale(COMMIT_LOW_KEEP, &n_commit_drops);
+    if (rel_head) {
+        uint64_t cap = released_cap_bytes();
+        if (rel_bytes > cap) drop_stale(cap, &n_cap_drops);
+        if (rel_bytes > COMMIT_LOW_KEEP && commit_is_low()) drop_stale(COMMIT_LOW_KEEP, &n_commit_drops);
+    }
+    commit_evict();
 }
 
 // ---------------------------------------------------------------- per-frame texture work (vk.h VK_TS_*)
