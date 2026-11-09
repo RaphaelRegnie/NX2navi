@@ -254,8 +254,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_EXITSIZEMOVE:   // dragged onto another monitor
         refresh_rate_update(h, 0);
         break;
-    case WM_DISPLAYCHANGE:
+    case WM_DISPLAYCHANGE:   // a resolution, layout or HDR change of the desktop
         refresh_rate_update(h, 1);
+        if (is_fullscreen(h) && !IsIconic(h)) {   // keep covering the monitor at its new size (a same size sends no WM_SIZE)
+            MONITORINFO mi = {sizeof mi};
+            if (GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi))
+                SetWindowPos(h, NULL, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                             mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        gfx_window_mark_dirty();   // the swapchain is made again: its size, and its colour space after an HDR switch
         break;
     case WM_GETDPISCALEDSIZE:   // a framed window keeps its client size in pixels on a monitor at another scale
         if (!is_fullscreen(h) && !IsZoomed(h)) {
