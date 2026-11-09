@@ -442,9 +442,13 @@ static void perf_gpu_line(uint64_t frame, double interval_ms, double pace_share,
            "%.0f MiB, private %.0f MiB; bound: %s",
            (unsigned long long)frame, gs, rw, ow, vs, ws, priv, bound);
     // Where the committed memory lies, every 3600 frames and whenever it grew by 1 GiB since the last census: the process
-    // has run out of commit in long sessions while the game's own pools stayed flat.
+    // has run out of commit in long sessions while the game's own pools stayed flat. Only with NX2NAVI_MEM_CENSUS=1, as
+    // vk_memory.c's census: the walk holds the address-space lock the game's threads take at every page fault, and here
+    // it ran on the presenting thread, so each one delayed a frame by 65-240 ms.
+    static int census_on = -1;
     static uint64_t census_prv;
-    if (frame % 3600 == 0 || prv >= census_prv + (1ull << 30)) prof_commit_census(frame), census_prv = prv;
+    if (census_on < 0) census_on = cfg_bool("NX2NAVI_MEM_CENSUS");
+    if (census_on && (frame % 3600 == 0 || prv >= census_prv + (1ull << 30))) prof_commit_census(frame), census_prv = prv;
     if (g.have_gpu && g.have_idle)
         rt_log("perf: frame %llu: gpu idle per frame %.2f ms between timed parts: %.2f ms waiting for the next submission, "
                "%.2f ms with it queued (untimed work or waits); %.1f gaps over 0.5 ms, longest %.2f ms; submit to start avg %.2f ms",

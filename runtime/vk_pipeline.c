@@ -4189,7 +4189,7 @@ static void lb_state(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
 // Boot: compute shaders of the warm list (recorded and prepared), then the first KEEP recorded graphics variants.
 static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
     const char *e = cfg_value("NX2NAVI_LIB_PREBUILD"), *ke = cfg_get("NX2NAVI_LIB_PREBUILD_KEEP");
-    const char *te = cfg_get("NX2NAVI_LIB_PREBUILD_THREADS");   // no fixed default: half the CPUs when unset
+    const char *te = cfg_get("NX2NAVI_LIB_PREBUILD_THREADS");   // no fixed default: 2 when unset (1 under 4 CPUs)
     const char *be = cfg_get("NX2NAVI_LIB_PREBUILD_BIG");       // SPIR-V words; LB_BIG_WORDS when unset, 0 no limit
     if (!A.on || !cfg_bool("NX2NAVI_LIB_PREBUILD")) return;
     LB.big_words = be && *be ? strtoull(be, NULL, 10) : LB_BIG_WORDS;

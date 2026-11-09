@@ -70,11 +70,12 @@ RADV). It takes clang, clang++ and lld from `PATH` and links against the system'
 
    ```sh
    sudo pacman -S --needed clang lld sdl3 opus libvpx dav1d zstd vulkan-headers vulkan-icd-loader \
-       python fonttools python-numpy python-lz4 python-zstandard dotnet-sdk
+       python python-fonttools python-pillow python-numpy python-lz4 python-zstandard dotnet-sdk
    ```
 
-   Python 3.14 or later (the RomFS step and the PlayStation prompts use its `compression.zstd`), then `zbic`, which the
-   kit only calls (GPL-2.0): `pip install --user zbic`, or in a virtual environment with the packages above.
+   Python 3.10 or later (with 3.14 the RomFS step uses its own `compression.zstd`, else the `zstandard` package; the
+   button prompts need `fonttools` and `pillow` when the kit carries button art), then `zbic`, which the kit only calls
+   (GPL-2.0): `pip install --user zbic`, or in a virtual environment with the packages above.
    Vulkan Memory Allocator is one header: the system's (AUR `vulkan-memory-allocator`), else the build fetches the
    pinned 3.4.0 into `toolchain/vma/` and checks its hash.
 

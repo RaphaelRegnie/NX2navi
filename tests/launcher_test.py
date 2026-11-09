@@ -258,18 +258,20 @@ class GameIniTest(Tmp):
 
     def test_new_file_gets_the_section(self):
         gameini.put(self.tmp, 'discord', 'discord_rpc', '1')
-        self.assertEqual((self.tmp / 'nx2navi.ini').read_text(encoding='utf-8'), '[discord]\ndiscord_rpc = 1\n')
+        self.assertEqual((self.tmp / 'nx2navi.ini').read_bytes(), b'[discord]\ndiscord_rpc = 1\n')
         self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '1')
 
     def test_only_the_key_line_changes(self):
+        # the byte order mark, the line ends and a line that is not UTF-8 stay as they were
         ini = self.tmp / 'nx2navi.ini'
-        ini.write_bytes('﻿[display]\r\nfullscreen = 1\r\n# discord_rpc = 1\r\n[discord]\r\n'
-                        'NX2NAVI_DISCORD_RPC = "1"\r\ndiscord_app_id = 42'.encode('utf-8'))
+        ini.write_bytes(b'\xef\xbb\xbf[display]\r\nfullscreen = 1\r\n# caf\xe9\r\n# discord_rpc = 1\r\n[discord]\r\n'
+                        b'NX2NAVI_DISCORD_RPC = "1"\r\ndiscord_app_id = 42')
         self.assertEqual(gameini.get(self.tmp, 'DISCORD_RPC'), '1')   # quotes, prefix and case as the game reads them
         gameini.put(self.tmp, 'discord', 'discord_rpc', '0')
-        self.assertEqual(ini.read_bytes().decode('utf-8'), '[display]\r\nfullscreen = 1\r\n# discord_rpc = 1\r\n'
-                         '[discord]\r\ndiscord_rpc = 0\r\ndiscord_app_id = 42')
+        self.assertEqual(ini.read_bytes(), b'\xef\xbb\xbf[display]\r\nfullscreen = 1\r\n# caf\xe9\r\n# discord_rpc = 1\r\n'
+                         b'[discord]\r\ndiscord_rpc = 0\r\ndiscord_app_id = 42')
         self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '0')
+        self.assertFalse((self.tmp / 'nx2navi.ini.tmp').exists())
 
     def test_missing_key_goes_under_its_section(self):
         ini = self.tmp / 'nx2navi.ini'
@@ -277,6 +279,22 @@ class GameIniTest(Tmp):
         self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '')
         gameini.put(self.tmp, 'discord', 'discord_rpc', '1')
         self.assertEqual(ini.read_bytes(), b'[discord]\ndiscord_rpc = 1\ndiscord_app_id = 42\n[display]\nfullscreen = 1')
+
+    def test_an_empty_line_leaves_the_earlier_value(self):
+        # runtime/cfg.c: "key =" leaves the setting as it was, so the game keeps 0 here, and a change goes to that line
+        ini = self.tmp / 'nx2navi.ini'
+        ini.write_bytes(b'discord_rpc = 0\ndiscord_rpc =\n')
+        self.assertEqual(gameini.get(self.tmp, 'discord_rpc'), '0')
+        gameini.put(self.tmp, 'discord', 'discord_rpc', '1')
+        self.assertEqual(ini.read_bytes(), b'discord_rpc = 1\ndiscord_rpc =\n')
+
+    def test_an_unreadable_file_is_not_rewritten(self):
+        (self.tmp / 'nx2navi.ini').mkdir()   # there, but not a file that can be read
+        with self.assertRaises(OSError):
+            gameini.get(self.tmp, 'discord_rpc')
+        with self.assertRaises(OSError):
+            gameini.put(self.tmp, 'discord', 'discord_rpc', '1')
+        self.assertTrue((self.tmp / 'nx2navi.ini').is_dir())
 
 
 class SettingsTest(Tmp):
@@ -1286,6 +1304,28 @@ class MakeGameTest(Tmp):
         (self.tmp / 'n.txt').write_text(dlss_pin.notice_text(), encoding='utf-8')
         self.assertEqual(self.mg.notice_sha256(self.tmp / 'n.txt'), dlss_pin.SHA256)
         self.assertEqual((dlss_pin.NAME, dlss_pin.NOTICE), (self.mg.DLSS_DLL, self.mg.DLSS_NOTICE))
+
+    def test_dlssg_beside_the_game(self):
+        """DLSS Frame Generation's files go beside the game only as a whole set, with the licence texts; the release
+        script (tools/make_launcher.py) and the build agree on the set."""
+        import make_launcher
+        from unittest import mock
+        kit, out = self.tmp / 'kit', self.tmp / 'game'
+        src = kit / 'bin' / 'dlssg'
+        src.mkdir(parents=True)
+        out.mkdir()
+        self.assertEqual(make_launcher.DLSSG_FILES, self.mg.DLSSG_FILES)
+        with mock.patch.object(self.mg, 'KIT', kit):
+            for n in self.mg.DLSSG_FILES[:-1]:
+                (src / n).write_bytes(n.encode())
+            self.assertEqual(self.mg.place_dlssg(out), 0)   # nvngx_dlssg.dll missing: nothing is placed
+            self.assertFalse((out / 'nx2navi_dlssg.dll').exists())
+            (src / 'nvngx_dlssg.dll').write_bytes(b'ngx')
+            (src / 'streamline-LICENSE.txt').write_text('MIT')
+            self.assertEqual(self.mg.place_dlssg(out), len(self.mg.DLSSG_FILES) + 1)
+            for n in self.mg.DLSSG_FILES:
+                self.assertEqual((out / n).read_bytes(), (src / n).read_bytes())
+            self.assertEqual((out / 'streamline-LICENSE.txt').read_text(), 'MIT')
 
     @unittest.skipIf(os.name == 'nt', 'a script stands in for windres.exe')
     def test_compile_resources(self):

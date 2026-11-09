@@ -32,7 +32,7 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - Upscaling and anti-aliasing: NVIDIA DLSS (DLAA, Quality, Balanced, Performance, Ultra Performance; RTX GPUs) or
   AMD FSR 3.1 (Native AA and the same modes; any GPU), which render the 3D scene at the mode's share and keep the HUD
   sharp; or AMD FSR 1 or bilinear scaling to the window, with a sharpness setting; black bars or stretch
-- Frame generation: NVIDIA DLSS Frame Generation (RTX GPUs, paced with Reflex) or AMD FSR 3.1 (any GPU), a generated
+- Frame generation: NVIDIA DLSS Frame Generation (RTX 40 and 50 GPUs, paced with Reflex) or AMD FSR 3.1 (any GPU), a generated
   frame between every two the game draws, with the HUD kept out of it, for about twice the frame rate on a fast
   display; in a window of another shape than the picture, frames are generated inside the picture only, so the black
   bars stay clean. The frame limit can also be handed to RivaTuner Statistics Server

@@ -527,6 +527,13 @@ def copy_if_changed(src, dst):
 
 
 DLSS_DLL, DLSS_NOTICE = 'nvngx_dlss.dll', 'nvngx_dlss-NOTICE.txt'   # tools/dlss_pin.py, in the kit's bin/
+# DLSS Frame Generation (runtime/vk_dlssg.c) loads these from beside the game: nx2navi_dlssg.dll (runtime/dlssg/,
+# tools/build_dlssg.py), NVIDIA Streamline's interposer and the plugins it uses, and NGX's frame generation library.
+# A release carries them with their licence texts in bin/dlssg/ (tools/make_launcher.py --dlssg); without the whole set
+# the game leaves DLSS Frame Generation off.
+DLSSG_DIR = 'dlssg'
+DLSSG_FILES = ('nx2navi_dlssg.dll', 'sl.interposer.dll', 'sl.common.dll', 'sl.dlss_g.dll', 'sl.pcl.dll', 'sl.reflex.dll',
+               'nvngx_dlssg.dll')
 
 
 def notice_sha256(path):
@@ -557,6 +564,18 @@ def place_dlss(out):
     if note.is_file() and (not (out / DLSS_NOTICE).is_file() or (out / DLSS_NOTICE).read_bytes() != note.read_bytes()):
         shutil.copy2(note, out / DLSS_NOTICE)   # by content: two versions' notices can share size and second
     return None
+
+
+def place_dlssg(out):
+    """DLSS Frame Generation's libraries and their licence texts, the kit's bin/dlssg/, beside the game. Returns how
+    many files it holds, 0 when the kit has no complete set (nothing is placed then)."""
+    src = KIT / 'bin' / DLSSG_DIR
+    if not all((src / n).is_file() for n in DLSSG_FILES):
+        return 0
+    files = sorted(p for p in src.iterdir() if p.is_file())
+    for p in files:
+        copy_if_changed(p, out / p.name)
+    return len(files)
 
 
 def copy_dlls(exe, msys_bin, out):
@@ -1073,6 +1092,8 @@ def step_compile(out, cache_dir, msys, jobs, romfs_job=None):
     kept = place_dlss(out) if WIN else None   # NVIDIA DLSS (runtime/vk_dlaa.c): its library is a Windows DLL
     if kept:
         say(f'  {kept}')
+    if WIN and place_dlssg(out):   # DLSS Frame Generation (runtime/vk_dlssg.c): Windows DLLs too
+        say('  DLSS Frame Generation: nx2navi_dlssg.dll, Streamline and nvngx_dlssg.dll beside the game')
     beside = copy_dlls(exe, msys / 'bin', out) if WIN else []
     say(f'  {EXE_NAME} {exe.stat().st_size / 1e6:.0f} MB' + (f'; beside it: {", ".join(beside)}' if beside else ''))
     (out / 'profile').mkdir(exist_ok=True)

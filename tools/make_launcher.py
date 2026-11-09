@@ -21,6 +21,8 @@ The release folder (--out) holds:
                                   bin/nvngx_dlss.dll and its notice (NVIDIA DLSS at the version tools/dlss_pin.py
                                   pins, downloaded from NVIDIA's DLSS SDK repository and checked, or --dlss; not with
                                   --no-dlss),
+                                  bin/dlssg/ with --dlssg and --streamline (DLSS Frame Generation: nx2navi_dlssg.dll,
+                                  Streamline's runtime DLLs and nvngx_dlssg.dll, their licences and a notice),
                                   lib/libnx2navirt.a (the runtime, prebuilt with the release's compiler),
                                   prompt-art/ with --prompt-art (the button art make_game.py draws the Xbox,
                                   PlayStation and keyboard and mouse prompts from, tools/prompt_art.py art_files),
@@ -170,7 +172,51 @@ def build_python(py):
 
 # ---------------------------------------------------------------- app/<version>/
 
-def build_app(app, ver, xlate, feed_repo, lock, ffx=None, dlss=None, art=None):
+# DLSS Frame Generation: the files tools/make_game.py DLSSG_FILES names, put beside the game from bin/dlssg/.
+DLSSG_FILES = ('nx2navi_dlssg.dll', 'sl.interposer.dll', 'sl.common.dll', 'sl.dlss_g.dll', 'sl.pcl.dll', 'sl.reflex.dll',
+               'nvngx_dlssg.dll')
+DLSSG_NOTICE = 'dlssg-NOTICE.txt'
+
+
+def place_dlssg(dll, sdk, dest):
+    """DLSS Frame Generation into dest (the release's bin/dlssg/): nx2navi_dlssg.dll (tools/build_dlssg.py), NVIDIA
+    Streamline's interposer and the plugins it loads, and NGX's nvngx_dlssg.dll, unmodified from the Streamline SDK's
+    bin/x64, with Streamline's licence (MIT), the NVIDIA RTX SDKs License that covers nvngx_dlssg.dll, and a notice
+    naming each file's sha256."""
+    sdk_bin = sdk / 'bin' / 'x64'
+    srcs = {n: (dll if n == 'nx2navi_dlssg.dll' else sdk_bin / n) for n in DLSSG_FILES}
+    texts = {'streamline-LICENSE.txt': sdk / 'license.txt',
+             'nvidia-rtx-sdks-LICENSE.txt': sdk_bin / 'nvngx_dlss.license.txt'}
+    missing = [str(p) for p in (*srcs.values(), *texts.values()) if not p.is_file()]
+    if missing:
+        sys.exit(f'DLSS Frame Generation: {", ".join(missing)} missing')
+    dest.mkdir(parents=True, exist_ok=True)
+    lines = ['DLSS Frame Generation for NX2navi. nx2navi_dlssg.dll is NX2navi\'s own code (runtime/dlssg/), built',
+             'with the Streamline SDK\'s headers. The other files are NVIDIA\'s own builds, unmodified, from the',
+             f'{streamline_version(sdk)} SDK (https://github.com/NVIDIA-RTX/Streamline): the sl.*.dll files under its',
+             'MIT licence (streamline-LICENSE.txt), nvngx_dlssg.dll under the NVIDIA RTX SDKs License',
+             '(nvidia-rtx-sdks-LICENSE.txt), which licenses it only for use on systems with NVIDIA GPUs. They are not',
+             'part of NX2navi and NX2navi\'s licence does not cover them.', '']
+    for n, p in srcs.items():
+        shutil.copy2(p, dest / n)
+        lines.append(f'{n} sha256 {sha256_file(p)}')
+    for n, p in texts.items():
+        shutil.copy2(p, dest / n)
+    (dest / DLSSG_NOTICE).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def streamline_version(sdk):
+    """'Streamline 2.14.16' from the SDK's README title line, or 'Streamline' when it names none."""
+    try:
+        for line in (sdk / 'README.md').read_text(encoding='utf-8', errors='replace').splitlines()[:5]:
+            if 'Version' in line:
+                return 'Streamline ' + line.rsplit('Version', 1)[1].strip()
+    except OSError:
+        pass
+    return 'Streamline'
+
+
+def build_app(app, ver, xlate, feed_repo, lock, ffx=None, dlss=None, art=None, dlssg=None):
     copy_tree(ROOT / 'launcher', app / 'launcher')
     for d in ('runtime', 'recomp'):
         copy_tree(ROOT / d, app / d)
@@ -190,6 +236,8 @@ def build_app(app, ver, xlate, feed_repo, lock, ffx=None, dlss=None, art=None):
         shutil.copy2(ffx, app / 'bin' / 'amd_fidelityfx_vk.dll')
     if dlss:   # DLSS: NGX loads it from beside the game (runtime/vk_dlaa.c); make_game.py copies it there
         dlss_pin.place(dlss, app / 'bin')
+    if dlssg:   # DLSS Frame Generation (runtime/vk_dlssg.c): make_game.py place_dlssg copies it beside the game
+        place_dlssg(dlssg[0], dlssg[1], app / 'bin' / 'dlssg')
     if art:   # make_game.py draws the button prompts from it (its prompts step)
         n, size = prompt_art.copy_art(art, app / prompt_art.FOLDER)
         say(f'button art: {n} pictures, {size / 1e6:.1f} MB')
@@ -305,6 +353,10 @@ def main():
     ap.add_argument('--dlss', type=Path, help=f"NVIDIA's nvngx_dlss.dll (DLSS {dlss_pin.VERSION}) from disk instead of "
                                                "downloading it from NVIDIA's DLSS SDK repository")
     ap.add_argument('--no-dlss', action='store_true', help='leave NVIDIA DLSS out of the release')
+    ap.add_argument('--dlssg', type=Path, metavar='DLL',
+                    help='nx2navi_dlssg.dll (tools/build_dlssg.py) for DLSS Frame Generation, with --streamline')
+    ap.add_argument('--streamline', type=Path, metavar='SDK',
+                    help='the Streamline SDK folder whose bin/x64 gives the Streamline and nvngx_dlssg.dll files')
     ap.add_argument('--prompt-art', type=Path, nargs='+', metavar='FOLDER',
                     help='the button art: folders holding XGamepad, P5Gamepad and Keyboard_Mouse, or those folders')
     ap.add_argument('--out', type=Path, default=MAIN_ROOT / 'build' / 'launcher-release')
@@ -334,7 +386,12 @@ def main():
         + (f' (CLANG64 clang left out: {lock["fast_skipped"]})' if lock.get('fast_skipped') else ''))
     dlss = None if a.no_dlss else dlss_pin.resolve(a.dlss, DL)
     say(f'NVIDIA DLSS {dlss_pin.VERSION}: {dlss}' if dlss else 'NVIDIA DLSS left out (--no-dlss)')
-    build_app(folder / 'app' / ver, ver, a.xlate, a.feed, lock, a.ffx, dlss, a.prompt_art)
+    if bool(a.dlssg) != bool(a.streamline):
+        sys.exit('--dlssg and --streamline go together')
+    dlssg = (a.dlssg, a.streamline) if a.dlssg else None
+    say(f'DLSS Frame Generation: {a.dlssg}, {streamline_version(a.streamline)}' if dlssg
+        else 'DLSS Frame Generation left out (no --dlssg)')
+    build_app(folder / 'app' / ver, ver, a.xlate, a.feed, lock, a.ffx, dlss, a.prompt_art, dlssg)
     (folder / 'app' / 'current.txt').write_text(ver + '\n', encoding='utf-8')
     build_python(folder / 'python')
     cc, windres = native_compiler(lock)

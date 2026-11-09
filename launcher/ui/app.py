@@ -590,14 +590,20 @@ class App:
 
     def discord_row(self, game_dir):
         """The game's discord_rpc setting (runtime/discord_rpc.c), kept in the game's nx2navi.ini as the game's own
-        menu keeps it; the game reads it when it starts. On unless the file says 0, as the game reads it (cfg_bool, default
-        on)."""
+        menu keeps it; the game reads it when it starts. On unless the file says 0, as the game reads it (cfg_bool,
+        default on)."""
         def on(v):
             try:
                 gameini.put(game_dir, 'discord', 'discord_rpc', '1' if v else '0')
             except OSError as e:
                 self.message = f'The game\'s settings could not be written: {e}'
-        return Row('toggle', 'Discord Status', on=on, get=lambda: gameini.get(game_dir, 'discord_rpc') != '0',
+
+        def get():
+            try:
+                return gameini.get(game_dir, 'discord_rpc') != '0'
+            except OSError:   # nx2navi.ini there but unreadable: the game's default
+                return True
+        return Row('toggle', 'Discord Status', on=on, get=get,
                    desc=('Show "Playing NX2navi" with your play time in your Discord status while the game runs. '
                          'The game\'s menu switches it too (Game tab).',))
 

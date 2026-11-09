@@ -333,6 +333,7 @@ static struct {
     NgxParam *params;
     int failed, reset;
     uint64_t evals, frames_missed;
+    int share_off;   // frames left that pick the output pass without the mode's share (vk_dlaa_pass, vk_dlaa_frame)
     // jitter (vk_dlaa_viewport)
     VkImage jdepth;              // the scene depth of the last frame DLAA ran on: passes drawing with it are jittered
     float jx, jy;                // the offset the next scene draws take, render pixels (window x right, y down)
@@ -1587,8 +1588,11 @@ void vk_dlaa_pass(VkExec *ex) {
         if (one) F.one_n++, F.one_w = c->width, F.one_h = c->height, F.one_fmt = c->format;
         // the output pass is the picture's size, the scene over the mode's share: at Ultra Performance (854 wide) a
         // 960x540 post pass comes first, and DLSS wrote there, which left a 540-line picture stretched to the output
+        // A frame whose scene is not at that share (the first presents before the scale patch takes, a dynamic
+        // resolution step) has no such pass: after a frame that missed DLSS the first pass wider than the scene is
+        // taken for 120 frames (D.share_off, vk_dlaa_frame), so a mismatch costs one frame rather than every frame.
         double share = wide_dlss_share();
-        int big = share <= 0 || share >= 1 || c->width >= 0.95 * D.color.width / share;
+        int big = D.share_off || share <= 0 || share >= 1 || c->width >= 0.95 * D.color.width / share;
         if (one && big && c->width > D.color.width && c->height > D.color.height) {
             D.ended = D.done = D.up = 1;
             evaluate(ex, c);
@@ -1660,6 +1664,8 @@ void vk_dlaa_frame(void) {
         return;
     }
     if (!dl_active()) return;
+    if (D.share_off) D.share_off--;
+    if (!D.done && D.armed) D.share_off = 120;   // vk_dlaa_pass: the output pass without the mode's share for a while
     if (!D.done) {
         D.frames_missed++;
         // the first few after DLSS first ran: what the frame drew, to tell a frame drawn another way from a loading screen
